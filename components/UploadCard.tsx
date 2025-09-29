@@ -1,0 +1,87 @@
+"use client";
+import { useEffect, useState } from 'react';
+
+export default function UploadCard() {
+  const [file, setFile] = useState<File | null>(null);
+  const [course, setCourse] = useState('');
+  const [status, setStatus] = useState<string | null>(null);
+  const [loading, setLoading] = useState(false);
+  const [mpp, setMpp] = useState<string>('');
+
+  useEffect(() => {
+    // initialize minutes-per-page from settings
+    if (typeof window === 'undefined') return;
+    const s = window.localStorage.getItem('minutesPerPage');
+    const n = s ? parseInt(s, 10) : NaN;
+    setMpp(!isNaN(n) && n > 0 ? String(n) : '3');
+  }, []);
+
+  useEffect(() => {
+    // when course changes, apply course-specific minutes-per-page override if present
+    if (typeof window === 'undefined') return;
+    const key = course.trim();
+    if (!key) return;
+    try {
+      const mapRaw = window.localStorage.getItem('courseMppMap');
+      const map = mapRaw ? JSON.parse(mapRaw) as Record<string, number> : {};
+      if (map[key]) setMpp(String(map[key]));
+    } catch {}
+  }, [course]);
+
+  async function onUpload() {
+    if (!file) return;
+    setLoading(true);
+    setStatus(null);
+    const fd = new FormData();
+    fd.append('file', file);
+    if (course) fd.append('course', course);
+    if (mpp) fd.append('mpp', mpp);
+    try {
+      const res = await fetch('/api/upload', { method: 'POST', body: fd });
+      if (!res.ok) throw new Error(await res.text());
+      const data = await res.json();
+      setStatus(`Created ${data.createdCount} tasks${course ? ` for ${course}` : ''}.`);
+      // Remember per-course minutes-per-page
+      if (typeof window !== 'undefined' && course && mpp) {
+        try {
+          const key = course.trim();
+          const n = parseInt(mpp, 10);
+          if (key && !isNaN(n) && n > 0) {
+            const mapRaw = window.localStorage.getItem('courseMppMap');
+            const map = mapRaw ? JSON.parse(mapRaw) as Record<string, number> : {};
+            map[key] = n;
+            window.localStorage.setItem('courseMppMap', JSON.stringify(map));
+          }
+        } catch {}
+      }
+    } catch (e: any) {
+      setStatus('Upload failed: ' + e.message);
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  return (
+    <div>
+      <h2 className="text-lg font-medium mb-3">Upload Syllabus</h2>
+      <div className="flex flex-col md:flex-row gap-3 items-start md:items-end">
+        <div className="flex-1 w-full">
+          <label className="block text-sm mb-1">Course (optional)</label>
+          <input value={course} onChange={e => setCourse(e.target.value)} placeholder="e.g., Contracts" className="w-full bg-[#0b1020] border border-[#1b2344] rounded px-3 py-2" />
+        </div>
+        <div>
+          <label className="block text-sm mb-1">Minutes per page</label>
+          <input type="number" min={1} step={1} value={mpp} onChange={e => setMpp(e.target.value)} className="w-32 bg-[#0b1020] border border-[#1b2344] rounded px-3 py-2" />
+        </div>
+        <div className="flex-1 w-full">
+          <label className="block text-sm mb-1">File</label>
+          <input type="file" accept=".pdf,.docx,.txt" onChange={e => setFile(e.target.files?.[0] || null)} className="w-full" />
+        </div>
+        <button onClick={onUpload} disabled={!file || loading} className="bg-blue-600 hover:bg-blue-500 disabled:opacity-50 px-4 py-2 rounded">
+          {loading ? 'Uploading...' : 'Upload & Parse'}
+        </button>
+      </div>
+      {status && <p className="mt-3 text-sm text-slate-300/90">{status}</p>}
+    </div>
+  );
+}
