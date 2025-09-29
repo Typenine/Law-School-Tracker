@@ -40,6 +40,8 @@ function estimateMinutes(line: string, minutesPerPage = 3): number | null {
   // Pages heuristic: 3 min per page for dense reading
   // Try explicit "pp."/"pages" or bare ranges, handle multiples and roman numerals
   let totalPages = 0;
+  let perPage = minutesPerPage;
+  if (/\bskim\b/i.test(line)) perPage = Math.max(1, Math.round(minutesPerPage * 0.5));
   // Numeric ranges like "10-25", "pp. 10–25"
   const numRangeRe = /(\d{1,4})\s*[-–—]\s*(\d{1,4})/g;
   for (const m of line.matchAll(numRangeRe)) {
@@ -64,14 +66,30 @@ function estimateMinutes(line: string, minutesPerPage = 3): number | null {
     const pages = parseInt(singlePages[1], 10);
     if (!isNaN(pages)) totalPages += pages;
   }
-  // Comma-separated single pages like "pp. 10, 12, 15"
-  const listPages = /(pp?\.|pages?)\s*([\d\s,]+(?:\s*(?:and)\s*[\d\s,]+)*)/i.exec(line);
+  // Comma-separated single pages like "pp. 10, 12, xv"
+  const listPages = /(pp?\.|pages?)\s*([0-9ivxlcdm\s,]+(?:\s*(?:and)\s*[0-9ivxlcdm\s,]+)*)/i.exec(line);
   if (listPages) {
     const cleaned = listPages[2].replace(/\band\b/gi, ',');
-    const nums = cleaned.split(',').map(s => parseInt(s.trim(), 10)).filter(n => !isNaN(n));
-    if (nums.length) totalPages += nums.length;
+    const tokens = cleaned.split(',').map(s => s.trim()).filter(Boolean);
+    let singles = 0;
+    for (const tok of tokens) {
+      if (/[-–—]/.test(tok)) continue; // ranges handled earlier
+      if (/^\d{1,4}$/i.test(tok)) { singles += 1; continue; }
+      const r = romanToInt(tok);
+      if (r) singles += 1;
+    }
+    if (singles) totalPages += singles;
   }
-  if (totalPages > 0) return Math.min(8 * 60, Math.max(10, totalPages * minutesPerPage));
+  if (totalPages > 0) return Math.min(8 * 60, Math.max(10, totalPages * perPage));
+
+  // Chapters heuristic: about 60 min per chapter
+  const chRange = /\bch(?:apters?)?\.?\s*(\d{1,3})\s*[-–—]\s*(\d{1,3})\b/i.exec(line);
+  if (chRange) {
+    const a = parseInt(chRange[1], 10), b = parseInt(chRange[2], 10);
+    if (!isNaN(a) && !isNaN(b) && b >= a) return Math.min(8 * 60, (b - a + 1) * 60);
+  }
+  const chSingle = /\bch(?:apter)?\.?\s*(\d{1,3})\b/i.exec(line);
+  if (chSingle) return 60;
 
   if (l.includes('case brief') || (l.includes('brief') && l.includes('case'))) return 60;
   if (l.includes('brief')) return 45;
@@ -84,6 +102,18 @@ function estimateMinutes(line: string, minutesPerPage = 3): number | null {
   if (l.includes('assignment')) return 90;
   if (l.includes('chapter') || l.includes('ch.')) return 60;
   return null;
+}
+
+function cleanTitle(s: string): string {
+  let t = s.trim();
+  t = t.replace(/^(reading:|read:|due:|assignment:|homework:|submit:|pages?:)\s*/i, '');
+  t = t.replace(/\b(on|via)\s+canvas\b/ig, '');
+  t = t.replace(/\bby\s+(start\s+of\s+)?class\b/ig, '');
+  // remove trailing pp/pages segments for brevity
+  t = t.replace(/\bpp?\.\s*[^;,.]+/ig, '').replace(/\bpages?\s+[^;,.]+/ig, '');
+  // collapse leftover punctuation/spaces
+  t = t.replace(/\s{2,}/g, ' ').replace(/[;,:.-]\s*$/g, '').trim();
+  return t || s.trim();
 }
 
 function splitIntoSubtasks(line: string): string[] {
@@ -187,7 +217,8 @@ export function parseSyllabusToTasks(text: string, course?: string | null, opts?
     if (hasKeyword(line) && currentDate) {
       const subtasks = splitIntoSubtasks(line);
       for (const st of subtasks) {
-        tasks.push({ title: st, course: course ?? null, dueDate: currentDate.toISOString(), status: 'todo', estimatedMinutes: estimateMinutes(st, opts?.minutesPerPage ?? 3) });
+        const title = cleanTitle(st);
+        tasks.push({ title, course: course ?? null, dueDate: currentDate.toISOString(), status: 'todo', estimatedMinutes: estimateMinutes(st, opts?.minutesPerPage ?? 3) });
       }
     }
   }
