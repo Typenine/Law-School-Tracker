@@ -11,6 +11,8 @@ export async function POST(req: Request) {
     import('pdf-parse'),
     import('mammoth'),
   ]);
+  const u = new URL(req.url);
+  const preview = u.searchParams.get('preview') === '1';
   const form = await req.formData();
   const file = form.get('file');
   const course = (form.get('course') as string) || null;
@@ -40,6 +42,9 @@ export async function POST(req: Request) {
   }
 
   const tasksToCreate = parseSyllabusToTasks(text, course, { minutesPerPage });
+  if (preview) {
+    return Response.json({ preview: true, tasks: tasksToCreate });
+  }
   const created = [] as any[];
   for (const t of tasksToCreate) {
     const c = await createTask(t);

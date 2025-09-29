@@ -1,5 +1,7 @@
 "use client";
 import { useEffect, useState } from 'react';
+import ParserReview from '@/components/ParserReview';
+import type { NewTaskInput } from '@/lib/types';
 
 export default function UploadCard() {
   const [file, setFile] = useState<File | null>(null);
@@ -7,6 +9,9 @@ export default function UploadCard() {
   const [status, setStatus] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
   const [mpp, setMpp] = useState<string>('');
+  const [preview, setPreview] = useState<boolean>(true);
+  const [reviewOpen, setReviewOpen] = useState(false);
+  const [reviewTasks, setReviewTasks] = useState<NewTaskInput[]>([]);
 
   useEffect(() => {
     // initialize minutes-per-page from settings
@@ -37,10 +42,16 @@ export default function UploadCard() {
     if (course) fd.append('course', course);
     if (mpp) fd.append('mpp', mpp);
     try {
-      const res = await fetch('/api/upload', { method: 'POST', body: fd });
+      const url = preview ? '/api/upload?preview=1' : '/api/upload';
+      const res = await fetch(url, { method: 'POST', body: fd });
       if (!res.ok) throw new Error(await res.text());
       const data = await res.json();
-      setStatus(`Created ${data.createdCount} tasks${course ? ` for ${course}` : ''}.`);
+      if (preview && data.preview) {
+        setReviewTasks(data.tasks as NewTaskInput[]);
+        setReviewOpen(true);
+      } else {
+        setStatus(`Created ${data.createdCount} tasks${course ? ` for ${course}` : ''}.`);
+      }
       // Remember per-course minutes-per-page
       if (typeof window !== 'undefined' && course && mpp) {
         try {
@@ -73,6 +84,9 @@ export default function UploadCard() {
           <label className="block text-sm mb-1">Minutes per page</label>
           <input type="number" min={1} step={1} value={mpp} onChange={e => setMpp(e.target.value)} className="w-32 bg-[#0b1020] border border-[#1b2344] rounded px-3 py-2" />
         </div>
+        <label className="inline-flex items-center gap-2 text-sm mt-6">
+          <input type="checkbox" checked={preview} onChange={e => setPreview(e.target.checked)} /> Preview before saving
+        </label>
         <div className="flex-1 w-full">
           <label className="block text-sm mb-1">File</label>
           <input type="file" accept=".pdf,.docx,.txt" onChange={e => setFile(e.target.files?.[0] || null)} className="w-full" />
@@ -82,6 +96,15 @@ export default function UploadCard() {
         </button>
       </div>
       {status && <p className="mt-3 text-sm text-slate-300/90">{status}</p>}
+      {reviewOpen && (
+        <div className="mt-4 border border-[#1b2344] rounded p-4">
+          <ParserReview
+            initial={reviewTasks}
+            onCancel={() => setReviewOpen(false)}
+            onSaved={(count) => { setReviewOpen(false); setStatus(`Created ${count} tasks${course ? ` for ${course}` : ''}.`); }}
+          />
+        </div>
+      )}
     </div>
   );
 }
