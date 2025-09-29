@@ -1,13 +1,16 @@
 import { ensureSchema, createTask } from '@/lib/storage';
 import { parseSyllabusToTasks } from '@/lib/parser';
-import pdfParse from 'pdf-parse';
-import mammoth from 'mammoth';
 
 export const dynamic = 'force-dynamic';
 export const runtime = 'nodejs';
 
 export async function POST(req: Request) {
   await ensureSchema();
+  // Dynamic imports to prevent build-time evaluation on Vercel
+  const [{ default: pdfParse }, { default: mammoth }] = await Promise.all([
+    import('pdf-parse'),
+    import('mammoth'),
+  ]);
   const form = await req.formData();
   const file = form.get('file');
   const course = (form.get('course') as string) || null;
