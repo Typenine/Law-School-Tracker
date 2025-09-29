@@ -1,4 +1,5 @@
 import { ensureSchema, listTasks } from '@/lib/storage';
+import { createHmac } from 'crypto';
 
 export const dynamic = 'force-dynamic';
 export const runtime = 'nodejs';
@@ -32,6 +33,7 @@ export async function GET(req: Request) {
   const status = (url.searchParams.get('status') || '').trim().toLowerCase();
   const origin = url.origin;
   const timed = url.searchParams.get('timed') === '1';
+  const toggleSecret = process.env.ICS_TOGGLE_SECRET || process.env.ICS_PRIVATE_TOKEN || '';
 
   let tasks = await listTasks();
   if (course) tasks = tasks.filter(t => (t.course || '').toLowerCase().includes(course));
@@ -53,6 +55,10 @@ export async function GET(req: Request) {
     const summary = icsEscape(t.title);
     const details = `${t.course ? `[${t.course}] ` : ''}${t.title}${t.estimatedMinutes ? ` (est ${t.estimatedMinutes}m)` : ''}`;
     const desc = icsEscape(details);
+    const exp = Math.floor(Date.now() / 1000) + 60 * 60 * 24 * 30; // 30 days
+    const payload = `${t.id}:${exp}`;
+    const sig = toggleSecret ? createHmac('sha256', toggleSecret).update(payload).digest('hex') : '';
+    const toggleUrl = sig ? `${origin}/api/tasks/${t.id}/toggle?exp=${exp}&sig=${sig}` : origin;
     if (timed) {
       const baseStart = new Date(due);
       baseStart.setHours(9, 0, 0, 0); // 09:00
@@ -74,6 +80,8 @@ export async function GET(req: Request) {
         lines.push(`SUMMARY:${summary}`);
         lines.push(`DESCRIPTION:${desc}`);
         lines.push(`URL:${origin}`);
+        lines.push(`X-ALT-DESC;FMTTYPE=text/html:${icsEscape(`<a href="${toggleUrl}">Toggle Done</a>`)}`);
+        lines.push(`X-LST-Toggle:${toggleUrl}`);
         // 24-hour prior reminder
         lines.push('BEGIN:VALARM');
         lines.push('ACTION:DISPLAY');
@@ -94,6 +102,8 @@ export async function GET(req: Request) {
       lines.push(`SUMMARY:${summary}`);
       lines.push(`DESCRIPTION:${desc}`);
       lines.push(`URL:${origin}`);
+      lines.push(`X-ALT-DESC;FMTTYPE=text/html:${icsEscape(`<a href="${toggleUrl}">Toggle Done</a>`)}`);
+      lines.push(`X-LST-Toggle:${toggleUrl}`);
       // 24-hour prior reminder
       lines.push('BEGIN:VALARM');
       lines.push('ACTION:DISPLAY');

@@ -91,6 +91,34 @@ export default function Stats() {
               <div className="h-full bg-emerald-600" style={{ width: `${burndownPct}%` }} />
             </div>
           </div>
+
+          {stats.courseBreakdown && stats.courseBreakdown.length > 0 && (
+            <div className="rounded border border-[#1b2344] p-4">
+              <div className="text-slate-300/70 text-xs mb-2">Per-course (this week)</div>
+              <div className="overflow-x-auto">
+                <table className="w-full text-sm">
+                  <thead className="text-left text-slate-300/60">
+                    <tr>
+                      <th className="py-1 pr-4">Course</th>
+                      <th className="py-1 pr-4">Est. m</th>
+                      <th className="py-1 pr-4">Logged m</th>
+                      <th className="py-1 pr-4">Remaining m</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {stats.courseBreakdown.map((c, i) => (
+                      <tr key={i} className="border-t border-[#1b2344]">
+                        <td className="py-1 pr-4">{c.course || '-'}</td>
+                        <td className="py-1 pr-4">{Math.round(c.estMinutes)}</td>
+                        <td className="py-1 pr-4">{Math.round(c.loggedMinutes)}</td>
+                        <td className="py-1 pr-4">{Math.round(c.remainingMinutes)}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          )}
         </div>
       )}
     </div>

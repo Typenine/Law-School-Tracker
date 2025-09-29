@@ -144,10 +144,17 @@ export default function TaskTable() {
   const icsHref = useMemo(() => {
     const params: string[] = [];
     if (courseFilter) params.push(`course=${encodeURIComponent(courseFilter)}`);
-    if (statusFilter !== 'all') params.push(`status=${statusFilter}`);
+    if (statusFilter !== 'all') params.push(`status=${encodeURIComponent(statusFilter)}`);
     if (icsToken) params.push(`token=${encodeURIComponent(icsToken)}`);
     return `/api/export/ics${params.length ? `?${params.join('&')}` : ''}`;
   }, [courseFilter, statusFilter, icsToken]);
+
+  const csvHref = useMemo(() => {
+    const params: string[] = [];
+    if (courseFilter) params.push(`course=${encodeURIComponent(courseFilter)}`);
+    if (statusFilter !== 'all') params.push(`status=${encodeURIComponent(statusFilter)}`);
+    return `/api/tasks/export.csv${params.length ? `?${params.join('&')}` : ''}`;
+  }, [courseFilter, statusFilter]);
 
   return (
     <div>
@@ -162,6 +169,7 @@ export default function TaskTable() {
         </div>
         <div className="flex gap-2">
           <a href={icsHref} className="px-3 py-2 rounded bg-indigo-600 hover:bg-indigo-500">Download .ics</a>
+          <a href={csvHref} className="px-3 py-2 rounded bg-teal-600 hover:bg-teal-500">Export CSV</a>
           <button onClick={refresh} className="px-3 py-2 rounded border border-[#1b2344]">Refresh</button>
         </div>
       </form>
