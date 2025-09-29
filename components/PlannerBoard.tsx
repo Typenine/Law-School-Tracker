@@ -61,6 +61,35 @@ export default function PlannerBoard() {
     return out;
   }, [tasks]);
 
+  async function applySuggestion(s: { id: string; title: string; course: string | null | undefined; dueKey: string; plan: Array<{ key: string; minutes: number }> }) {
+    try {
+      // Create prep subtasks
+      const createdIds: string[] = [];
+      const total = s.plan.length;
+      for (let i = 0; i < s.plan.length; i++) {
+        const p = s.plan[i];
+        const [y, m, d] = p.key.split('-').map(n => parseInt(n, 10));
+        const due = new Date(y, m - 1, d, 23, 59, 59, 999);
+        const res = await fetch('/api/tasks', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({
+          title: `[Prep] ${s.title} (part ${i+1}/${total})`,
+          course: s.course || null,
+          dueDate: due.toISOString(),
+          status: 'todo',
+          estimatedMinutes: p.minutes,
+        })});
+        if (!res.ok) throw new Error('failed to create prep');
+        const data = await res.json();
+        createdIds.push(data.task.id);
+      }
+      // Update main task dependsOn
+      const main = tasks.find(t => t.id === s.id);
+      const prev = (main?.dependsOn || []) as string[];
+      const patch = await fetch(`/api/tasks/${s.id}`, { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ dependsOn: [...prev, ...createdIds] }) });
+      if (!patch.ok) throw new Error('failed to update main task');
+      await refresh();
+    } catch { /* ignore for now, could add toast */ }
+  }
+
   function onDragStart(e: React.DragEvent, t: Task) {
     e.dataTransfer.setData('text/plain', t.id);
   }
@@ -89,8 +118,11 @@ export default function PlannerBoard() {
           <div className="text-slate-300/70 text-xs mb-2">Suggestions to spread large readings/assignments across days (date-only)</div>
           <ul className="text-xs space-y-1">
             {suggestions.map((s) => (
-              <li key={s.id}>
-                <span className="text-slate-200">{s.title}</span> {s.course ? `(${s.course}) ` : ''}→ {s.plan.map(p => `${p.key}: ~${p.minutes}m`).join(', ')}
+              <li key={s.id} className="flex items-center justify-between gap-2">
+                <div>
+                  <span className="text-slate-200">{s.title}</span> {s.course ? `(${s.course}) ` : ''}→ {s.plan.map(p => `${p.key}: ~${p.minutes}m`).join(', ')}
+                </div>
+                <button onClick={() => applySuggestion(s)} className="px-2 py-1 rounded border border-[#1b2344]">Apply</button>
               </li>
             ))}
           </ul>

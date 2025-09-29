@@ -12,6 +12,8 @@ export default function UploadCard() {
   const [preview, setPreview] = useState<boolean>(true);
   const [reviewOpen, setReviewOpen] = useState(false);
   const [reviewTasks, setReviewTasks] = useState<NewTaskInput[]>([]);
+  const [recScale, setRecScale] = useState<number | null>(null);
+  const [recMpp, setRecMpp] = useState<number | null>(null);
 
   useEffect(() => {
     // initialize minutes-per-page from settings
@@ -32,6 +34,29 @@ export default function UploadCard() {
       if (map[key]) setMpp(String(map[key]));
     } catch {}
   }, [course]);
+
+  useEffect(() => {
+    // fetch learned scale for this course and suggest recommended MPP
+    let aborted = false;
+    async function run() {
+      setRecScale(null); setRecMpp(null);
+      const key = course.trim();
+      if (!key) return;
+      try {
+        const res = await fetch(`/api/courses/prefs?course=${encodeURIComponent(key)}`, { cache: 'no-store' });
+        if (!res.ok) return;
+        const data = await res.json();
+        const scale = typeof data?.estScale === 'number' ? data.estScale : (typeof data?.course === 'string' ? 1 : null);
+        if (aborted || scale === null) return;
+        setRecScale(scale);
+        const base = parseInt(mpp || '3', 10) || 3;
+        const rec = Math.max(1, Math.round(base * scale));
+        setRecMpp(rec);
+      } catch {}
+    }
+    run();
+    return () => { aborted = true; };
+  }, [course, mpp]);
 
   async function onUpload() {
     if (!file) return;
@@ -83,6 +108,12 @@ export default function UploadCard() {
         <div>
           <label className="block text-sm mb-1">Minutes per page</label>
           <input type="number" min={1} step={1} value={mpp} onChange={e => setMpp(e.target.value)} className="w-32 bg-[#0b1020] border border-[#1b2344] rounded px-3 py-2" />
+          {recMpp && recScale && (
+            <div className="text-xs text-slate-300/70 mt-1">
+              Recommended for {course || 'course'}: <span className="text-slate-200 font-medium">{recMpp} mpp</span> (scale ×{recScale})
+              <button type="button" onClick={() => setMpp(String(recMpp))} className="ml-2 px-2 py-0.5 rounded border border-[#1b2344]">Apply</button>
+            </div>
+          )}
         </div>
         <label className="inline-flex items-center gap-2 text-sm mt-6">
           <input type="checkbox" checked={preview} onChange={e => setPreview(e.target.checked)} /> Preview before saving

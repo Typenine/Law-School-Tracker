@@ -15,6 +15,7 @@ export async function POST(req: NextRequest) {
       course: z.string().trim().min(1).nullable().optional(),
       status: z.enum(['todo', 'done']).optional(),
       estimatedMinutes: z.number().int().min(0).nullable().optional(),
+      priority: z.number().int().min(1).max(5).nullable().optional(),
     })).min(1)
   });
   const parsed = schema.safeParse(await req.json());
@@ -28,6 +29,7 @@ export async function POST(req: NextRequest) {
       course: t.course ?? null,
       status: t.status ?? 'todo',
       estimatedMinutes: t.estimatedMinutes ?? null,
+      priority: t.priority ?? null,
     });
     created.push(c);
   }

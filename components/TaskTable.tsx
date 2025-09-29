@@ -19,6 +19,8 @@ export default function TaskTable() {
   const [icsToken, setIcsToken] = useState<string>('');
   const [editPriority, setEditPriority] = useState<string>('');
   const [editNotes, setEditNotes] = useState<string>('');
+  const [editAttachments, setEditAttachments] = useState<string>('');
+  const [editDepends, setEditDepends] = useState<string>('');
   const courseFilterRef = useRef<HTMLInputElement>(null);
   const [importOpen, setImportOpen] = useState(false);
   const [importFile, setImportFile] = useState<File | null>(null);
@@ -121,6 +123,8 @@ export default function TaskTable() {
     setEditEst(t.estimatedMinutes?.toString() || '');
     setEditPriority(t.priority?.toString() || '');
     setEditNotes(t.notes || '');
+    setEditAttachments((t.attachments || []).join(', '));
+    setEditDepends((t.dependsOn || []).join(', '));
   }
 
   function cancelEdit() {
@@ -137,6 +141,8 @@ export default function TaskTable() {
     body.estimatedMinutes = editEst ? parseInt(editEst, 10) : null;
     body.priority = editPriority ? parseInt(editPriority, 10) : null;
     body.notes = editNotes || null;
+    body.attachments = editAttachments ? editAttachments.split(',').map(s => s.trim()).filter(Boolean) : null;
+    body.dependsOn = editDepends ? editDepends.split(',').map(s => s.trim()).filter(Boolean) : null;
     const res = await fetch(`/api/tasks/${editingId}`, { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
     if (res.ok) {
       cancelEdit();
@@ -181,7 +187,23 @@ export default function TaskTable() {
       <h2 className="text-lg font-medium mb-3">Tasks</h2>
       <form onSubmit={(e) => { e.preventDefault(); quickAdd(); }} className="mb-3 flex flex-col md:flex-row gap-3 md:items-end justify-between">
         <div className="grid grid-cols-1 md:grid-cols-5 gap-2 w-full md:w-auto">
-          <input value={newTitle} onChange={e => setNewTitle(e.target.value)} placeholder="Title" className="w-full bg-[#0b1020] border border-[#1b2344] rounded px-3 py-2" />
+          <div className="flex gap-2">
+            <input value={newTitle} onChange={e => setNewTitle(e.target.value)} placeholder="Title" className="flex-1 bg-[#0b1020] border border-[#1b2344] rounded px-3 py-2" />
+            <button type="button" onClick={async () => {
+              if (!newTitle) return;
+              try {
+                const res = await fetch('/api/parse', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ text: newTitle }) });
+                if (!res.ok) return;
+                const data = await res.json();
+                const t = (data.tasks || [])[0];
+                if (!t) return;
+                setNewTitle(t.title || newTitle);
+                if (t.course) setNewCourse(t.course || '');
+                if (t.dueDate) setNewDue(isoToLocalInput(t.dueDate));
+                if (typeof t.estimatedMinutes === 'number') setNewEst(String(t.estimatedMinutes));
+              } catch {}
+            }} className="px-2 py-2 rounded border border-[#1b2344] text-xs">Parse</button>
+          </div>
           <input value={newCourse} onChange={e => setNewCourse(e.target.value)} placeholder="Course (optional)" className="w-full bg-[#0b1020] border border-[#1b2344] rounded px-3 py-2" />
           <input type="datetime-local" value={newDue} onChange={e => setNewDue(e.target.value)} className="w-full bg-[#0b1020] border border-[#1b2344] rounded px-3 py-2" />
           <input type="number" min={0} step={5} value={newEst} onChange={e => setNewEst(e.target.value)} placeholder="Est. min" className="w-full bg-[#0b1020] border border-[#1b2344] rounded px-3 py-2" />
@@ -235,6 +257,8 @@ export default function TaskTable() {
                 <th className="py-2 pr-4">Est. min</th>
                 <th className="py-2 pr-4">Pri</th>
                 <th className="py-2 pr-4">Notes</th>
+                <th className="py-2 pr-4">Links</th>
+                <th className="py-2 pr-4">Deps</th>
                 <th className="py-2 pr-4">Status</th>
                 <th className="py-2 pr-4">Actions</th>
               </tr>
@@ -284,6 +308,28 @@ export default function TaskTable() {
                       <input value={editNotes} onChange={e => setEditNotes(e.target.value)} className="w-full bg-[#0b1020] border border-[#1b2344] rounded px-2 py-1" />
                     ) : (
                       <span className="truncate inline-block max-w-[260px] align-bottom">{t.notes || '-'}</span>
+                    )}
+                  </td>
+                  <td className="py-2 pr-4 max-w-[220px]">
+                    {editingId === t.id ? (
+                      <input value={editAttachments} onChange={e => setEditAttachments(e.target.value)} placeholder="Comma-separated URLs" className="w-full bg-[#0b1020] border border-[#1b2344] rounded px-2 py-1" />
+                    ) : (
+                      (t.attachments && t.attachments.length > 0) ? (
+                        <div className="flex gap-1 flex-wrap">
+                          {t.attachments.map((u, i) => (
+                            <a key={i} href={u} target="_blank" className="underline text-xs truncate max-w-[160px]">Link {i+1}</a>
+                          ))}
+                        </div>
+                      ) : '-'
+                    )}
+                  </td>
+                  <td className="py-2 pr-4 max-w-[220px]">
+                    {editingId === t.id ? (
+                      <input value={editDepends} onChange={e => setEditDepends(e.target.value)} placeholder="Comma-separated task IDs" className="w-full bg-[#0b1020] border border-[#1b2344] rounded px-2 py-1" />
+                    ) : (
+                      (t.dependsOn && t.dependsOn.length > 0) ? (
+                        <span className="text-xs">{t.dependsOn.length} deps</span>
+                      ) : '-'
                     )}
                   </td>
                   <td className="py-2 pr-4">{t.status}</td>
