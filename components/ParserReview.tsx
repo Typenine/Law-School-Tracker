@@ -2,7 +2,7 @@
 import { useMemo, useState } from 'react';
 import { NewTaskInput } from '@/lib/types';
 
-type Row = NewTaskInput & { selected: boolean };
+type Row = NewTaskInput & { selected: boolean; dupe?: boolean };
 
 function classify(title: string): 'Reading' | 'Assignment' | 'Exam/Quiz' | 'Discussion' | 'Other' {
   const l = title.toLowerCase();
@@ -13,8 +13,19 @@ function classify(title: string): 'Reading' | 'Assignment' | 'Exam/Quiz' | 'Disc
   return 'Other';
 }
 
+function normTitle(s: string) { return s.toLowerCase().replace(/[^a-z0-9\s]/g, ' ').replace(/\s+/g, ' ').trim(); }
+function dayKey(iso: string) { const d = new Date(iso); return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`; }
+
 export default function ParserReview({ initial, onCancel, onSaved, mppDefault }: { initial: NewTaskInput[]; onCancel: () => void; onSaved: (createdCount: number) => void; mppDefault?: number; }) {
-  const [rows, setRows] = useState<Row[]>(() => initial.map(t => ({ ...t, selected: true })));
+  const [rows, setRows] = useState<Row[]>(() => {
+    const seen = new Set<string>();
+    return initial.map((t) => {
+      const key = `${(t.course || '').toLowerCase()}|${normTitle(t.title)}|${dayKey(t.dueDate)}`;
+      const isDup = seen.has(key);
+      if (!isDup) seen.add(key);
+      return { ...t, selected: !isDup, dupe: isDup } as Row;
+    });
+  });
   const allSelected = useMemo(() => rows.every(r => r.selected), [rows]);
   const [batchCourse, setBatchCourse] = useState('');
   const [batchDue, setBatchDue] = useState('');
@@ -112,6 +123,7 @@ export default function ParserReview({ initial, onCancel, onSaved, mppDefault }:
               <th className="py-2 pr-4">Title</th>
               <th className="py-2 pr-4">Type</th>
               <th className="py-2 pr-4">Course</th>
+              <th className="py-2 pr-4">Dupe</th>
               <th className="py-2 pr-4">Est. min</th>
             </tr>
           </thead>
@@ -123,6 +135,7 @@ export default function ParserReview({ initial, onCancel, onSaved, mppDefault }:
                 <td className="py-2 pr-4"><input value={r.title} onChange={e => update(i, { title: e.target.value })} className="w-full bg-[#0b1020] border border-[#1b2344] rounded px-2 py-1" /></td>
                 <td className="py-2 pr-4 text-xs text-slate-300/70">{classify(r.title)}</td>
                 <td className="py-2 pr-4"><input value={r.course || ''} onChange={e => update(i, { course: e.target.value || null })} className="w-full bg-[#0b1020] border border-[#1b2344] rounded px-2 py-1" /></td>
+                <td className="py-2 pr-4 text-xs {r.dupe ? 'text-rose-400' : 'text-slate-300/50'}">{r.dupe ? 'dup' : '-'}</td>
                 <td className="py-2 pr-4"><input type="number" min={0} step={5} value={r.estimatedMinutes ?? ''} onChange={e => update(i, { estimatedMinutes: e.target.value ? parseInt(e.target.value, 10) : null })} className="w-28 bg-[#0b1020] border border-[#1b2344] rounded px-2 py-1" /></td>
               </tr>
             ))}

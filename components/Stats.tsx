@@ -31,6 +31,14 @@ export default function Stats() {
     return Math.min(100, Math.round((stats.loggedMinutesThisWeek / stats.estMinutesThisWeek) * 100));
   }, [stats]);
 
+  const [heavyThreshold, setHeavyThreshold] = useState<number>(240);
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+    const s = window.localStorage.getItem('heavyDayThreshold');
+    const n = s ? parseFloat(s) : NaN;
+    if (!isNaN(n) && n > 0) setHeavyThreshold(n);
+  }, []);
+
   return (
     <div>
       <h2 className="text-lg font-medium mb-3">Stats</h2>
@@ -105,7 +113,7 @@ export default function Stats() {
                   return (
                     <div key={i} className="flex flex-col items-center">
                       <div className="h-20 w-6 border border-[#1b2344] bg-[#0b1020] flex items-end">
-                        <div className={`w-full ${d.estMinutes >= 240 ? 'bg-rose-600' : 'bg-indigo-600'}`} style={{ height: `${pct}%` }} />
+                        <div className={`w-full ${d.estMinutes >= heavyThreshold ? 'bg-rose-600' : 'bg-indigo-600'}`} style={{ height: `${pct}%` }} />
                       </div>
                       <div className="text-[10px] mt-1 text-slate-300/70">{new Date(d.date).toLocaleDateString(undefined, { weekday:'short' })}</div>
                       <div className="text-[10px] text-slate-300/60">{Math.round(d.estMinutes)}m</div>

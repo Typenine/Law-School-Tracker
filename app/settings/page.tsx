@@ -29,6 +29,7 @@ export default function SettingsPage() {
   const [defaultFocus, setDefaultFocus] = useState<number>(5);
   const [remindersEnabled, setRemindersEnabled] = useState<boolean>(false);
   const [remindersLeadHours, setRemindersLeadHours] = useState<number>(24);
+  const [heavyDayThreshold, setHeavyDayThreshold] = useState<number>(240);
   const [icsToken, setIcsToken] = useState<string>('');
   const [map, setMap] = useState<Record<string, number>>({});
   const [courseKey, setCourseKey] = useState('');
@@ -39,6 +40,7 @@ export default function SettingsPage() {
     setDefaultFocus(getLocalNumber('defaultFocus', 5));
     setRemindersEnabled(getLocalBool('remindersEnabled', false));
     setRemindersLeadHours(getLocalNumber('remindersLeadHours', 24));
+    setHeavyDayThreshold(getLocalNumber('heavyDayThreshold', 240));
     if (typeof window !== 'undefined') setIcsToken(window.localStorage.getItem('icsToken') || '');
     setMap(getCourseMap());
   }, []);
@@ -47,6 +49,7 @@ export default function SettingsPage() {
   useEffect(() => { if (typeof window !== 'undefined') window.localStorage.setItem('defaultFocus', String(defaultFocus)); }, [defaultFocus]);
   useEffect(() => { if (typeof window !== 'undefined') window.localStorage.setItem('remindersEnabled', String(remindersEnabled)); }, [remindersEnabled]);
   useEffect(() => { if (typeof window !== 'undefined') window.localStorage.setItem('remindersLeadHours', String(remindersLeadHours)); }, [remindersLeadHours]);
+  useEffect(() => { if (typeof window !== 'undefined') window.localStorage.setItem('heavyDayThreshold', String(heavyDayThreshold)); }, [heavyDayThreshold]);
   useEffect(() => { if (typeof window !== 'undefined') window.localStorage.setItem('icsToken', icsToken); }, [icsToken]);
   useEffect(() => { if (typeof window !== 'undefined') window.localStorage.setItem('courseMppMap', JSON.stringify(map)); }, [map]);
 
@@ -81,6 +84,11 @@ export default function SettingsPage() {
             <label className="block text-sm mb-1">Default focus (1-10)</label>
             <input type="number" min={1} max={10} step={1} value={defaultFocus} onChange={e => setDefaultFocus(parseInt(e.target.value || '1', 10))} className="w-40 bg-[#0b1020] border border-[#1b2344] rounded px-3 py-2" />
             <p className="text-xs text-slate-300/70 mt-1">Used by Focus Timer and Session Logger.</p>
+          </div>
+          <div>
+            <label className="block text-sm mb-1">Heavy day threshold (minutes)</label>
+            <input type="number" min={60} step={30} value={heavyDayThreshold} onChange={e => setHeavyDayThreshold(parseInt(e.target.value || '240', 10))} className="w-40 bg-[#0b1020] border border-[#1b2344] rounded px-3 py-2" />
+            <p className="text-xs text-slate-300/70 mt-1">Used to color bars in the weekly forecast and count heavy days. Date-only; no times.</p>
           </div>
           <div>
             <label className="block text-sm mb-1">Reminders</label>

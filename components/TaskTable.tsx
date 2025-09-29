@@ -1,6 +1,7 @@
 "use client";
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { Task } from '@/lib/types';
+import { courseColorClass } from '@/lib/colors';
 
 export default function TaskTable() {
   const [tasks, setTasks] = useState<Task[]>([]);
@@ -25,6 +26,9 @@ export default function TaskTable() {
   const [importOpen, setImportOpen] = useState(false);
   const [importFile, setImportFile] = useState<File | null>(null);
   const [importStatus, setImportStatus] = useState('');
+  const [savedViews, setSavedViews] = useState<Array<{ name: string; course: string; status: 'all'|'todo'|'done' }>>([]);
+  const [newViewName, setNewViewName] = useState('');
+  const [offlineCount, setOfflineCount] = useState<number>(0);
 
   async function refresh() {
     setLoading(true);
@@ -45,6 +49,24 @@ export default function TaskTable() {
     const cf = window.localStorage.getItem('taskCourseFilter');
     if (sf === 'all' || sf === 'todo' || sf === 'done') setStatusFilter(sf);
     if (typeof cf === 'string') setCourseFilter(cf);
+    // URL params override
+    try {
+      const u = new URL(window.location.href);
+      const qCourse = u.searchParams.get('course');
+      const qStatus = u.searchParams.get('status') as any;
+      if (typeof qCourse === 'string') setCourseFilter(qCourse);
+      if (qStatus === 'all' || qStatus === 'todo' || qStatus === 'done') setStatusFilter(qStatus);
+    } catch {}
+    // Saved views
+    try {
+      const s = window.localStorage.getItem('savedTaskViews');
+      if (s) setSavedViews(JSON.parse(s));
+    } catch {}
+    // Offline queue count
+    try {
+      const q = window.localStorage.getItem('offlineQueue');
+      if (q) setOfflineCount(JSON.parse(q).length || 0);
+    } catch {}
   }, []);
 
   useEffect(() => {
@@ -102,6 +124,17 @@ export default function TaskTable() {
         await refresh();
       }
     } catch (_) {}
+    // If offline or failed, queue it
+    if (typeof navigator !== 'undefined' && !navigator.onLine) {
+      try {
+        const item = { title: newTitle, course: newCourse || null, dueDate: new Date(newDue).toISOString(), status: 'todo', estimatedMinutes: newEst ? parseInt(newEst, 10) : null };
+        const arr = JSON.parse(window.localStorage.getItem('offlineQueue') || '[]');
+        arr.push(item);
+        window.localStorage.setItem('offlineQueue', JSON.stringify(arr));
+        setOfflineCount(arr.length);
+        setNewTitle(''); setNewCourse(''); setNewDue(''); setNewEst('');
+      } catch {}
+    }
   }
 
   function isoToLocalInput(iso: string) {
@@ -185,6 +218,12 @@ export default function TaskTable() {
   return (
     <div>
       <h2 className="text-lg font-medium mb-3">Tasks</h2>
+      {offlineCount > 0 && (
+        <div className="mb-2 text-xs text-slate-300/80 flex items-center gap-2">
+          <span>Pending offline: {offlineCount}</span>
+          <button onClick={async () => { window.dispatchEvent(new Event('online')); }} className="px-2 py-1 rounded border border-[#1b2344]">Sync now</button>
+        </div>
+      )}
       <form onSubmit={(e) => { e.preventDefault(); quickAdd(); }} className="mb-3 flex flex-col md:flex-row gap-3 md:items-end justify-between">
         <div className="grid grid-cols-1 md:grid-cols-5 gap-2 w-full md:w-auto">
           <div className="flex gap-2">
@@ -286,7 +325,10 @@ export default function TaskTable() {
                     {editingId === t.id ? (
                       <input value={editCourse} onChange={e => setEditCourse(e.target.value)} className="w-full bg-[#0b1020] border border-[#1b2344] rounded px-2 py-1" />
                     ) : (
-                      t.course || '-'
+                      <div className="flex items-center gap-2">
+                        {t.course ? <span className={`inline-block w-2.5 h-2.5 rounded-full ${courseColorClass(t.course, 'bg')}`}></span> : null}
+                        <span>{t.course || '-'}</span>
+                      </div>
                     )}
                   </td>
                   <td className="py-2 pr-4">

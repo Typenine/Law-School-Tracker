@@ -17,6 +17,58 @@ export default function PlannerBoard() {
     setTasks(data.tasks as Task[]);
     setLoading(false);
   }
+
+  // Load-balancing assist: move tasks from heavy to lighter days within +/-2 days
+  async function balanceWeek() {
+    // threshold from localStorage or 240
+    const heavy = (typeof window !== 'undefined') ? parseFloat(window.localStorage.getItem('heavyDayThreshold') || '240') : 240;
+    const today = startOfDay(new Date());
+    const dayKeys = days.map(d => d.key);
+    const indexOf = Object.fromEntries(dayKeys.map((k, i) => [k, i] as const));
+    // Build loads and buckets
+    const loads: Record<string, number> = Object.fromEntries(dayKeys.map(k => [k, 0] as const));
+    const bucketTasks: Record<string, Task[]> = Object.fromEntries(dayKeys.map(k => [k, [] as Task[]] as const));
+    for (const t of tasks) {
+      if (t.status === 'done') continue;
+      const key = keyOf(new Date(t.dueDate));
+      if (loads[key] === undefined) continue;
+      loads[key] += (t.estimatedMinutes || 0);
+      bucketTasks[key].push(t);
+    }
+    // For each heavy day, try to move largest tasks to nearby lighter days
+    const moves: Array<{ id: string; toKey: string }> = [];
+    for (const k of dayKeys) {
+      if ((loads[k] || 0) <= heavy) continue;
+      const tasksBySize = bucketTasks[k].slice().sort((a, b) => (b.estimatedMinutes || 0) - (a.estimatedMinutes || 0));
+      for (const t of tasksBySize) {
+        if ((loads[k] || 0) <= heavy) break;
+        const i = indexOf[k];
+        // candidate offsets: -2,-1,+1,+2 prefer earlier days
+        for (const off of [-2, -1, 1, 2]) {
+          const j = i + off;
+          if (j < 0 || j >= dayKeys.length) continue;
+          const targetKey = dayKeys[j];
+          // keep before or on due date if moving earlier; allow +1/+2 only if still before original due end
+          const due = startOfDay(new Date(t.dueDate));
+          const targetDate = new Date(days[j].date);
+          if (targetDate > due) continue; // don't push later than due
+          const est = t.estimatedMinutes || 0;
+          if ((loads[targetKey] || 0) + est <= heavy) {
+            loads[k] -= est; loads[targetKey] += est;
+            moves.push({ id: t.id, toKey: targetKey });
+            break;
+          }
+        }
+      }
+    }
+    // Apply moves
+    for (const m of moves) {
+      const [y, mo, d] = m.toKey.split('-').map(n => parseInt(n, 10));
+      const nd = new Date(y, mo - 1, d, 23, 59, 59, 999);
+      await fetch(`/api/tasks/${m.id}`, { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ dueDate: nd.toISOString() }) });
+    }
+    if (moves.length) await refresh();
+  }
   useEffect(() => { refresh(); }, []);
 
   const days = useMemo(() => {
@@ -126,6 +178,9 @@ export default function PlannerBoard() {
               </li>
             ))}
           </ul>
+          <div className="mt-3">
+            <button onClick={balanceWeek} className="px-3 py-2 rounded border border-[#1b2344]">Balance this week</button>
+          </div>
         </div>
       )}
       <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
