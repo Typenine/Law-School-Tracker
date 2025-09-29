@@ -216,5 +216,26 @@ export async function statsNow() {
   const loggedMinutesThisWeek = totalMinutes;
   const remainingMinutesThisWeek = Math.max(0, estMinutesThisWeek - loggedMinutesThisWeek);
 
-  return { upcoming7d, hoursThisWeek, avgFocusThisWeek, estMinutesThisWeek, loggedMinutesThisWeek, remainingMinutesThisWeek };
+  // Per-course breakdown
+  const byCourseEst = new Map<string | null, number>();
+  for (const t of weekTodos) {
+    const k = t.course ?? null;
+    byCourseEst.set(k, (byCourseEst.get(k) || 0) + (t.estimatedMinutes || 0));
+  }
+  const taskById = new Map(tasks.map(t => [t.id, t] as const));
+  const byCourseLogged = new Map<string | null, number>();
+  for (const s of weekSessions) {
+    const task = s.taskId ? taskById.get(s.taskId) : undefined;
+    const k = task?.course ?? null;
+    byCourseLogged.set(k, (byCourseLogged.get(k) || 0) + (s.minutes || 0));
+  }
+  const courseKeys = new Set([...byCourseEst.keys(), ...byCourseLogged.keys()]);
+  const courseBreakdown = [...courseKeys].map(course => {
+    const est = byCourseEst.get(course) || 0;
+    const logged = byCourseLogged.get(course) || 0;
+    const remaining = Math.max(0, est - logged);
+    return { course, estMinutes: est, loggedMinutes: logged, remainingMinutes: remaining };
+  }).sort((a, b) => (b.remainingMinutes - a.remainingMinutes));
+
+  return { upcoming7d, hoursThisWeek, avgFocusThisWeek, estMinutesThisWeek, loggedMinutesThisWeek, remainingMinutesThisWeek, courseBreakdown };
 }

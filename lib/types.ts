@@ -8,6 +8,10 @@ export interface Task {
   status: TaskStatus;
   createdAt: string; // ISO
   estimatedMinutes?: number | null;
+  priority?: number | null; // 1-5
+  notes?: string | null;
+  attachments?: string[] | null; // URLs
+  dependsOn?: string[] | null; // task IDs
 }
 
 export interface NewTaskInput {
@@ -16,6 +20,10 @@ export interface NewTaskInput {
   dueDate: string; // ISO
   status?: TaskStatus;
   estimatedMinutes?: number | null;
+  priority?: number | null;
+  notes?: string | null;
+  attachments?: string[] | null;
+  dependsOn?: string[] | null;
 }
 
 export interface UpdateTaskInput {
@@ -24,6 +32,10 @@ export interface UpdateTaskInput {
   dueDate?: string; // ISO
   status?: TaskStatus;
   estimatedMinutes?: number | null;
+  priority?: number | null;
+  notes?: string | null;
+  attachments?: string[] | null;
+  dependsOn?: string[] | null;
 }
 
 export interface StudySession {
@@ -51,4 +63,10 @@ export interface StatsPayload {
   estMinutesThisWeek: number; // sum of estimated minutes for TODO tasks due this week
   loggedMinutesThisWeek: number; // sum of minutes logged this week
   remainingMinutesThisWeek: number; // max(0, est - logged)
+  courseBreakdown: Array<{
+    course: string | null;
+    estMinutes: number;
+    loggedMinutes: number;
+    remainingMinutes: number;
+  }>;
 }

@@ -20,6 +20,7 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
               <Link href="/" className="px-2 py-1 rounded border border-[#1b2344] hover:bg-[#0b1020]">Home</Link>
               <Link href="/planner" className="px-2 py-1 rounded border border-[#1b2344] hover:bg-[#0b1020]">Planner</Link>
               <Link href="/settings" className="px-2 py-1 rounded border border-[#1b2344] hover:bg-[#0b1020]">Settings</Link>
+              <Link href="/help" className="px-2 py-1 rounded border border-[#1b2344] hover:bg-[#0b1020]">Help</Link>
             </nav>
           </header>
           {children}
