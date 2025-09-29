@@ -5,7 +5,8 @@ import { NewTaskInput } from './types';
 const KEYWORDS = [
   'read', 'reading', 'pages', 'chapter', 'ch.', 'section', '§',
   'assignment', 'submit', 'due', 'turn in', 'upload',
-  'memo', 'brief', 'quiz', 'exam', 'outline', 'problem', 'practice', 'discussion', 'paper', 'case'
+  'memo', 'brief', 'quiz', 'exam', 'outline', 'problem', 'problems', 'problem set', 'practice', 'discussion', 'paper', 'response paper', 'case',
+  'cb', 'casebook', 'supp', 'supplement', 'ucc', 'frcp', 'restatement', 'statute', 'article', 'handout', 'notes'
 ];
 
 const STOPWORDS = [
@@ -98,9 +99,13 @@ function estimateMinutes(line: string, minutesPerPage = 3): number | null {
   if (l.includes('quiz')) return 30;
   if (l.includes('exam') || l.includes('midterm') || l.includes('final')) return 180;
   if (l.includes('paper')) return 180;
+  if (l.includes('response paper')) return 120;
+  if (l.includes('problem set') || /\bproblems?\b/.test(l)) return 60;
   if (l.includes('discussion')) return 30;
   if (l.includes('assignment')) return 90;
   if (l.includes('chapter') || l.includes('ch.')) return 60;
+  if (/(\bucc\b|\bfrcp\b|restatement|statute|cb\b|casebook|supp\b|supplement)/i.test(line)) return 60; // treat as reading chunk
+  if (l.includes('notes')) return 20;
   return null;
 }
 

@@ -90,21 +90,22 @@ export default function UploadCard() {
         <div className="flex-1 w-full">
           <label className="block text-sm mb-1">File</label>
           <input type="file" accept=".pdf,.docx,.txt" onChange={e => setFile(e.target.files?.[0] || null)} className="w-full" />
+          <button onClick={onUpload} disabled={!file || loading} className="bg-blue-600 hover:bg-blue-500 disabled:opacity-50 px-4 py-2 rounded mt-2">
+            {loading ? 'Uploading...' : 'Upload & Parse'}
+          </button>
         </div>
-        <button onClick={onUpload} disabled={!file || loading} className="bg-blue-600 hover:bg-blue-500 disabled:opacity-50 px-4 py-2 rounded">
-          {loading ? 'Uploading...' : 'Upload & Parse'}
-        </button>
       </div>
       {status && <p className="mt-3 text-sm text-slate-300/90">{status}</p>}
-      {reviewOpen && (
-        <div className="mt-4 border border-[#1b2344] rounded p-4">
-          <ParserReview
-            initial={reviewTasks}
-            onCancel={() => setReviewOpen(false)}
-            onSaved={(count) => { setReviewOpen(false); setStatus(`Created ${count} tasks${course ? ` for ${course}` : ''}.`); }}
-          />
-        </div>
-      )}
+        {reviewOpen && (
+          <div className="mt-4 border border-[#1b2344] rounded p-4">
+            <ParserReview
+              initial={reviewTasks}
+              mppDefault={(() => { const n = parseInt(mpp, 10); return isNaN(n) ? undefined : n; })()}
+              onCancel={() => setReviewOpen(false)}
+              onSaved={(count) => { setReviewOpen(false); setStatus(`Created ${count} tasks${course ? ` for ${course}` : ''}.`); }}
+            />
+          </div>
+        )}
     </div>
   );
 }

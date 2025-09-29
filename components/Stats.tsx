@@ -92,6 +92,30 @@ export default function Stats() {
             </div>
           </div>
 
+          {stats.dailyEst && stats.dailyEst.length > 0 && (
+            <div className="rounded border border-[#1b2344] p-4">
+              <div className="flex items-center justify-between mb-2">
+                <div className="text-slate-300/70 text-xs">Next 7 days forecast (est. minutes due per day)</div>
+                <div className="text-xs text-slate-300/60">Heavy days: {stats.heavyDays ?? 0}</div>
+              </div>
+              <div className="grid grid-cols-7 gap-2">
+                {stats.dailyEst.map((d, i) => {
+                  const max = stats.maxDayMinutes || 1;
+                  const pct = Math.min(100, Math.round((d.estMinutes / max) * 100));
+                  return (
+                    <div key={i} className="flex flex-col items-center">
+                      <div className="h-20 w-6 border border-[#1b2344] bg-[#0b1020] flex items-end">
+                        <div className={`w-full ${d.estMinutes >= 240 ? 'bg-rose-600' : 'bg-indigo-600'}`} style={{ height: `${pct}%` }} />
+                      </div>
+                      <div className="text-[10px] mt-1 text-slate-300/70">{new Date(d.date).toLocaleDateString(undefined, { weekday:'short' })}</div>
+                      <div className="text-[10px] text-slate-300/60">{Math.round(d.estMinutes)}m</div>
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+          )}
+
           {stats.courseBreakdown && stats.courseBreakdown.length > 0 && (
             <div className="rounded border border-[#1b2344] p-4">
               <div className="text-slate-300/70 text-xs mb-2">Per-course (this week)</div>

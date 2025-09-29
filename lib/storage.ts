@@ -249,5 +249,21 @@ export async function statsNow() {
     return { course, estMinutes: est, loggedMinutes: logged, remainingMinutes: remaining };
   }).sort((a, b) => (b.remainingMinutes - a.remainingMinutes));
 
-  return { upcoming7d, hoursThisWeek, avgFocusThisWeek, estMinutesThisWeek, loggedMinutesThisWeek, remainingMinutesThisWeek, courseBreakdown };
+  // Daily estimate forecast (next 7 days from today)
+  const start = new Date(now); start.setHours(0,0,0,0);
+  const daily: Array<{ date: string; estMinutes: number }> = [];
+  const dayKey = (d: Date) => `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`;
+  for (let i = 0; i < 7; i++) {
+    const d = new Date(start); d.setDate(d.getDate() + i);
+    const end = new Date(d); end.setHours(23,59,59,999);
+    const est = tasks
+      .filter(t => t.status !== 'done')
+      .filter(t => { const due = new Date(t.dueDate); return due >= d && due <= end; })
+      .reduce((acc, t) => acc + (t.estimatedMinutes || 0), 0);
+    daily.push({ date: dayKey(d), estMinutes: est });
+  }
+  const maxDayMinutes = daily.reduce((m, x) => Math.max(m, x.estMinutes), 0);
+  const heavyDays = daily.filter(x => x.estMinutes >= 240).length; // 4+ hrs considered heavy
+
+  return { upcoming7d, hoursThisWeek, avgFocusThisWeek, estMinutesThisWeek, loggedMinutesThisWeek, remainingMinutesThisWeek, courseBreakdown, dailyEst: daily, heavyDays, maxDayMinutes };
 }

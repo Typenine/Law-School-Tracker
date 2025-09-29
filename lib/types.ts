@@ -69,4 +69,7 @@ export interface StatsPayload {
     loggedMinutes: number;
     remainingMinutes: number;
   }>;
+  dailyEst?: Array<{ date: string; estMinutes: number }>;
+  heavyDays?: number;
+  maxDayMinutes?: number;
 }

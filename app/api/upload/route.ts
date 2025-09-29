@@ -20,7 +20,7 @@ export async function POST(req: Request) {
   const minutesPerPage = (() => { const n = parseInt(mppRaw, 10); return isNaN(n) ? undefined : n; })();
 
   if (!(file instanceof File)) return new Response('file is required', { status: 400 });
-  const arrayBuf = await file.arrayBuffer();
+  const arrayBuf = await (file as File).arrayBuffer();
   const buffer = Buffer.from(arrayBuf);
 
   const contentType = file.type || '';
@@ -39,6 +39,31 @@ export async function POST(req: Request) {
     }
   } catch (e: any) {
     return new Response('Failed to read file: ' + e.message, { status: 400 });
+  }
+
+  // OCR fallback for scanned PDFs if enabled and text is too short
+  async function ocrSpaceExtract(f: File): Promise<string> {
+    const key = process.env.OCR_SPACE_API_KEY;
+    if (!key) return '';
+    try {
+      const fd = new FormData();
+      fd.append('language', 'eng');
+      fd.append('isOverlayRequired', 'false');
+      fd.append('OCREngine', '2');
+      fd.append('file', f, f.name);
+      const resp = await fetch('https://api.ocr.space/parse/image', { method: 'POST', headers: { apikey: key }, body: fd });
+      if (!resp.ok) return '';
+      const data = await resp.json();
+      const parts = Array.isArray(data?.ParsedResults) ? data.ParsedResults.map((p: any) => p?.ParsedText || '').filter(Boolean) : [];
+      return parts.join('\n');
+    } catch {
+      return '';
+    }
+  }
+
+  if ((contentType.includes('pdf') || file.name.toLowerCase().endsWith('.pdf')) && (!text || text.trim().length < 20)) {
+    const ocrText = await ocrSpaceExtract(file as File);
+    if (ocrText && ocrText.trim().length > 0) text = ocrText;
   }
 
   const tasksToCreate = parseSyllabusToTasks(text, course, { minutesPerPage });
