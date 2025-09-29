@@ -178,20 +178,28 @@ export function parseSyllabusToTasks(text: string, course?: string | null, opts?
       continue;
     }
 
-    // Simple table row parsing: Date | Content | ...
+    // Simple table row parsing with inferred date column: Date | Content | ...
     if ((raw.includes('|') || /\t/.test(raw))) {
       const cells = raw.includes('|') ? raw.split('|').map(c => c.trim()) : raw.split(/\t+/).map(c => c.trim());
       if (cells.length >= 2) {
-        const dateGuess = chrono.parse(cells[0], new Date(), { forwardDate: true });
-        if (dateGuess.length) {
-          const d = dateGuess[0];
-          const base = d.end?.date ? d.end.date() : (d.start?.date ? d.start.date() : d.date());
-          const when = dateWithPossibleTime(raw, base, d);
-          const content = cells.slice(1).join(' | ');
+        let bestIdx = -1; let bestScore = 0; let bestParsed: chrono.ParsedResult | null = null;
+        for (let ci = 0; ci < cells.length; ci++) {
+          const c = cells[ci];
+          const p = chrono.parse(c, new Date(), { forwardDate: true });
+          if (!p.length) continue;
+          const r = p[0];
+          const score = (r.text.length / Math.max(1, c.length));
+          if (score > bestScore) { bestScore = score; bestIdx = ci; bestParsed = r; }
+        }
+        if (bestIdx >= 0 && bestParsed) {
+          const base = bestParsed.end?.date ? bestParsed.end.date() : (bestParsed.start?.date ? bestParsed.start.date() : bestParsed.date());
+          const when = dateWithPossibleTime(raw, base, bestParsed);
+          const content = cells.filter((_, i) => i !== bestIdx).join(' | ');
           const parts = splitIntoSubtasks(content);
           for (const p of parts) {
             if (hasKeyword(p)) {
-              tasks.push({ title: p, course: course ?? null, dueDate: when.toISOString(), status: 'todo', estimatedMinutes: estimateMinutes(p, opts?.minutesPerPage ?? 3) });
+              const title = cleanTitle(p);
+              tasks.push({ title, course: course ?? null, dueDate: when.toISOString(), status: 'todo', estimatedMinutes: estimateMinutes(p, opts?.minutesPerPage ?? 3) });
             }
           }
           continue;
@@ -206,7 +214,8 @@ export function parseSyllabusToTasks(text: string, course?: string | null, opts?
       // If the line is mostly a date (like "Sep 12" or "Week 3 – Sep 12"), set context
       const dateText = dateParsed[0].text;
       const pctDate = dateText.length / line.length;
-      if (pctDate > 0.3 && !hasKeyword(line)) {
+      const isWeekOf = /^\s*week\s+of\b/i.test(line);
+      if ((pctDate > 0.3 || isWeekOf) && !hasKeyword(line)) {
         currentDate = dateWithPossibleTime(line, base, parsed);
         continue;
       }

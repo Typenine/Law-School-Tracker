@@ -20,6 +20,9 @@ export default function TaskTable() {
   const [editPriority, setEditPriority] = useState<string>('');
   const [editNotes, setEditNotes] = useState<string>('');
   const courseFilterRef = useRef<HTMLInputElement>(null);
+  const [importOpen, setImportOpen] = useState(false);
+  const [importFile, setImportFile] = useState<File | null>(null);
+  const [importStatus, setImportStatus] = useState('');
 
   async function refresh() {
     setLoading(true);
@@ -156,6 +159,23 @@ export default function TaskTable() {
     return `/api/tasks/export.csv${params.length ? `?${params.join('&')}` : ''}`;
   }, [courseFilter, statusFilter]);
 
+  async function importCsv() {
+    if (!importFile) return;
+    try {
+      setImportStatus('Uploading...');
+      const fd = new FormData();
+      fd.append('file', importFile);
+      const res = await fetch('/api/tasks/import', { method: 'POST', body: fd });
+      if (!res.ok) throw new Error(await res.text());
+      const data = await res.json();
+      setImportStatus(`Imported ${data.created} tasks`);
+      setImportFile(null);
+      await refresh();
+    } catch (e: any) {
+      setImportStatus('Import failed: ' + (e?.message || 'Unknown error'));
+    }
+  }
+
   return (
     <div>
       <h2 className="text-lg font-medium mb-3">Tasks</h2>
@@ -170,9 +190,20 @@ export default function TaskTable() {
         <div className="flex gap-2">
           <a href={icsHref} className="px-3 py-2 rounded bg-indigo-600 hover:bg-indigo-500">Download .ics</a>
           <a href={csvHref} className="px-3 py-2 rounded bg-teal-600 hover:bg-teal-500">Export CSV</a>
+          <button type="button" onClick={() => setImportOpen(v => !v)} className="px-3 py-2 rounded bg-amber-600 hover:bg-amber-500">{importOpen ? 'Close Import' : 'Import CSV'}</button>
           <button onClick={refresh} className="px-3 py-2 rounded border border-[#1b2344]">Refresh</button>
         </div>
       </form>
+      {importOpen && (
+        <div className="mb-4 border border-[#1b2344] rounded p-3 bg-[#0b1020]">
+          <div className="text-xs text-slate-300/70 mb-2">Choose a CSV with columns: title, dueDate. Optional: course, status, estimatedMinutes, priority, notes.</div>
+          <div className="flex items-center gap-2">
+            <input type="file" accept=".csv,text/csv" onChange={e => setImportFile(e.target.files?.[0] || null)} className="text-sm" />
+            <button type="button" onClick={importCsv} disabled={!importFile} className="px-3 py-2 rounded bg-amber-600 hover:bg-amber-500 disabled:opacity-50">Upload</button>
+            {importStatus && <div className="text-xs text-slate-300/70 ml-2">{importStatus}</div>}
+          </div>
+        </div>
+      )}
       <div className="mb-3 grid grid-cols-1 md:grid-cols-3 gap-2">
         <div>
           <label className="block text-xs text-slate-300/70 mb-1">Status</label>
