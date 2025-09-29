@@ -35,6 +35,8 @@ export async function ensureSchema() {
     ALTER TABLE tasks ADD COLUMN IF NOT EXISTS notes text;
     ALTER TABLE tasks ADD COLUMN IF NOT EXISTS attachments jsonb;
     ALTER TABLE tasks ADD COLUMN IF NOT EXISTS depends_on uuid[];
+    ALTER TABLE tasks ADD COLUMN IF NOT EXISTS tags jsonb;
+    ALTER TABLE tasks ADD COLUMN IF NOT EXISTS term text;
     CREATE TABLE IF NOT EXISTS sessions (
       id uuid PRIMARY KEY,
       task_id uuid REFERENCES tasks(id) ON DELETE SET NULL,
@@ -75,8 +77,8 @@ async function writeJson(data: { tasks: Task[]; sessions: StudySession[] }) {
 export async function listTasks(): Promise<Task[]> {
   if (DB_URL) {
     const p = getPool();
-    type TaskRow = { id: string; title: string; course: string | null; due_date: Date | string; status: 'todo' | 'done'; created_at: Date | string; estimated_minutes: number | null; priority: number | null; notes: string | null; attachments: string[] | null; depends_on: string[] | null };
-    const res = await p.query(`SELECT id, title, course, due_date, status, created_at, estimated_minutes, priority, notes, attachments, depends_on FROM tasks ORDER BY due_date ASC`);
+    type TaskRow = { id: string; title: string; course: string | null; due_date: Date | string; status: 'todo' | 'done'; created_at: Date | string; estimated_minutes: number | null; priority: number | null; notes: string | null; attachments: string[] | null; depends_on: string[] | null; tags: string[] | null; term: string | null };
+    const res = await p.query(`SELECT id, title, course, due_date, status, created_at, estimated_minutes, priority, notes, attachments, depends_on, tags, term FROM tasks ORDER BY due_date ASC`);
     const rows = res.rows as unknown as TaskRow[];
     return rows.map(r => ({
       id: r.id,
@@ -90,6 +92,8 @@ export async function listTasks(): Promise<Task[]> {
       notes: r.notes ?? null,
       attachments: (r.attachments as any) ?? null,
       dependsOn: (r.depends_on as any) ?? null,
+      tags: (r.tags as any) ?? null,
+      term: r.term ?? null,
     }));
   }
   const db = await readJson();
@@ -102,14 +106,14 @@ export async function createTask(input: NewTaskInput): Promise<Task> {
     const p = getPool();
     const id = uuid();
     const res = await p.query(
-      `INSERT INTO tasks (id, title, course, due_date, status, created_at, estimated_minutes, priority, notes, attachments, depends_on) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11) RETURNING id, title, course, due_date, status, created_at, estimated_minutes, priority, notes, attachments, depends_on`,
-      [id, input.title, input.course ?? null, new Date(input.dueDate), input.status ?? 'todo', new Date(now), input.estimatedMinutes ?? null, input.priority ?? null, input.notes ?? null, input.attachments ?? null, input.dependsOn ?? null]
+      `INSERT INTO tasks (id, title, course, due_date, status, created_at, estimated_minutes, priority, notes, attachments, depends_on, tags, term) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13) RETURNING id, title, course, due_date, status, created_at, estimated_minutes, priority, notes, attachments, depends_on, tags, term`,
+      [id, input.title, input.course ?? null, new Date(input.dueDate), input.status ?? 'todo', new Date(now), input.estimatedMinutes ?? null, input.priority ?? null, input.notes ?? null, input.attachments ?? null, input.dependsOn ?? null, input.tags ?? null, input.term ?? null]
     );
     const r = res.rows[0];
-    return { id: r.id, title: r.title, course: r.course, dueDate: new Date(r.due_date).toISOString(), status: r.status, createdAt: new Date(r.created_at).toISOString(), estimatedMinutes: r.estimated_minutes ?? null, priority: r.priority ?? null, notes: r.notes ?? null, attachments: r.attachments ?? null, dependsOn: r.depends_on ?? null };
+    return { id: r.id, title: r.title, course: r.course, dueDate: new Date(r.due_date).toISOString(), status: r.status, createdAt: new Date(r.created_at).toISOString(), estimatedMinutes: r.estimated_minutes ?? null, priority: r.priority ?? null, notes: r.notes ?? null, attachments: r.attachments ?? null, dependsOn: r.depends_on ?? null, tags: r.tags ?? null, term: r.term ?? null };
   }
   const db = await readJson();
-  const task: Task = { id: uuid(), title: input.title, course: input.course ?? null, dueDate: input.dueDate, status: input.status ?? 'todo', createdAt: now, estimatedMinutes: input.estimatedMinutes ?? null, priority: input.priority ?? null, notes: input.notes ?? null, attachments: input.attachments ?? null, dependsOn: input.dependsOn ?? null };
+  const task: Task = { id: uuid(), title: input.title, course: input.course ?? null, dueDate: input.dueDate, status: input.status ?? 'todo', createdAt: now, estimatedMinutes: input.estimatedMinutes ?? null, priority: input.priority ?? null, notes: input.notes ?? null, attachments: input.attachments ?? null, dependsOn: input.dependsOn ?? null, tags: input.tags ?? null, term: input.term ?? null };
   db.tasks.push(task);
   await writeJson(db);
   return task;
@@ -131,18 +135,20 @@ export async function updateTask(id: string, patch: UpdateTaskInput): Promise<Ta
     if (patch.notes !== undefined) { fields.push(`notes = $${idx++}`); values.push(patch.notes); }
     if (patch.attachments !== undefined) { fields.push(`attachments = $${idx++}`); values.push(patch.attachments); }
     if (patch.dependsOn !== undefined) { fields.push(`depends_on = $${idx++}`); values.push(patch.dependsOn); }
+    if (patch.tags !== undefined) { fields.push(`tags = $${idx++}`); values.push(patch.tags); }
+    if (patch.term !== undefined) { fields.push(`term = $${idx++}`); values.push(patch.term); }
     if (!fields.length) {
-      const cur = await p.query(`SELECT id, title, course, due_date, status, created_at, estimated_minutes, priority, notes, attachments, depends_on FROM tasks WHERE id=$1`, [id]);
+      const cur = await p.query(`SELECT id, title, course, due_date, status, created_at, estimated_minutes, priority, notes, attachments, depends_on, tags, term FROM tasks WHERE id=$1`, [id]);
       if (!cur.rowCount) return null;
       const r = cur.rows[0];
-      return { id: r.id, title: r.title, course: r.course, dueDate: new Date(r.due_date).toISOString(), status: r.status, createdAt: new Date(r.created_at).toISOString(), estimatedMinutes: r.estimated_minutes ?? null, priority: r.priority ?? null, notes: r.notes ?? null, attachments: r.attachments ?? null, dependsOn: r.depends_on ?? null };
+      return { id: r.id, title: r.title, course: r.course, dueDate: new Date(r.due_date).toISOString(), status: r.status, createdAt: new Date(r.created_at).toISOString(), estimatedMinutes: r.estimated_minutes ?? null, priority: r.priority ?? null, notes: r.notes ?? null, attachments: r.attachments ?? null, dependsOn: r.depends_on ?? null, tags: r.tags ?? null, term: r.term ?? null };
     }
-    const q = `UPDATE tasks SET ${fields.join(', ')} WHERE id = $${idx} RETURNING id, title, course, due_date, status, created_at, estimated_minutes, priority, notes, attachments, depends_on`;
+    const q = `UPDATE tasks SET ${fields.join(', ')} WHERE id = $${idx} RETURNING id, title, course, due_date, status, created_at, estimated_minutes, priority, notes, attachments, depends_on, tags, term`;
     values.push(id);
     const res = await p.query(q, values);
     if (!res.rowCount) return null;
     const r = res.rows[0];
-    return { id: r.id, title: r.title, course: r.course, dueDate: new Date(r.due_date).toISOString(), status: r.status, createdAt: new Date(r.created_at).toISOString(), estimatedMinutes: r.estimated_minutes ?? null, priority: r.priority ?? null, notes: r.notes ?? null, attachments: r.attachments ?? null, dependsOn: r.depends_on ?? null };
+    return { id: r.id, title: r.title, course: r.course, dueDate: new Date(r.due_date).toISOString(), status: r.status, createdAt: new Date(r.created_at).toISOString(), estimatedMinutes: r.estimated_minutes ?? null, priority: r.priority ?? null, notes: r.notes ?? null, attachments: r.attachments ?? null, dependsOn: r.depends_on ?? null, tags: r.tags ?? null, term: r.term ?? null };
   }
   const db = await readJson();
   const i = db.tasks.findIndex(t => t.id === id);

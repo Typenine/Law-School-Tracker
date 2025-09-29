@@ -1,6 +1,7 @@
 "use client";
 import { useEffect, useMemo, useState } from 'react';
 import { Task } from '@/lib/types';
+import { courseColorClass } from '@/lib/colors';
 
 export const dynamic = 'force-dynamic';
 
@@ -125,10 +126,20 @@ export default function CalendarPage() {
                 <ul className="space-y-1">
                   {list.map(t => (
                     <li key={t.id} className="text-[11px] flex items-center justify-between gap-1" draggable onDragStart={(e) => onDragStart(e, t)}>
-                      <div className="truncate">
-                        <span className="text-slate-200">{t.title}</span>
-                        {t.course ? <span className="text-slate-300/60"> · {t.course}</span> : null}
-                        {typeof t.estimatedMinutes === 'number' ? <span className="text-slate-300/60"> · {t.estimatedMinutes}m</span> : null}
+                      <div className="min-w-0">
+                        <div className="truncate flex items-center gap-2">
+                          {t.course ? <span className={`inline-block w-2 h-2 rounded-full ${courseColorClass(t.course, 'bg')}`}></span> : null}
+                          <span className="text-slate-200">{t.title}</span>
+                          {t.course ? <span className="text-slate-300/60"> · {t.course}</span> : null}
+                          {typeof t.estimatedMinutes === 'number' ? <span className="text-slate-300/60"> · {t.estimatedMinutes}m</span> : null}
+                        </div>
+                        {(t.tags && t.tags.length > 0) && (
+                          <div className="flex flex-wrap gap-1 mt-0.5">
+                            {t.tags.map((tg, i) => (
+                              <span key={i} className="text-[10px] px-1 py-0.5 rounded border border-[#1b2344]">{tg}</span>
+                            ))}
+                          </div>
+                        )}
                       </div>
                       <div className="shrink-0 space-x-1">
                         <button className="px-1 py-0.5 text-[10px] rounded border border-[#1b2344]" onClick={(e) => { e.stopPropagation(); toggleDone(t); }}>{t.status === 'done' ? 'Undo' : 'Done'}</button>

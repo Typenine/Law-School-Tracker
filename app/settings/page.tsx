@@ -30,6 +30,7 @@ export default function SettingsPage() {
   const [remindersEnabled, setRemindersEnabled] = useState<boolean>(false);
   const [remindersLeadHours, setRemindersLeadHours] = useState<number>(24);
   const [heavyDayThreshold, setHeavyDayThreshold] = useState<number>(240);
+  const [currentTerm, setCurrentTerm] = useState<string>('');
   const [icsToken, setIcsToken] = useState<string>('');
   const [map, setMap] = useState<Record<string, number>>({});
   const [courseKey, setCourseKey] = useState('');
@@ -41,6 +42,7 @@ export default function SettingsPage() {
     setRemindersEnabled(getLocalBool('remindersEnabled', false));
     setRemindersLeadHours(getLocalNumber('remindersLeadHours', 24));
     setHeavyDayThreshold(getLocalNumber('heavyDayThreshold', 240));
+    if (typeof window !== 'undefined') setCurrentTerm(window.localStorage.getItem('currentTerm') || '');
     if (typeof window !== 'undefined') setIcsToken(window.localStorage.getItem('icsToken') || '');
     setMap(getCourseMap());
   }, []);
@@ -50,6 +52,7 @@ export default function SettingsPage() {
   useEffect(() => { if (typeof window !== 'undefined') window.localStorage.setItem('remindersEnabled', String(remindersEnabled)); }, [remindersEnabled]);
   useEffect(() => { if (typeof window !== 'undefined') window.localStorage.setItem('remindersLeadHours', String(remindersLeadHours)); }, [remindersLeadHours]);
   useEffect(() => { if (typeof window !== 'undefined') window.localStorage.setItem('heavyDayThreshold', String(heavyDayThreshold)); }, [heavyDayThreshold]);
+  useEffect(() => { if (typeof window !== 'undefined') window.localStorage.setItem('currentTerm', currentTerm); }, [currentTerm]);
   useEffect(() => { if (typeof window !== 'undefined') window.localStorage.setItem('icsToken', icsToken); }, [icsToken]);
   useEffect(() => { if (typeof window !== 'undefined') window.localStorage.setItem('courseMppMap', JSON.stringify(map)); }, [map]);
 
@@ -89,6 +92,11 @@ export default function SettingsPage() {
             <label className="block text-sm mb-1">Heavy day threshold (minutes)</label>
             <input type="number" min={60} step={30} value={heavyDayThreshold} onChange={e => setHeavyDayThreshold(parseInt(e.target.value || '240', 10))} className="w-40 bg-[#0b1020] border border-[#1b2344] rounded px-3 py-2" />
             <p className="text-xs text-slate-300/70 mt-1">Used to color bars in the weekly forecast and count heavy days. Date-only; no times.</p>
+          </div>
+          <div>
+            <label className="block text-sm mb-1">Current term (e.g., Fall 2025)</label>
+            <input value={currentTerm} onChange={e => setCurrentTerm(e.target.value)} placeholder="e.g., Fall 2025" className="w-60 bg-[#0b1020] border border-[#1b2344] rounded px-3 py-2" />
+            <p className="text-xs text-slate-300/70 mt-1">Views can filter by this term. Tasks can store a term field.</p>
           </div>
           <div>
             <label className="block text-sm mb-1">Reminders</label>

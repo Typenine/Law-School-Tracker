@@ -22,6 +22,7 @@ export default function TaskTable() {
   const [editNotes, setEditNotes] = useState<string>('');
   const [editAttachments, setEditAttachments] = useState<string>('');
   const [editDepends, setEditDepends] = useState<string>('');
+  const [editTags, setEditTags] = useState<string>('');
   const courseFilterRef = useRef<HTMLInputElement>(null);
   const [importOpen, setImportOpen] = useState(false);
   const [importFile, setImportFile] = useState<File | null>(null);
@@ -29,6 +30,10 @@ export default function TaskTable() {
   const [savedViews, setSavedViews] = useState<Array<{ name: string; course: string; status: 'all'|'todo'|'done' }>>([]);
   const [newViewName, setNewViewName] = useState('');
   const [offlineCount, setOfflineCount] = useState<number>(0);
+  const [tagFilter, setTagFilter] = useState('');
+  const [currentTerm, setCurrentTerm] = useState<string>('');
+  const [tplStart, setTplStart] = useState<string>(''); // yyyy-mm-dd
+  const [tplStepDays, setTplStepDays] = useState<string>('1');
 
   async function refresh() {
     setLoading(true);
@@ -67,6 +72,39 @@ export default function TaskTable() {
       const q = window.localStorage.getItem('offlineQueue');
       if (q) setOfflineCount(JSON.parse(q).length || 0);
     } catch {}
+    try {
+      const t = window.localStorage.getItem('currentTerm') || '';
+      setCurrentTerm(t);
+    } catch {}
+  }, []);
+
+  // Flush offline queue when the app regains connectivity
+  useEffect(() => {
+    async function flushOfflineQueue() {
+      try {
+        const raw = window.localStorage.getItem('offlineQueue') || '[]';
+        let arr: any[] = [];
+        try { arr = JSON.parse(raw); } catch { arr = []; }
+        if (!Array.isArray(arr) || arr.length === 0) return;
+        const remaining: any[] = [];
+        for (const item of arr) {
+          try {
+            const res = await fetch('/api/tasks', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(item) });
+            if (!res.ok) throw new Error('failed');
+          } catch {
+            remaining.push(item);
+          }
+        }
+        window.localStorage.setItem('offlineQueue', JSON.stringify(remaining));
+        setOfflineCount(remaining.length);
+        if (remaining.length !== arr.length) await refresh();
+      } catch {}
+    }
+    function onOnline() { flushOfflineQueue(); }
+    window.addEventListener('online', onOnline);
+    // Try immediately if we're online and have items
+    if (navigator.onLine) onOnline();
+    return () => window.removeEventListener('online', onOnline);
   }, []);
 
   useEffect(() => {
@@ -114,6 +152,7 @@ export default function TaskTable() {
           dueDate: new Date(newDue).toISOString(),
           status: 'todo',
           estimatedMinutes: newEst ? parseInt(newEst, 10) : null,
+          term: currentTerm || null,
         }),
       });
       if (res.ok) {
@@ -127,7 +166,7 @@ export default function TaskTable() {
     // If offline or failed, queue it
     if (typeof navigator !== 'undefined' && !navigator.onLine) {
       try {
-        const item = { title: newTitle, course: newCourse || null, dueDate: new Date(newDue).toISOString(), status: 'todo', estimatedMinutes: newEst ? parseInt(newEst, 10) : null };
+        const item = { title: newTitle, course: newCourse || null, dueDate: new Date(newDue).toISOString(), status: 'todo', estimatedMinutes: newEst ? parseInt(newEst, 10) : null, term: currentTerm || null };
         const arr = JSON.parse(window.localStorage.getItem('offlineQueue') || '[]');
         arr.push(item);
         window.localStorage.setItem('offlineQueue', JSON.stringify(arr));
@@ -158,6 +197,7 @@ export default function TaskTable() {
     setEditNotes(t.notes || '');
     setEditAttachments((t.attachments || []).join(', '));
     setEditDepends((t.dependsOn || []).join(', '));
+    setEditTags((t.tags || []).join(', '));
   }
 
   function cancelEdit() {
@@ -174,8 +214,9 @@ export default function TaskTable() {
     body.estimatedMinutes = editEst ? parseInt(editEst, 10) : null;
     body.priority = editPriority ? parseInt(editPriority, 10) : null;
     body.notes = editNotes || null;
-    body.attachments = editAttachments ? editAttachments.split(',').map(s => s.trim()).filter(Boolean) : null;
-    body.dependsOn = editDepends ? editDepends.split(',').map(s => s.trim()).filter(Boolean) : null;
+    body.attachments = editAttachments ? editAttachments.split(',').map((s: string) => s.trim()).filter(Boolean) : null;
+    body.dependsOn = editDepends ? editDepends.split(',').map((s: string) => s.trim()).filter(Boolean) : null;
+    body.tags = editTags ? editTags.split(',').map((s: string) => s.trim()).filter(Boolean) : null;
     const res = await fetch(`/api/tasks/${editingId}`, { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
     if (res.ok) {
       cancelEdit();
@@ -221,7 +262,26 @@ export default function TaskTable() {
       {offlineCount > 0 && (
         <div className="mb-2 text-xs text-slate-300/80 flex items-center gap-2">
           <span>Pending offline: {offlineCount}</span>
-          <button onClick={async () => { window.dispatchEvent(new Event('online')); }} className="px-2 py-1 rounded border border-[#1b2344]">Sync now</button>
+          <button onClick={async () => {
+            try {
+              const raw = window.localStorage.getItem('offlineQueue') || '[]';
+              let arr: any[] = [];
+              try { arr = JSON.parse(raw); } catch { arr = []; }
+              if (!arr.length) return;
+              const remaining: any[] = [];
+              for (const item of arr) {
+                try {
+                  const res = await fetch('/api/tasks', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(item) });
+                  if (!res.ok) throw new Error('failed');
+                } catch {
+                  remaining.push(item);
+                }
+              }
+              window.localStorage.setItem('offlineQueue', JSON.stringify(remaining));
+              setOfflineCount(remaining.length);
+              if (remaining.length !== arr.length) await refresh();
+            } catch {}
+          }} className="px-2 py-1 rounded border border-[#1b2344]">Sync now</button>
         </div>
       )}
       <form onSubmit={(e) => { e.preventDefault(); quickAdd(); }} className="mb-3 flex flex-col md:flex-row gap-3 md:items-end justify-between">
@@ -255,6 +315,45 @@ export default function TaskTable() {
           <button onClick={refresh} className="px-3 py-2 rounded border border-[#1b2344]">Refresh</button>
         </div>
       </form>
+      {/* Course templates (local) */}
+      <div className="mb-3 border border-[#1b2344] rounded p-3 bg-[#0b1020]">
+        <div className="text-xs text-slate-300/70 mb-2">Templates per course (local). Use a course filter to select course.</div>
+        <div className="flex flex-col md:flex-row gap-2 md:items-end">
+          <input value={tplStart} onChange={e => setTplStart(e.target.value)} type="date" className="bg-[#0b1020] border border-[#1b2344] rounded px-3 py-2" />
+          <div className="flex items-center gap-2">
+            <span className="text-xs text-slate-300/70">Step (days)</span>
+            <input value={tplStepDays} onChange={e => setTplStepDays(e.target.value)} type="number" min={1} step={1} className="w-20 bg-[#0b1020] border border-[#1b2344] rounded px-3 py-2" />
+          </div>
+          <div className="flex gap-2">
+            <button type="button" className="px-3 py-2 rounded border border-[#1b2344] disabled:opacity-50" disabled={!courseFilter}
+              onClick={() => {
+                if (!courseFilter) return;
+                const list = tasks.filter(t => (t.course || '').toLowerCase().includes(courseFilter.toLowerCase()));
+                const tpl = list.map(t => ({ title: t.title, course: t.course || '', estimatedMinutes: t.estimatedMinutes || null, priority: t.priority || null, tags: t.tags || [] }));
+                try { window.localStorage.setItem(`courseTemplate:${courseFilter.toLowerCase()}`, JSON.stringify(tpl)); } catch {}
+              }}>Save template</button>
+            <button type="button" className="px-3 py-2 rounded border border-[#1b2344] disabled:opacity-50" disabled={!courseFilter || !tplStart}
+              onClick={async () => {
+                if (!courseFilter || !tplStart) return;
+                let tpl: any[] = [];
+                try { tpl = JSON.parse(window.localStorage.getItem(`courseTemplate:${courseFilter.toLowerCase()}`) || '[]'); } catch {}
+                if (!tpl.length) return;
+                const start = new Date(tplStart);
+                const step = Math.max(1, parseInt(tplStepDays || '1', 10));
+                const payload = tpl.map((x, i) => {
+                  const d = new Date(start); d.setDate(d.getDate() + i * step); d.setHours(23,59,59,999);
+                  return { title: x.title, course: x.course || courseFilter, dueDate: d.toISOString(), status: 'todo', estimatedMinutes: x.estimatedMinutes ?? null, priority: x.priority ?? null, tags: x.tags ?? [], term: currentTerm || null };
+                });
+                try {
+                  const res = await fetch('/api/tasks/bulk', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ tasks: payload }) });
+                  if (res.ok) {
+                    await refresh();
+                  }
+                } catch {}
+              }}>Apply template</button>
+          </div>
+        </div>
+      </div>
       {importOpen && (
         <div className="mb-4 border border-[#1b2344] rounded p-3 bg-[#0b1020]">
           <div className="text-xs text-slate-300/70 mb-2">Choose a CSV with columns: title, dueDate. Optional: course, status, estimatedMinutes, priority, notes.</div>
@@ -278,10 +377,18 @@ export default function TaskTable() {
           <label className="block text-xs text-slate-300/70 mb-1">Course contains</label>
           <input ref={courseFilterRef} value={courseFilter} onChange={e => setCourseFilter(e.target.value)} placeholder="e.g., Torts" className="w-full bg-[#0b1020] border border-[#1b2344] rounded px-3 py-2" />
         </div>
+        <div>
+          <label className="block text-xs text-slate-300/70 mb-1">Tag contains</label>
+          <input value={tagFilter} onChange={e => setTagFilter(e.target.value)} placeholder="e.g., outline" className="w-full bg-[#0b1020] border border-[#1b2344] rounded px-3 py-2" />
+        </div>
       </div>
       {loading ? (
         <p className="text-sm">Loading...</p>
-      ) : (tasks.filter(t => (statusFilter === 'all' || t.status === statusFilter) && (!courseFilter || (t.course || '').toLowerCase().includes(courseFilter.toLowerCase()))).length === 0 && tasks.length > 0) ? (
+      ) : (tasks
+            .filter(t => (statusFilter === 'all' || t.status === statusFilter))
+            .filter(t => (!courseFilter || (t.course || '').toLowerCase().includes(courseFilter.toLowerCase())))
+            .filter(t => (!tagFilter || (t.tags || []).some(tag => tag.toLowerCase().includes(tagFilter.toLowerCase()))))
+            .filter(t => (!currentTerm || (t.term || '') === currentTerm)).length === 0 && tasks.length > 0) ? (
         <p className="text-sm text-slate-300/80">No matching tasks. Adjust filters.</p>
       ) : tasks.length === 0 ? (
         <p className="text-sm text-slate-300/80">No tasks yet. Upload a syllabus or add tasks.</p>
@@ -296,6 +403,7 @@ export default function TaskTable() {
                 <th className="py-2 pr-4">Est. min</th>
                 <th className="py-2 pr-4">Pri</th>
                 <th className="py-2 pr-4">Notes</th>
+                <th className="py-2 pr-4">Tags</th>
                 <th className="py-2 pr-4">Links</th>
                 <th className="py-2 pr-4">Deps</th>
                 <th className="py-2 pr-4">Status</th>
@@ -304,7 +412,10 @@ export default function TaskTable() {
             </thead>
             <tbody>
               {tasks
-                .filter(t => (statusFilter === 'all' || t.status === statusFilter) && (!courseFilter || (t.course || '').toLowerCase().includes(courseFilter.toLowerCase())))
+                .filter(t => (statusFilter === 'all' || t.status === statusFilter))
+                .filter(t => (!courseFilter || (t.course || '').toLowerCase().includes(courseFilter.toLowerCase())))
+                .filter(t => (!tagFilter || (t.tags || []).some(tag => tag.toLowerCase().includes(tagFilter.toLowerCase()))))
+                .filter(t => (!currentTerm || (t.term || '') === currentTerm))
                 .map(t => (
                 <tr key={t.id} className="border-t border-[#1b2344]">
                   <td className="py-2 pr-4 whitespace-nowrap">
@@ -350,6 +461,19 @@ export default function TaskTable() {
                       <input value={editNotes} onChange={e => setEditNotes(e.target.value)} className="w-full bg-[#0b1020] border border-[#1b2344] rounded px-2 py-1" />
                     ) : (
                       <span className="truncate inline-block max-w-[260px] align-bottom">{t.notes || '-'}</span>
+                    )}
+                  </td>
+                  <td className="py-2 pr-4 max-w-[220px]">
+                    {editingId === t.id ? (
+                      <input value={editTags} onChange={e => setEditTags(e.target.value)} placeholder="Comma-separated tags" className="w-full bg-[#0b1020] border border-[#1b2344] rounded px-2 py-1" />
+                    ) : (
+                      (t.tags && t.tags.length > 0) ? (
+                        <div className="flex gap-1 flex-wrap">
+                          {t.tags.map((tg, i) => (
+                            <span key={i} className="text-[10px] px-1.5 py-0.5 rounded border border-[#1b2344]">{tg}</span>
+                          ))}
+                        </div>
+                      ) : '-'
                     )}
                   </td>
                   <td className="py-2 pr-4 max-w-[220px]">

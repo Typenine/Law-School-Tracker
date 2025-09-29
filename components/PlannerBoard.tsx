@@ -1,6 +1,7 @@
 "use client";
 import { useEffect, useMemo, useState } from 'react';
 import { Task } from '@/lib/types';
+import { courseColorClass } from '@/lib/colors';
 
 function startOfDay(d: Date) { const x = new Date(d); x.setHours(0,0,0,0); return x; }
 function keyOf(d: Date) { const x = startOfDay(d); return `${x.getFullYear()}-${String(x.getMonth()+1).padStart(2,'0')}-${String(x.getDate()).padStart(2,'0')}`; }
@@ -9,6 +10,8 @@ function labelOf(d: Date) { return d.toLocaleDateString(undefined, { weekday: 's
 export default function PlannerBoard() {
   const [tasks, setTasks] = useState<Task[]>([]);
   const [loading, setLoading] = useState(false);
+  const [currentTerm, setCurrentTerm] = useState<string>('');
+  const [courseScales, setCourseScales] = useState<Record<string, number>>({});
 
   async function refresh() {
     setLoading(true);
@@ -18,14 +21,42 @@ export default function PlannerBoard() {
     setLoading(false);
   }
 
+  async function applyAllSuggestions() {
+    for (const s of suggestions) {
+      await applySuggestion(s);
+    }
+  }
+  useEffect(() => { refresh(); }, []);
+  useEffect(() => {
+    if (typeof window !== 'undefined') {
+      setCurrentTerm(window.localStorage.getItem('currentTerm') || '');
+      try {
+        const raw = window.localStorage.getItem('courseMppMap') || '{}';
+        const map = JSON.parse(raw) as Record<string, number>;
+        const def = parseFloat(window.localStorage.getItem('minutesPerPage') || '3') || 3;
+        const scales: Record<string, number> = {};
+        for (const [k, v] of Object.entries(map)) {
+          const key = k.toLowerCase();
+          const n = typeof v === 'number' && v > 0 ? v : def;
+          scales[key] = n / def; // scale relative to default MPP
+        }
+        setCourseScales(scales);
+      } catch {}
+    }
+  }, []);
+
+  const days = useMemo(() => {
+    const today = startOfDay(new Date());
+    const arr: { date: Date; key: string; label: string }[] = [];
+    for (let i=0;i<7;i++) { const d = new Date(today); d.setDate(d.getDate()+i); arr.push({ date: d, key: keyOf(d), label: labelOf(d) }); }
+    return arr;
+  }, []);
+
   // Load-balancing assist: move tasks from heavy to lighter days within +/-2 days
   async function balanceWeek() {
-    // threshold from localStorage or 240
     const heavy = (typeof window !== 'undefined') ? parseFloat(window.localStorage.getItem('heavyDayThreshold') || '240') : 240;
-    const today = startOfDay(new Date());
     const dayKeys = days.map(d => d.key);
-    const indexOf = Object.fromEntries(dayKeys.map((k, i) => [k, i] as const));
-    // Build loads and buckets
+    const indexOf: Record<string, number> = Object.fromEntries(dayKeys.map((k, i) => [k, i] as const));
     const loads: Record<string, number> = Object.fromEntries(dayKeys.map(k => [k, 0] as const));
     const bucketTasks: Record<string, Task[]> = Object.fromEntries(dayKeys.map(k => [k, [] as Task[]] as const));
     for (const t of tasks) {
@@ -35,7 +66,6 @@ export default function PlannerBoard() {
       loads[key] += (t.estimatedMinutes || 0);
       bucketTasks[key].push(t);
     }
-    // For each heavy day, try to move largest tasks to nearby lighter days
     const moves: Array<{ id: string; toKey: string }> = [];
     for (const k of dayKeys) {
       if ((loads[k] || 0) <= heavy) continue;
@@ -43,15 +73,13 @@ export default function PlannerBoard() {
       for (const t of tasksBySize) {
         if ((loads[k] || 0) <= heavy) break;
         const i = indexOf[k];
-        // candidate offsets: -2,-1,+1,+2 prefer earlier days
         for (const off of [-2, -1, 1, 2]) {
           const j = i + off;
           if (j < 0 || j >= dayKeys.length) continue;
           const targetKey = dayKeys[j];
-          // keep before or on due date if moving earlier; allow +1/+2 only if still before original due end
           const due = startOfDay(new Date(t.dueDate));
           const targetDate = new Date(days[j].date);
-          if (targetDate > due) continue; // don't push later than due
+          if (targetDate > due) continue;
           const est = t.estimatedMinutes || 0;
           if ((loads[targetKey] || 0) + est <= heavy) {
             loads[k] -= est; loads[targetKey] += est;
@@ -61,7 +89,6 @@ export default function PlannerBoard() {
         }
       }
     }
-    // Apply moves
     for (const m of moves) {
       const [y, mo, d] = m.toKey.split('-').map(n => parseInt(n, 10));
       const nd = new Date(y, mo - 1, d, 23, 59, 59, 999);
@@ -69,32 +96,28 @@ export default function PlannerBoard() {
     }
     if (moves.length) await refresh();
   }
-  useEffect(() => { refresh(); }, []);
 
-  const days = useMemo(() => {
-    const today = startOfDay(new Date());
-    const arr: { date: Date; key: string; label: string }[] = [];
-    for (let i=0;i<7;i++) { const d = new Date(today); d.setDate(d.getDate()+i); arr.push({ date: d, key: keyOf(d), label: labelOf(d) }); }
-    return arr;
-  }, []);
+  const filteredTasks = useMemo(() => tasks.filter(t => (!currentTerm || (t.term || '') === currentTerm)), [tasks, currentTerm]);
 
   const buckets = useMemo(() => {
     const map: Record<string, Task[]> = Object.fromEntries(days.map(d => [d.key, [] as Task[]]));
-    for (const t of tasks) {
+    for (const t of filteredTasks) {
       const k = keyOf(new Date(t.dueDate));
       if (map[k]) map[k].push(t);
     }
     for (const k of Object.keys(map)) map[k].sort((a,b) => a.dueDate.localeCompare(b.dueDate));
     return map;
-  }, [tasks, days]);
+  }, [filteredTasks, days]);
 
   // Suggestions: split large readings/assignments across days before due (informational only)
   const suggestions = useMemo(() => {
     const today = startOfDay(new Date());
     const out: Array<{ id: string; title: string; course: string | null | undefined; dueKey: string; plan: Array<{ key: string; minutes: number }> }> = [];
-    for (const t of tasks) {
+    for (const t of filteredTasks) {
       if (t.status === 'done') continue;
-      const est = t.estimatedMinutes || 0;
+      const base = t.estimatedMinutes || 0;
+      const scale = (t.course && courseScales[(t.course || '').toLowerCase()]) || 1;
+      const est = Math.max(0, Math.round(base * scale));
       if (est < 120) continue; // threshold for suggesting splits
       const due = startOfDay(new Date(t.dueDate));
       if (due < today) continue;
@@ -111,7 +134,30 @@ export default function PlannerBoard() {
       if (plan.length) out.push({ id: t.id, title: t.title, course: t.course, dueKey: keyOf(due), plan });
     }
     return out;
-  }, [tasks]);
+  }, [filteredTasks, courseScales]);
+
+  // Suggested allocation per day using per-course scales
+  const suggestedDaily = useMemo(() => {
+    const daily: Record<string, number> = Object.fromEntries(days.map(d => [d.key, 0] as const));
+    const today = startOfDay(new Date());
+    for (const t of filteredTasks) {
+      if (t.status === 'done') continue;
+      const base = t.estimatedMinutes || 0;
+      const scale = (t.course && courseScales[(t.course || '').toLowerCase()]) || 1;
+      const est = Math.max(0, Math.round(base * scale));
+      const due = startOfDay(new Date(t.dueDate));
+      if (due < today) continue;
+      // distribute in 90m chunks across preceding days
+      const CHUNK = 90;
+      const splits = Math.max(1, Math.ceil(est / CHUNK));
+      for (let i = splits - 1; i >= 0; i--) {
+        const d = new Date(due); d.setDate(d.getDate() - i);
+        const key = keyOf(d);
+        if (daily[key] !== undefined) daily[key] += Math.min(CHUNK, est - (splits - 1 - i) * CHUNK);
+      }
+    }
+    return daily;
+  }, [filteredTasks, courseScales, days]);
 
   async function applySuggestion(s: { id: string; title: string; course: string | null | undefined; dueKey: string; plan: Array<{ key: string; minutes: number }> }) {
     try {
@@ -128,6 +174,7 @@ export default function PlannerBoard() {
           dueDate: due.toISOString(),
           status: 'todo',
           estimatedMinutes: p.minutes,
+          term: currentTerm || null,
         })});
         if (!res.ok) throw new Error('failed to create prep');
         const data = await res.json();
@@ -178,7 +225,8 @@ export default function PlannerBoard() {
               </li>
             ))}
           </ul>
-          <div className="mt-3">
+          <div className="mt-3 flex gap-2">
+            <button onClick={applyAllSuggestions} className="px-3 py-2 rounded border border-[#1b2344]">Apply all</button>
             <button onClick={balanceWeek} className="px-3 py-2 rounded border border-[#1b2344]">Balance this week</button>
           </div>
         </div>
@@ -196,14 +244,36 @@ export default function PlannerBoard() {
               <ul className="space-y-2">
                 {buckets[d.key].map(t => (
                   <li key={t.id} draggable onDragStart={(e) => onDragStart(e, t)} className="border border-[#1b2344] rounded p-2 cursor-move">
-                    <div className="text-sm font-medium">{t.title}</div>
-                    <div className="text-xs text-slate-300/70">{t.course || '-'} • {t.status}{typeof t.estimatedMinutes === 'number' ? ` • est ${t.estimatedMinutes}m` : ''}</div>
+                    <div className="text-sm font-medium flex items-center gap-2">
+                      {t.course ? <span className={`inline-block w-2.5 h-2.5 rounded-full ${courseColorClass(t.course, 'bg')}`}></span> : null}
+                      <span className="truncate">{t.title}</span>
+                    </div>
+                    <div className="text-xs text-slate-300/70 flex items-center gap-2 flex-wrap">
+                      <span>{t.course || '-'}</span>
+                      <span>• {t.status}</span>
+                      {typeof t.estimatedMinutes === 'number' ? <span>• est {t.estimatedMinutes}m</span> : null}
+                      {(t.tags || []).map((tg, i) => (
+                        <span key={i} className="text-[10px] px-1.5 py-0.5 rounded border border-[#1b2344]">{tg}</span>
+                      ))}
+                    </div>
                   </li>
                 ))}
               </ul>
             )}
           </div>
         ))}
+      </div>
+      {/* Suggested allocation panel */}
+      <div className="rounded border border-[#1b2344] p-4">
+        <div className="text-slate-300/70 text-xs mb-2">Suggested minutes per day (based on upcoming workload and per-course pace)</div>
+        <div className="grid grid-cols-1 md:grid-cols-3 gap-2">
+          {days.map(d => (
+            <div key={d.key} className="flex items-center justify-between border border-[#1b2344] rounded px-2 py-1">
+              <span className="text-xs text-slate-300/70">{d.label}</span>
+              <span className="text-xs text-slate-200">{suggestedDaily[d.key] || 0}m</span>
+            </div>
+          ))}
+        </div>
       </div>
     </div>
   );

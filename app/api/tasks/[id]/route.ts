@@ -18,6 +18,8 @@ export async function PATCH(req: NextRequest, { params }: { params: { id: string
     notes: z.string().max(5000).nullable().optional(),
     attachments: z.array(z.string().url()).nullable().optional(),
     dependsOn: z.array(z.string()).nullable().optional(),
+    tags: z.array(z.string().trim().min(1)).nullable().optional(),
+    term: z.string().trim().min(1).nullable().optional(),
   });
   const parsed = schema.safeParse(await req.json());
   if (!parsed.success) return new Response('Invalid patch body', { status: 400 });

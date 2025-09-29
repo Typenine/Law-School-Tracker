@@ -3,6 +3,7 @@ import type { Metadata } from 'next'
 import Link from 'next/link'
 import ReminderManager from '@/components/ReminderManager'
 import PWARegister from '@/components/PWARegister'
+import CommandPalette from '@/components/CommandPalette'
 
 export const metadata: Metadata = {
   title: 'Law School Tracker',
@@ -33,6 +34,7 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
         </div>
         <ReminderManager />
         <PWARegister />
+        <CommandPalette />
       </body>
     </html>
   )

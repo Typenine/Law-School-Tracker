@@ -12,6 +12,8 @@ export interface Task {
   notes?: string | null;
   attachments?: string[] | null; // URLs
   dependsOn?: string[] | null; // task IDs
+  tags?: string[] | null;
+  term?: string | null;
 }
 
 export interface NewTaskInput {
@@ -24,6 +26,8 @@ export interface NewTaskInput {
   notes?: string | null;
   attachments?: string[] | null;
   dependsOn?: string[] | null;
+  tags?: string[] | null;
+  term?: string | null;
 }
 
 export interface UpdateTaskInput {
@@ -36,6 +40,8 @@ export interface UpdateTaskInput {
   notes?: string | null;
   attachments?: string[] | null;
   dependsOn?: string[] | null;
+  tags?: string[] | null;
+  term?: string | null;
 }
 
 export interface StudySession {
