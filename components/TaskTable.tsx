@@ -1,5 +1,5 @@
 "use client";
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { Task } from '@/lib/types';
 
 export default function TaskTable() {
@@ -17,6 +17,9 @@ export default function TaskTable() {
   const [editDue, setEditDue] = useState('');
   const [editEst, setEditEst] = useState<string>('');
   const [icsToken, setIcsToken] = useState<string>('');
+  const [editPriority, setEditPriority] = useState<string>('');
+  const [editNotes, setEditNotes] = useState<string>('');
+  const courseFilterRef = useRef<HTMLInputElement>(null);
 
   async function refresh() {
     setLoading(true);
@@ -33,6 +36,33 @@ export default function TaskTable() {
   useEffect(() => {
     if (typeof window === 'undefined') return;
     setIcsToken(window.localStorage.getItem('icsToken') || '');
+    const sf = window.localStorage.getItem('taskStatusFilter') as any;
+    const cf = window.localStorage.getItem('taskCourseFilter');
+    if (sf === 'all' || sf === 'todo' || sf === 'done') setStatusFilter(sf);
+    if (typeof cf === 'string') setCourseFilter(cf);
+  }, []);
+
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+    window.localStorage.setItem('taskStatusFilter', statusFilter);
+  }, [statusFilter]);
+
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+    window.localStorage.setItem('taskCourseFilter', courseFilter);
+  }, [courseFilter]);
+
+  useEffect(() => {
+    function onKey(e: KeyboardEvent) {
+      const target = e.target as HTMLElement;
+      const isTyping = target && (target.tagName === 'INPUT' || target.tagName === 'TEXTAREA' || (target as any).isContentEditable);
+      if (!isTyping && e.key === '/') {
+        e.preventDefault();
+        courseFilterRef.current?.focus();
+      }
+    }
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
   }, []);
 
   async function toggleDone(t: Task) {
@@ -86,6 +116,8 @@ export default function TaskTable() {
     setEditCourse(t.course || '');
     setEditDue(isoToLocalInput(t.dueDate));
     setEditEst(t.estimatedMinutes?.toString() || '');
+    setEditPriority(t.priority?.toString() || '');
+    setEditNotes(t.notes || '');
   }
 
   function cancelEdit() {
@@ -100,6 +132,8 @@ export default function TaskTable() {
     const body: any = { title: editTitle, course: editCourse || null };
     if (editDue) body.dueDate = new Date(editDue).toISOString();
     body.estimatedMinutes = editEst ? parseInt(editEst, 10) : null;
+    body.priority = editPriority ? parseInt(editPriority, 10) : null;
+    body.notes = editNotes || null;
     const res = await fetch(`/api/tasks/${editingId}`, { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
     if (res.ok) {
       cancelEdit();
@@ -118,19 +152,19 @@ export default function TaskTable() {
   return (
     <div>
       <h2 className="text-lg font-medium mb-3">Tasks</h2>
-      <div className="mb-3 flex flex-col md:flex-row gap-3 md:items-end justify-between">
+      <form onSubmit={(e) => { e.preventDefault(); quickAdd(); }} className="mb-3 flex flex-col md:flex-row gap-3 md:items-end justify-between">
         <div className="grid grid-cols-1 md:grid-cols-5 gap-2 w-full md:w-auto">
           <input value={newTitle} onChange={e => setNewTitle(e.target.value)} placeholder="Title" className="w-full bg-[#0b1020] border border-[#1b2344] rounded px-3 py-2" />
           <input value={newCourse} onChange={e => setNewCourse(e.target.value)} placeholder="Course (optional)" className="w-full bg-[#0b1020] border border-[#1b2344] rounded px-3 py-2" />
           <input type="datetime-local" value={newDue} onChange={e => setNewDue(e.target.value)} className="w-full bg-[#0b1020] border border-[#1b2344] rounded px-3 py-2" />
           <input type="number" min={0} step={5} value={newEst} onChange={e => setNewEst(e.target.value)} placeholder="Est. min" className="w-full bg-[#0b1020] border border-[#1b2344] rounded px-3 py-2" />
-          <button onClick={quickAdd} className="bg-blue-600 hover:bg-blue-500 px-3 py-2 rounded disabled:opacity-50" disabled={!newTitle || !newDue}>Add Task</button>
+          <button type="submit" className="bg-blue-600 hover:bg-blue-500 px-3 py-2 rounded disabled:opacity-50" disabled={!newTitle || !newDue}>Add Task</button>
         </div>
         <div className="flex gap-2">
           <a href={icsHref} className="px-3 py-2 rounded bg-indigo-600 hover:bg-indigo-500">Download .ics</a>
           <button onClick={refresh} className="px-3 py-2 rounded border border-[#1b2344]">Refresh</button>
         </div>
-      </div>
+      </form>
       <div className="mb-3 grid grid-cols-1 md:grid-cols-3 gap-2">
         <div>
           <label className="block text-xs text-slate-300/70 mb-1">Status</label>
@@ -142,7 +176,7 @@ export default function TaskTable() {
         </div>
         <div>
           <label className="block text-xs text-slate-300/70 mb-1">Course contains</label>
-          <input value={courseFilter} onChange={e => setCourseFilter(e.target.value)} placeholder="e.g., Torts" className="w-full bg-[#0b1020] border border-[#1b2344] rounded px-3 py-2" />
+          <input ref={courseFilterRef} value={courseFilter} onChange={e => setCourseFilter(e.target.value)} placeholder="e.g., Torts" className="w-full bg-[#0b1020] border border-[#1b2344] rounded px-3 py-2" />
         </div>
       </div>
       {loading ? (
@@ -160,6 +194,8 @@ export default function TaskTable() {
                 <th className="py-2 pr-4">Title</th>
                 <th className="py-2 pr-4">Course</th>
                 <th className="py-2 pr-4">Est. min</th>
+                <th className="py-2 pr-4">Pri</th>
+                <th className="py-2 pr-4">Notes</th>
                 <th className="py-2 pr-4">Status</th>
                 <th className="py-2 pr-4">Actions</th>
               </tr>
@@ -195,6 +231,20 @@ export default function TaskTable() {
                       <input type="number" min={0} step={5} value={editEst} onChange={e => setEditEst(e.target.value)} className="w-full bg-[#0b1020] border border-[#1b2344] rounded px-2 py-1" />
                     ) : (
                       t.estimatedMinutes ?? '-'
+                    )}
+                  </td>
+                  <td className="py-2 pr-4">
+                    {editingId === t.id ? (
+                      <input type="number" min={1} max={5} value={editPriority} onChange={e => setEditPriority(e.target.value)} className="w-20 bg-[#0b1020] border border-[#1b2344] rounded px-2 py-1" />
+                    ) : (
+                      t.priority ?? '-'
+                    )}
+                  </td>
+                  <td className="py-2 pr-4 max-w-[280px]">
+                    {editingId === t.id ? (
+                      <input value={editNotes} onChange={e => setEditNotes(e.target.value)} className="w-full bg-[#0b1020] border border-[#1b2344] rounded px-2 py-1" />
+                    ) : (
+                      <span className="truncate inline-block max-w-[260px] align-bottom">{t.notes || '-'}</span>
                     )}
                   </td>
                   <td className="py-2 pr-4">{t.status}</td>

@@ -20,6 +20,10 @@ export async function POST(req: NextRequest) {
     dueDate: z.string().min(1), // ISO string from client
     status: z.enum(['todo', 'done']).optional(),
     estimatedMinutes: z.number().int().min(0).nullable().optional(),
+    priority: z.number().int().min(1).max(5).nullable().optional(),
+    notes: z.string().max(5000).nullable().optional(),
+    attachments: z.array(z.string().url()).nullable().optional(),
+    dependsOn: z.array(z.string()).nullable().optional(),
   });
   const parsed = schema.safeParse(await req.json());
   if (!parsed.success) return new Response('Invalid task body', { status: 400 });
@@ -30,6 +34,10 @@ export async function POST(req: NextRequest) {
     course: body.course ?? null,
     status: body.status ?? 'todo',
     estimatedMinutes: body.estimatedMinutes ?? null,
+    priority: body.priority ?? null,
+    notes: body.notes ?? null,
+    attachments: body.attachments ?? null,
+    dependsOn: body.dependsOn ?? null,
   });
   return Response.json({ task: t }, { status: 201 });
 }

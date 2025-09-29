@@ -1,13 +1,27 @@
 import { NextRequest } from 'next/server';
 import { deleteTask, ensureSchema, updateTask } from '@/lib/storage';
 import { UpdateTaskInput } from '@/lib/types';
+import { z } from 'zod';
 
 export const dynamic = 'force-dynamic';
 export const runtime = 'nodejs';
 
 export async function PATCH(req: NextRequest, { params }: { params: { id: string } }) {
   await ensureSchema();
-  const body = (await req.json()) as UpdateTaskInput;
+  const schema = z.object({
+    title: z.string().min(1).optional(),
+    course: z.string().trim().min(1).nullable().optional(),
+    dueDate: z.string().optional(),
+    status: z.enum(['todo', 'done']).optional(),
+    estimatedMinutes: z.number().int().min(0).nullable().optional(),
+    priority: z.number().int().min(1).max(5).nullable().optional(),
+    notes: z.string().max(5000).nullable().optional(),
+    attachments: z.array(z.string().url()).nullable().optional(),
+    dependsOn: z.array(z.string()).nullable().optional(),
+  });
+  const parsed = schema.safeParse(await req.json());
+  if (!parsed.success) return new Response('Invalid patch body', { status: 400 });
+  const body = parsed.data as UpdateTaskInput;
   const t = await updateTask(params.id, body);
   if (!t) return new Response('Not found', { status: 404 });
   return Response.json({ task: t });
