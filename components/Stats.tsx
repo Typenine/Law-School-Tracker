@@ -26,6 +26,11 @@ export default function Stats() {
     return Math.min(100, Math.round((stats.hoursThisWeek / weeklyGoal) * 100));
   }, [stats, weeklyGoal]);
 
+  const burndownPct = useMemo(() => {
+    if (!stats || stats.estMinutesThisWeek <= 0) return 0;
+    return Math.min(100, Math.round((stats.loggedMinutesThisWeek / stats.estMinutesThisWeek) * 100));
+  }, [stats]);
+
   return (
     <div>
       <h2 className="text-lg font-medium mb-3">Stats</h2>
@@ -74,6 +79,16 @@ export default function Stats() {
                 </div>
                 <div className="text-xs text-slate-300/70 mt-1">{stats.hoursThisWeek} / {weeklyGoal} hrs ({progress}%)</div>
               </div>
+            </div>
+          </div>
+
+          <div className="rounded border border-[#1b2344] p-4">
+            <div className="mb-2">
+              <div className="text-slate-300/70 text-xs">Burndown (this week)</div>
+              <div className="text-sm mt-1">Logged {Math.round(stats.loggedMinutesThisWeek)}m of {Math.round(stats.estMinutesThisWeek)}m • Remaining {Math.round(stats.remainingMinutesThisWeek)}m</div>
+            </div>
+            <div className="h-3 w-full rounded bg-[#0b1020] border border-[#1b2344] overflow-hidden">
+              <div className="h-full bg-emerald-600" style={{ width: `${burndownPct}%` }} />
             </div>
           </div>
         </div>

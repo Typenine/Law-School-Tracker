@@ -5,7 +5,9 @@ import { randomUUID as nodeRandomUUID } from 'crypto';
 import { NewSessionInput, NewTaskInput, StudySession, Task, UpdateTaskInput } from './types';
 
 const DB_URL = process.env.DATABASE_URL;
-const DATA_FILE = path.join(process.cwd(), 'data', 'db.json');
+const IS_VERCEL = !!process.env.VERCEL;
+const DATA_DIR = IS_VERCEL ? path.join('/tmp', 'law-school-tracker') : path.join(process.cwd(), 'data');
+const DATA_FILE = path.join(DATA_DIR, 'db.json');
 
 let pool: Pool | null = null;
 function getPool(): Pool {
@@ -61,6 +63,7 @@ async function readJson(): Promise<{ tasks: Task[]; sessions: StudySession[] }> 
 }
 
 async function writeJson(data: { tasks: Task[]; sessions: StudySession[] }) {
+  await fs.mkdir(path.dirname(DATA_FILE), { recursive: true });
   await fs.writeFile(DATA_FILE, JSON.stringify(data, null, 2), 'utf8');
 }
 
@@ -204,5 +207,14 @@ export async function statsNow() {
   const focusVals = weekSessions.map(s => s.focus).filter((n): n is number => typeof n === 'number');
   const avgFocusThisWeek = focusVals.length ? Math.round((focusVals.reduce((a, b) => a + b, 0) / focusVals.length) * 10) / 10 : null;
 
-  return { upcoming7d, hoursThisWeek, avgFocusThisWeek };
+  // Burndown: estimated minutes for TODO tasks due by end of this week
+  const sunday = new Date(monday);
+  sunday.setDate(sunday.getDate() + 6);
+  sunday.setHours(23, 59, 59, 999);
+  const weekTodos = tasks.filter(t => t.status !== 'done' && new Date(t.dueDate) >= monday && new Date(t.dueDate) <= sunday);
+  const estMinutesThisWeek = weekTodos.reduce((acc, t) => acc + (t.estimatedMinutes || 0), 0);
+  const loggedMinutesThisWeek = totalMinutes;
+  const remainingMinutesThisWeek = Math.max(0, estMinutesThisWeek - loggedMinutesThisWeek);
+
+  return { upcoming7d, hoursThisWeek, avgFocusThisWeek, estMinutesThisWeek, loggedMinutesThisWeek, remainingMinutesThisWeek };
 }

@@ -18,6 +18,11 @@ export default function FocusTimer() {
   const [taskId, setTaskId] = useState('');
   const [tasks, setTasks] = useState<Task[]>([]);
   const [saving, setSaving] = useState(false);
+  // Pomodoro
+  const [mode, setMode] = useState<'free' | 'pomodoro'>('free');
+  const [phase, setPhase] = useState<'work' | 'break'>('work');
+  const [workMin, setWorkMin] = useState(25);
+  const [breakMin, setBreakMin] = useState(5);
 
   useEffect(() => {
     let id: any;
@@ -26,6 +31,17 @@ export default function FocusTimer() {
     }
     return () => id && clearInterval(id);
   }, [running]);
+
+  // Auto-switch for Pomodoro
+  useEffect(() => {
+    if (!running || mode !== 'pomodoro') return;
+    const target = (phase === 'work' ? workMin : breakMin) * 60;
+    if (seconds >= target) {
+      // Switch phase and reset
+      setPhase(prev => (prev === 'work' ? 'break' : 'work'));
+      setSeconds(0);
+    }
+  }, [seconds, running, mode, phase, workMin, breakMin]);
 
   useEffect(() => {
     fetch('/api/tasks', { cache: 'no-store' })
@@ -66,6 +82,23 @@ export default function FocusTimer() {
   return (
     <div>
       <h2 className="text-lg font-medium mb-3">Focus Timer</h2>
+      <div className="flex items-center gap-3 mb-3 text-sm">
+        <div className="inline-flex gap-2 items-center">
+          <label className="inline-flex items-center gap-1">
+            <input type="radio" name="mode" checked={mode==='free'} onChange={() => { setMode('free'); setPhase('work'); setSeconds(0); }} /> Free
+          </label>
+          <label className="inline-flex items-center gap-1">
+            <input type="radio" name="mode" checked={mode==='pomodoro'} onChange={() => { setMode('pomodoro'); setPhase('work'); setSeconds(0); }} /> Pomodoro
+          </label>
+        </div>
+        {mode === 'pomodoro' && (
+          <div className="inline-flex items-center gap-2">
+            <button onClick={() => { setWorkMin(25); setBreakMin(5); setPhase('work'); setSeconds(0); }} className="px-2 py-1 rounded border border-[#1b2344]">25/5</button>
+            <button onClick={() => { setWorkMin(50); setBreakMin(10); setPhase('work'); setSeconds(0); }} className="px-2 py-1 rounded border border-[#1b2344]">50/10</button>
+            <span className="text-slate-300/70">Phase: {phase === 'work' ? `Work ${workMin}m` : `Break ${breakMin}m`}</span>
+          </div>
+        )}
+      </div>
       <div className="flex items-center gap-4">
         <div className="text-4xl font-semibold tabular-nums">{formatTime(seconds)}</div>
         {!running && seconds === 0 && (

@@ -48,4 +48,7 @@ export interface StatsPayload {
   upcoming7d: number;
   hoursThisWeek: number;
   avgFocusThisWeek: number | null;
+  estMinutesThisWeek: number; // sum of estimated minutes for TODO tasks due this week
+  loggedMinutesThisWeek: number; // sum of minutes logged this week
+  remainingMinutesThisWeek: number; // max(0, est - logged)
 }

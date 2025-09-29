@@ -26,6 +26,7 @@ export async function GET(req: Request) {
   }
   const course = (url.searchParams.get('course') || '').trim().toLowerCase();
   const status = (url.searchParams.get('status') || '').trim().toLowerCase();
+  const origin = url.origin;
 
   let tasks = await listTasks();
   if (course) tasks = tasks.filter(t => (t.course || '').toLowerCase().includes(course));
@@ -54,6 +55,13 @@ export async function GET(req: Request) {
     lines.push(`DTSTART;VALUE=DATE:${dateStr}`);
     lines.push(`SUMMARY:${summary}`);
     lines.push(`DESCRIPTION:${desc}`);
+    lines.push(`URL:${origin}`);
+    // 24-hour prior reminder
+    lines.push('BEGIN:VALARM');
+    lines.push('ACTION:DISPLAY');
+    lines.push('DESCRIPTION:Task due soon');
+    lines.push('TRIGGER:-PT24H');
+    lines.push('END:VALARM');
     lines.push('END:VEVENT');
   }
 

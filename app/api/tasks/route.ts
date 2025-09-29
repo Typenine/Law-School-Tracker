@@ -1,6 +1,7 @@
 import { NextRequest } from 'next/server';
 import { createTask, ensureSchema, listTasks } from '@/lib/storage';
 import { NewTaskInput } from '@/lib/types';
+import { z } from 'zod';
 
 export const dynamic = 'force-dynamic';
 export const runtime = 'nodejs';
@@ -13,10 +14,16 @@ export async function GET() {
 
 export async function POST(req: NextRequest) {
   await ensureSchema();
-  const body = (await req.json()) as NewTaskInput;
-  if (!body.title || !body.dueDate) {
-    return new Response('Missing title or dueDate', { status: 400 });
-  }
+  const schema = z.object({
+    title: z.string().min(1),
+    course: z.string().trim().min(1).nullable().optional(),
+    dueDate: z.string().min(1), // ISO string from client
+    status: z.enum(['todo', 'done']).optional(),
+    estimatedMinutes: z.number().int().min(0).nullable().optional(),
+  });
+  const parsed = schema.safeParse(await req.json());
+  if (!parsed.success) return new Response('Invalid task body', { status: 400 });
+  const body = parsed.data as NewTaskInput;
   const t = await createTask({
     title: body.title,
     dueDate: body.dueDate,
