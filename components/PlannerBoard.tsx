@@ -5,6 +5,74 @@ import { courseColorClass } from '@/lib/colors';
 import TaskAddForm from '@/components/TaskAddForm';
 
 function startOfDay(d: Date) { const x = new Date(d); x.setHours(0,0,0,0); return x; }
+
+// Lightweight inline bulk-add component local to Planner
+function BulkAddTasks({ courses, currentTerm, onDone }: { courses: any[]; currentTerm: string; onDone: () => void }) {
+  const [open, setOpen] = useState(false);
+  const [rows, setRows] = useState<Array<{ title: string; course: string; due: string; type: string; est: string }>>([]);
+  function addRow() { setRows(r => [...r, { title: '', course: '', due: '', type: 'reading', est: '' }]); }
+  function removeRow(i: number) { setRows(r => r.filter((_, idx) => idx !== i)); }
+  function updateRow(i: number, patch: Partial<{ title: string; course: string; due: string; type: string; est: string }>) {
+    setRows(r => r.map((row, idx) => idx === i ? { ...row, ...patch } : row));
+  }
+  async function submit() {
+    const items = rows.filter(r => r.title && r.due).map(r => {
+      const [y, m, d] = r.due.split('-').map(n => parseInt(n, 10));
+      const due = new Date(y, (m as number) - 1, d, 23, 59, 59, 999).toISOString();
+      const tags = r.type ? [r.type.toLowerCase()] : undefined;
+      return { title: r.title, course: r.course || null, dueDate: due, status: 'todo', estimatedMinutes: r.est ? parseInt(r.est, 10) : null, tags, term: currentTerm || null };
+    });
+    if (!items.length) return;
+    const res = await fetch('/api/tasks/bulk', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ tasks: items }) });
+    if (res.ok) { setRows([]); setOpen(false); onDone(); }
+  }
+  return (
+    <div className="card p-4">
+      <div className="flex items-center justify-between mb-2">
+        <div className="text-sm font-medium">Bulk add tasks</div>
+        <button onClick={() => setOpen(o => !o)} className="text-xs underline">{open ? 'Hide' : 'Show'}</button>
+      </div>
+      {open && (
+        <div className="space-y-2">
+          <div className="grid grid-cols-1 md:grid-cols-12 text-[11px] text-slate-300/70">
+            <div className="md:col-span-5">Title</div>
+            <div className="md:col-span-3">Course</div>
+            <div className="md:col-span-2">Due date</div>
+            <div className="md:col-span-1">Type</div>
+            <div className="md:col-span-1">Est</div>
+          </div>
+          {rows.map((r, i) => (
+            <div key={i} className="grid grid-cols-1 md:grid-cols-12 gap-2 items-center">
+              <input value={r.title} onChange={e => updateRow(i, { title: e.target.value })} placeholder="e.g., pp. 21-54" className="md:col-span-5 bg-[#0b1020] border border-[#1b2344] rounded px-2 py-1 text-sm" />
+              <select value={r.course} onChange={e => updateRow(i, { course: e.target.value })} className="md:col-span-3 bg-[#0b1020] border border-[#1b2344] rounded px-2 py-1 text-sm">
+                <option value="">-- none --</option>
+                {(courses || []).map((c: any) => (
+                  <option key={c.id} value={c.title || c.code || ''}>{c.title || c.code}</option>
+                ))}
+              </select>
+              <input type="date" value={r.due} onChange={e => updateRow(i, { due: e.target.value })} className="md:col-span-2 bg-[#0b1020] border border-[#1b2344] rounded px-2 py-1 text-sm" />
+              <select value={r.type} onChange={e => updateRow(i, { type: e.target.value })} className="md:col-span-1 bg-[#0b1020] border border-[#1b2344] rounded px-2 py-1 text-sm">
+                <option value="reading">Reading</option>
+                <option value="review">Review</option>
+                <option value="outline">Outline</option>
+                <option value="practice">Practice</option>
+                <option value="other">Other</option>
+              </select>
+              <div className="md:col-span-1 flex items-center gap-2">
+                <input type="number" min={0} step={5} value={r.est} onChange={e => updateRow(i, { est: e.target.value })} className="w-full bg-[#0b1020] border border-[#1b2344] rounded px-2 py-1 text-sm" />
+                <button onClick={() => removeRow(i)} className="text-xs px-2 py-1 rounded border border-[#1b2344]">X</button>
+              </div>
+            </div>
+          ))}
+          <div className="flex items-center gap-2">
+            <button onClick={addRow} className="px-3 py-1.5 rounded border border-[#1b2344]">Add row</button>
+            <button onClick={submit} className="px-3 py-1.5 rounded bg-blue-600 hover:bg-blue-500 disabled:opacity-50" disabled={rows.length === 0}>Create tasks</button>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
 function keyOf(d: Date) { const x = startOfDay(d); return `${x.getFullYear()}-${String(x.getMonth()+1).padStart(2,'0')}-${String(x.getDate()).padStart(2,'0')}`; }
 function labelOf(d: Date) { return d.toLocaleDateString(undefined, { weekday: 'short', month: 'short', day: 'numeric' }); }
 
@@ -14,6 +82,7 @@ export default function PlannerBoard() {
   const [loading, setLoading] = useState(false);
   const [currentTerm, setCurrentTerm] = useState<string>('');
   const [courseScales, setCourseScales] = useState<Record<string, number>>({});
+  const [courses, setCourses] = useState<any[]>([]);
   const [openLogKey, setOpenLogKey] = useState<string | null>(null);
   const [logTaskId, setLogTaskId] = useState<string>('');
   const [logActivity, setLogActivity] = useState<string>('reading');
@@ -58,6 +127,17 @@ export default function PlannerBoard() {
         setCourseScales(scales);
       } catch {}
     }
+  }, []);
+
+  // Load courses for dropdowns
+  useEffect(() => {
+    (async () => {
+      try {
+        const cr = await fetch('/api/courses', { cache: 'no-store' });
+        const cd = await cr.json();
+        setCourses(cd.courses || []);
+      } catch {}
+    })();
   }, []);
 
   const days = useMemo(() => {
@@ -270,6 +350,7 @@ export default function PlannerBoard() {
       <div className="card p-4">
         <TaskAddForm onCreated={refresh} />
       </div>
+      <BulkAddTasks courses={courses} currentTerm={currentTerm} onDone={refresh} />
       {suggestions.length > 0 && (
         <div className="rounded border border-[#1b2344] p-4">
           <div className="text-slate-300/70 text-xs mb-2">Suggestions to spread large readings/assignments across days (date-only)</div>

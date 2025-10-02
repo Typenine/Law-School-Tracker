@@ -145,7 +145,7 @@ export default function CoursesPage() {
                   <input type="checkbox" checked={(newCourse.meetingDays || []).includes(idx)} onChange={e => {
                     const set = new Set(newCourse.meetingDays || [] as number[]);
                     if (e.target.checked) set.add(idx); else set.delete(idx);
-                    setNewCourse(n => ({ ...n, meetingDays: Array.from(set).sort((a,b)=>a-b) }));
+                    setNewCourse(n => ({ ...n, meetingDays: (Array.from(set as Set<number>) as number[]).sort((a, b) => a - b) }));
                   }} />{d}
                 </label>
               ))}
@@ -168,7 +168,7 @@ export default function CoursesPage() {
                             const list = [...(newCourse.meetingBlocks as any[] || [])];
                             const set = new Set(list[bi].days || []);
                             if (e.target.checked) set.add(idx); else set.delete(idx);
-                            (list[bi] as any).days = Array.from(set).sort((a: number, b: number) => a - b);
+                            (list[bi] as any).days = (Array.from(set as Set<number>) as number[]).sort((a, b) => a - b);
                             setNewCourse(n => ({ ...n, meetingBlocks: list }));
                           }} />{d}
                         </label>
@@ -336,7 +336,7 @@ export default function CoursesPage() {
                                 <input type="checkbox" checked={(form.meetingDays || []).includes(idx)} onChange={e => {
                                   const set = new Set(form.meetingDays || []);
                                   if (e.target.checked) set.add(idx as number); else set.delete(idx as number);
-                                  setForm(f => ({ ...f, meetingDays: Array.from(set).sort((a,b)=>a-b) }));
+                                  setForm(f => ({ ...f, meetingDays: (Array.from(set as Set<number>) as number[]).sort((a, b) => a - b) }));
                                 }} />{d}
                               </label>
                             ))}
@@ -360,7 +360,7 @@ export default function CoursesPage() {
                                         const list = [...(form.meetingBlocks as any as CourseMeetingBlock[] || [])];
                                         const set = new Set(list[bi].days || []);
                                         if (e.target.checked) set.add(idx); else set.delete(idx);
-                                        (list[bi] as any).days = Array.from(set).sort((a,b)=>a-b);
+                                        (list[bi] as any).days = (Array.from(set as Set<number>) as number[]).sort((a, b) => a - b);
                                         setForm(f => ({ ...f, meetingBlocks: list }));
                                       }} />{d}
                                     </label>
