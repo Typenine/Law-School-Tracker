@@ -160,6 +160,7 @@ export async function ensureSchema() {
       instructor_email text,
       room text,
       location text,
+      color text,
       meeting_days integer[],
       meeting_start text,
       meeting_end text,
@@ -171,6 +172,7 @@ export async function ensureSchema() {
       created_at timestamptz NOT NULL DEFAULT now()
     );
     ALTER TABLE courses ADD COLUMN IF NOT EXISTS meeting_blocks jsonb;
+    ALTER TABLE courses ADD COLUMN IF NOT EXISTS color text;
     CREATE TABLE IF NOT EXISTS sessions (
       id uuid PRIMARY KEY,
       task_id uuid REFERENCES tasks(id) ON DELETE SET NULL,

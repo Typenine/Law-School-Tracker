@@ -64,7 +64,7 @@ export default function CalendarPage() {
   }, [tasks, courseFilter, statusFilter]);
 
   const classesByDay = useMemo(() => {
-    type ClassItem = { title: string; code?: string | null; time?: string | null; room?: string | null; colorKey: string; startMin?: number; endMin?: number; conflict?: boolean };
+    type ClassItem = { title: string; code?: string | null; time?: string | null; room?: string | null; colorKey: string; color?: string | null; startMin?: number; endMin?: number; conflict?: boolean };
     const m: Record<string, ClassItem[]> = {};
     const toMin = (hhmm: string | null | undefined) => {
       if (!hhmm) return undefined;
@@ -99,6 +99,7 @@ export default function CalendarPage() {
                 time: (b as any).start && (b as any).end ? `${(b as any).start}–${(b as any).end}` : null,
                 room: (b as any).location || c.room || c.location || null,
                 colorKey: c.title || c.code || 'course',
+                color: (c as any).color || null,
                 startMin: sMin,
                 endMin: eMin,
               });
@@ -120,6 +121,15 @@ export default function CalendarPage() {
     }
     return m;
   }, [courses, weeks, year, month, courseFilter]);
+
+  const courseColors = useMemo(() => {
+    const map: Record<string, string | null> = {};
+    for (const c of courses as any[]) {
+      const key = ((c.title || c.code || '') as string).toLowerCase();
+      map[key] = (c as any).color || null;
+    }
+    return map;
+  }, [courses]);
 
   const monthLabel = useMemo(() => new Date(year, month, 1).toLocaleString(undefined, { month: 'long', year: 'numeric' }), [year, month]);
   const monthNames = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
@@ -290,7 +300,7 @@ export default function CalendarPage() {
                 <ul className="space-y-0.5 mb-1">
                   {classesByDay[k].map((c, idx) => (
                     <li key={idx} className={`text-[10px] truncate flex items-center gap-1 ${c.conflict ? 'text-rose-400' : 'text-slate-300/80'}`} title={c.conflict ? 'Time conflict' : ''}>
-                      <span className={`inline-block w-2 h-2 rounded-full ${courseColorClass(c.title, 'bg')}`}></span>
+                      <span className={`inline-block w-2 h-2 rounded-full ${c.color ? '' : courseColorClass(c.title, 'bg')}`} style={c.color ? { backgroundColor: c.color as any } : undefined}></span>
                       <span className="text-slate-300/60">Class:</span> {c.code ? `${c.code} ` : ''}{c.title}
                       {c.time ? <span className="text-slate-300/60"> · {c.time}</span> : null}
                       {c.room ? <span className="text-slate-300/60"> · {c.room}</span> : null}
@@ -308,7 +318,12 @@ export default function CalendarPage() {
                     <li key={t.id} className="text-[11px] flex items-center justify-between gap-1" draggable onDragStart={(e) => onDragStart(e, t)}>
                       <div className="min-w-0">
                         <div className="truncate flex items-center gap-2">
-                          {t.course ? <span className={`inline-block w-2 h-2 rounded-full ${courseColorClass(t.course, 'bg')}`}></span> : null}
+                          {t.course ? (
+                            <span
+                              className={`inline-block w-2 h-2 rounded-full ${courseColors[(t.course || '').toLowerCase()] ? '' : courseColorClass(t.course, 'bg')}`}
+                              style={courseColors[(t.course || '').toLowerCase()] ? { backgroundColor: courseColors[(t.course || '').toLowerCase()] as any } : undefined}
+                            ></span>
+                          ) : null}
                           <span className="text-slate-200">{t.title}</span>
                           {t.course ? <span className="text-slate-300/60"> · {t.course}</span> : null}
                           {typeof t.estimatedMinutes === 'number' ? <span className="text-slate-300/60"> · {t.estimatedMinutes}m</span> : null}

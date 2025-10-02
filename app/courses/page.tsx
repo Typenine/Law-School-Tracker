@@ -15,7 +15,7 @@ export default function CoursesPage() {
   const [editingId, setEditingId] = useState<string | null>(null);
   const [form, setForm] = useState<Partial<Course>>({});
   const [addOpen, setAddOpen] = useState(false);
-  const [newCourse, setNewCourse] = useState<Partial<Course>>({ title: '', meetingDays: [], semester: undefined, year: undefined });
+  const [newCourse, setNewCourse] = useState<Partial<Course>>({ title: '', meetingDays: [], meetingBlocks: [], semester: undefined, year: undefined, color: undefined });
 
   async function refresh() {
     setLoading(true);
@@ -135,6 +135,10 @@ export default function CoursesPage() {
             <input placeholder="Instructor" value={newCourse.instructor ?? ''} onChange={e => setNewCourse(n => ({ ...n, instructor: e.target.value }))} className="bg-[#0b1020] border border-[#1b2344] rounded px-2 py-1" />
             <input placeholder="Instructor Email" value={newCourse.instructorEmail ?? ''} onChange={e => setNewCourse(n => ({ ...n, instructorEmail: e.target.value }))} className="bg-[#0b1020] border border-[#1b2344] rounded px-2 py-1" />
             <input placeholder="Room/Location" value={newCourse.room ?? newCourse.location ?? ''} onChange={e => setNewCourse(n => ({ ...n, room: e.target.value, location: e.target.value }))} className="bg-[#0b1020] border border-[#1b2344] rounded px-2 py-1" />
+            <div className="flex items-center gap-2">
+              <label className="text-xs text-slate-300/70">Color</label>
+              <input type="color" value={(newCourse.color as any) ?? '#7c3aed'} onChange={e => setNewCourse(n => ({ ...n, color: e.target.value }))} className="h-8 w-12 bg-transparent" />
+            </div>
             <div className="flex items-center gap-2 flex-wrap">
               {['Sun','Mon','Tue','Wed','Thu','Fri','Sat'].map((d, idx) => (
                 <label key={idx} className="inline-flex items-center gap-1 text-xs">
@@ -150,6 +154,60 @@ export default function CoursesPage() {
               <input type="time" value={newCourse.meetingStart ?? ''} onChange={e => setNewCourse(n => ({ ...n, meetingStart: e.target.value }))} className="bg-[#0b1020] border border-[#1b2344] rounded px-2 py-1" />
               <span className="text-xs">–</span>
               <input type="time" value={newCourse.meetingEnd ?? ''} onChange={e => setNewCourse(n => ({ ...n, meetingEnd: e.target.value }))} className="bg-[#0b1020] border border-[#1b2344] rounded px-2 py-1" />
+            </div>
+            {/* Meeting blocks editor (advanced) */}
+            <div className="md:col-span-3 border border-[#1b2344] rounded p-2">
+              <div className="text-xs text-slate-300/70 mb-1">Meeting blocks (optional, for different times per day)</div>
+              <div className="space-y-2">
+                {(newCourse.meetingBlocks as any[] || []).map((b: any, bi: number) => (
+                  <div key={bi} className="flex items-center gap-2 flex-wrap">
+                    <div className="flex items-center gap-1">
+                      {['Sun','Mon','Tue','Wed','Thu','Fri','Sat'].map((d, idx) => (
+                        <label key={idx} className="inline-flex items-center gap-1 text-xs">
+                          <input type="checkbox" checked={(b.days || []).includes(idx)} onChange={e => {
+                            const list = [...(newCourse.meetingBlocks as any[] || [])];
+                            const set = new Set(list[bi].days || []);
+                            if (e.target.checked) set.add(idx); else set.delete(idx);
+                            (list[bi] as any).days = Array.from(set).sort((a: number, b: number) => a - b);
+                            setNewCourse(n => ({ ...n, meetingBlocks: list }));
+                          }} />{d}
+                        </label>
+                      ))}
+                    </div>
+                    <input type="time" value={(b as any).start || ''} onChange={e => {
+                      const list = [...(newCourse.meetingBlocks as any[] || [])];
+                      (list[bi] as any).start = e.target.value; setNewCourse(n => ({ ...n, meetingBlocks: list }));
+                    }} className="bg-[#0b1020] border border-[#1b2344] rounded px-1 py-0.5" />
+                    <span className="text-xs">–</span>
+                    <input type="time" value={(b as any).end || ''} onChange={e => {
+                      const list = [...(newCourse.meetingBlocks as any[] || [])];
+                      (list[bi] as any).end = e.target.value; setNewCourse(n => ({ ...n, meetingBlocks: list }));
+                    }} className="bg-[#0b1020] border border-[#1b2344] rounded px-1 py-0.5" />
+                    <input placeholder="Location" value={(b as any).location || ''} onChange={e => {
+                      const list = [...(newCourse.meetingBlocks as any[] || [])];
+                      (list[bi] as any).location = e.target.value; setNewCourse(n => ({ ...n, meetingBlocks: list }));
+                    }} className="bg-[#0b1020] border border-[#1b2344] rounded px-1 py-0.5" />
+                    <button type="button" onClick={() => {
+                      const list = [...(newCourse.meetingBlocks as any[] || [])];
+                      list.splice(bi,1); setNewCourse(n => ({ ...n, meetingBlocks: list }));
+                    }} className="text-xs px-2 py-0.5 rounded border border-[#1b2344]">Remove</button>
+                  </div>
+                ))}
+              </div>
+              <div className="mt-2 flex items-center gap-2">
+                <button type="button" onClick={() => {
+                  const list = [...(newCourse.meetingBlocks as any[] || [])];
+                  list.push({ days: [], start: '', end: '', location: '' });
+                  setNewCourse(n => ({ ...n, meetingBlocks: list }));
+                }} className="text-xs px-2 py-1 rounded border border-[#1b2344]">Add block</button>
+                <button type="button" onClick={() => {
+                  if ((newCourse.meetingDays || []).length && newCourse.meetingStart && newCourse.meetingEnd) {
+                    const list = [...(newCourse.meetingBlocks as any[] || [])];
+                    list.push({ days: newCourse.meetingDays, start: newCourse.meetingStart, end: newCourse.meetingEnd, location: newCourse.location || newCourse.room || '' });
+                    setNewCourse(n => ({ ...n, meetingBlocks: list }));
+                  }
+                }} className="text-xs px-2 py-1 rounded border border-[#1b2344]">Use simple fields</button>
+              </div>
             </div>
             <div className="flex items-center gap-1">
               <input type="date" value={(newCourse.startDate ? String(newCourse.startDate).slice(0,10) : '')} onChange={e => setNewCourse(n => ({ ...n, startDate: e.target.value }))} className="bg-[#0b1020] border border-[#1b2344] rounded px-2 py-1" />
@@ -173,9 +231,11 @@ export default function CoursesPage() {
                   instructorEmail: newCourse.instructorEmail ?? null,
                   room: newCourse.room ?? newCourse.location ?? null,
                   location: newCourse.location ?? null,
+                  color: (newCourse.color as any) ?? null,
                   meetingDays: newCourse.meetingDays ?? null,
                   meetingStart: newCourse.meetingStart ?? null,
                   meetingEnd: newCourse.meetingEnd ?? null,
+                  meetingBlocks: (newCourse.meetingBlocks as any) ?? null,
                   startDate: newCourse.startDate ?? null,
                   endDate: newCourse.endDate ?? null,
                   semester: (newCourse.semester as any) ?? null,
@@ -184,7 +244,7 @@ export default function CoursesPage() {
                 const res = await fetch('/api/courses', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) });
                 if (res.ok) {
                   setAddOpen(false);
-                  setNewCourse({ title: '', meetingDays: [] });
+                  setNewCourse({ title: '', meetingDays: [], meetingBlocks: [], color: undefined });
                   await refresh();
                 }
               }} className="px-3 py-2 rounded bg-blue-600 hover:bg-blue-500">Create</button>
@@ -235,10 +295,13 @@ export default function CoursesPage() {
                 <tr key={c.id} className={`border-t border-[#1b2344] ${conflictIds.has(c.id) ? 'bg-[#151a2d]' : ''}`}>
                   <td className="py-2 pr-4 whitespace-nowrap">
                     {editingId === c.id ? (
-                      <input value={form.code ?? ''} onChange={e => setForm(f => ({ ...f, code: e.target.value }))} className="w-28 bg-[#0b1020] border border-[#1b2344] rounded px-2 py-1" />
+                      <div className="flex items-center gap-2">
+                        <input value={form.code ?? ''} onChange={e => setForm(f => ({ ...f, code: e.target.value }))} className="w-28 bg-[#0b1020] border border-[#1b2344] rounded px-2 py-1" />
+                        <input type="color" value={(form.color as any) ?? (c.color || '#7c3aed')} onChange={e => setForm(f => ({ ...f, color: e.target.value }))} className="h-6 w-10 bg-transparent" />
+                      </div>
                     ) : (
                       <div className="flex items-center gap-2">
-                        <span className={`inline-block w-2.5 h-2.5 rounded-full ${courseColorClass(c.title || c.code || '', 'bg')}`}></span>
+                        <span className={`inline-block w-2.5 h-2.5 rounded-full ${c.color ? '' : courseColorClass(c.title || c.code || '', 'bg')}`} style={c.color ? { backgroundColor: c.color as any } : undefined}></span>
                         <span>{c.code || '-'}</span>
                       </div>
                     )}
