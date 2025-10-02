@@ -2,20 +2,39 @@ import * as chrono from 'chrono-node';
 import { endOfDay } from 'date-fns';
 import { CourseMeetingBlock, NewCourseInput, NewTaskInput, Semester } from './types';
 
-const KEYWORDS = [
-  'read', 'reading', 'pages', 'chapter', 'ch.', 'section', '§',
-  'assignment', 'submit', 'due', 'turn in', 'upload',
-  'memo', 'brief', 'quiz', 'exam', 'outline', 'problem', 'problems', 'problem set', 'practice', 'discussion', 'paper', 'response paper', 'case',
-  'cb', 'casebook', 'supp', 'supplement', 'ucc', 'frcp', 'restatement', 'statute', 'article', 'handout', 'notes'
-];
+// Strong task markers (word-boundary based)
+const STRONG_TASK_RE = /\b(read|reading|pages?|pp\.|chapter|ch\.|assignment|submit|due|turn in|upload|memo|brief|quiz|exam|midterm|final|outline|problem set|problems?|practice|paper|response paper|case brief)\b/i;
+// Weaker markers (only count when accompanied by pages/chapters or list formatting)
+const WEAK_TASK_RE = /\b(discussion|casebook|supp(?:lement)?|ucc|frcp|restatement|statute)\b/i;
 
 const STOPWORDS = [
   'no class', 'holiday', 'break', 'spring break', 'fall break', 'reading day', 'reading period', 'cancelled', 'canceled'
 ];
+const POLICY_WORDS = [
+  'policy', 'policies', 'grading', 'grade', 'attendance', 'participation', 'office hours', 'objectives', 'outcomes', 'materials', 'evaluation', 'honesty', 'plagiarism', 'integrity', 'accommodations', 'disability', 'resources'
+];
 
-function hasKeyword(line: string) {
-  const l = line.toLowerCase();
-  return KEYWORDS.some(k => l.includes(k));
+function containsPagesOrCh(line: string) {
+  return /(pp?\.|pages?\b|\bch(?:apter)?\.?\b|\b\d+\s*[-–—]\s*\d+\b)/i.test(line);
+}
+
+function isBulletOrList(line: string) {
+  return /^\s*(?:[-–—•*]|\d+[).])\s+/.test(line);
+}
+
+function hasStrongKeyword(line: string) {
+  return STRONG_TASK_RE.test(line);
+}
+
+function hasWeakKeyword(line: string) {
+  return WEAK_TASK_RE.test(line);
+}
+
+function looksLikeTask(line: string) {
+  if (hasStrongKeyword(line)) return true;
+  if (containsPagesOrCh(line)) return true; // e.g., pp. 10–25, Ch. 3
+  if (hasWeakKeyword(line) && (isBulletOrList(line) || containsPagesOrCh(line))) return true;
+  return false;
 }
 
 function parseDaysToken(s: string): number[] | null {
@@ -277,13 +296,13 @@ function splitIntoSubtasks(line: string): string[] {
     if (cut > 0) {
       const left = line.slice(0, cut).trim();
       const right = line.slice(cut + (line.substr(cut, 5).toLowerCase() === ' and ' ? 5 : 3)).trim();
-      const looksTask = (s: string) => hasKeyword(s) || /\bpp?\.|pages?\b/i.test(s) || /\d+\s*[-–—]\s*\d+/.test(s);
-      if (left && right && looksTask(left) && looksTask(right)) parts = [left, right];
+      const ok = (s: string) => looksLikeTask(s);
+      if (left && right && ok(left) && ok(right)) parts = [left, right];
     }
   }
   if (parts.length <= 1) return [line];
   // Only keep parts that look like tasks (contain a keyword)
-  const tasky = parts.filter(hasKeyword);
+  const tasky = parts.filter(looksLikeTask);
   return tasky.length ? tasky : [line];
 }
 
@@ -298,27 +317,35 @@ function unwrapHyphenation(s: string): string {
   return s.replace(/([A-Za-z])-[\r\n]+([a-z])/g, '$1$2');
 }
 
-export function parseSyllabusToTasks(text: string, course?: string | null, opts?: { minutesPerPage?: number }): NewTaskInput[] {
+export function parseSyllabusToTasks(text: string, course?: string | null, opts?: { minutesPerPage?: number, bulletsOnly?: boolean, shortWindow?: boolean, ignorePolicies?: boolean }): NewTaskInput[] {
   const normalized = unwrapHyphenation(text);
   const lines = normalized.split(/\r?\n/).map(l => l.trim()).filter(Boolean);
   const tasks: NewTaskInput[] = [];
   let currentDate: Date | null = null;
+  let windowLeft = 0; // how many lines after a date heading we'll accept tasks for
+  const WINDOW_HEAD = opts?.shortWindow ? 6 : 12;
+  const WINDOW_TASK = opts?.shortWindow ? 6 : 10;
 
   for (let i = 0; i < lines.length; i++) {
     const raw = lines[i];
     const line = raw.replace(/^[\-−•*\d)\s]+/, '').trim();
-    if (!line) continue;
+    if (!line) { if (windowLeft > 0) windowLeft--; continue; }
     if (isNonTaskLine(line)) continue;
+    if (opts?.ignorePolicies) {
+      const lo = line.toLowerCase();
+      if (POLICY_WORDS.some(w => lo.includes(w))) continue;
+    }
 
     // Heading without date (e.g., "Week 3"), lookahead a few lines for a date
     if (/^week\s+\d+/i.test(line)) {
       for (let j = i + 1; j < Math.min(i + 4, lines.length); j++) {
         const next = lines[j];
         const dp = chrono.parse(next, new Date(), { forwardDate: true });
-        if (dp.length && !hasKeyword(next)) {
+        if (dp.length && !looksLikeTask(next)) {
           const p = dp[0];
           const base = p.end?.date ? p.end.date() : (p.start?.date ? p.start.date() : p.date());
           currentDate = dateWithPossibleTime(next, base, p);
+          windowLeft = WINDOW_HEAD;
           break;
         }
         // Stop if next is clearly a new heading
@@ -346,7 +373,7 @@ export function parseSyllabusToTasks(text: string, course?: string | null, opts?
           const content = cells.filter((_, i) => i !== bestIdx).join(' | ');
           const parts = splitIntoSubtasks(content);
           for (const p of parts) {
-            if (hasKeyword(p)) {
+            if (looksLikeTask(p)) {
               const title = cleanTitle(p);
               tasks.push({ title, course: course ?? null, dueDate: when.toISOString(), status: 'todo', estimatedMinutes: estimateMinutes(p, opts?.minutesPerPage ?? 3) });
             }
@@ -364,21 +391,28 @@ export function parseSyllabusToTasks(text: string, course?: string | null, opts?
       const dateText = dateParsed[0].text;
       const pctDate = dateText.length / line.length;
       const isWeekOf = /^\s*week\s+of\b/i.test(line);
-      if ((pctDate > 0.3 || isWeekOf) && !hasKeyword(line)) {
+      if ((pctDate > 0.3 || isWeekOf) && !looksLikeTask(line)) {
         currentDate = dateWithPossibleTime(line, base, parsed);
+        windowLeft = WINDOW_HEAD;
         continue;
       }
       // Otherwise, we'll use this date for the task itself
       currentDate = dateWithPossibleTime(line, base, parsed);
+      windowLeft = WINDOW_TASK;
     }
 
-    if (hasKeyword(line) && currentDate) {
+    const tasky = (opts?.bulletsOnly ? (isBulletOrList(line) && looksLikeTask(line)) : looksLikeTask(line));
+    if (currentDate && windowLeft > 0 && tasky) {
       const subtasks = splitIntoSubtasks(line);
       for (const st of subtasks) {
         const title = cleanTitle(st);
         tasks.push({ title, course: course ?? null, dueDate: currentDate.toISOString(), status: 'todo', estimatedMinutes: estimateMinutes(st, opts?.minutesPerPage ?? 3) });
       }
+      windowLeft--;
+      continue;
     }
+
+    if (windowLeft > 0) windowLeft--;
   }
 
   // Fallback: if nothing found, attempt to create a single task with closest date in text

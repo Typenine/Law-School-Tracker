@@ -18,6 +18,7 @@ export async function POST(req: Request) {
   const course = (form.get('course') as string) || null;
   const mppRaw = (form.get('mpp') as string) || '';
   const minutesPerPage = (() => { const n = parseInt(mppRaw, 10); return isNaN(n) ? undefined : n; })();
+  const extractTasks = (() => { const v = form.get('extractTasks'); return v === '1' || v === 'true'; })();
 
   if (!(file instanceof File)) return new Response('file is required', { status: 400 });
   const arrayBuf = await (file as File).arrayBuffer();
@@ -66,7 +67,7 @@ export async function POST(req: Request) {
   }
 
   const meta = (() => { try { return parseSyllabusToCourseMeta(text, course); } catch { return null; } })();
-  const tasksToCreate = parseSyllabusToTasks(text, course, { minutesPerPage });
+  const tasksToCreate = extractTasks ? parseSyllabusToTasks(text, course, { minutesPerPage }) : [];
   if (preview) {
     // Prepare course merge preview
     let existing: any = null; let changes: string[] = [];
@@ -112,9 +113,11 @@ export async function POST(req: Request) {
   } catch {}
 
   const created = [] as any[];
-  for (const t of tasksToCreate) {
-    const c = await createTask(t);
-    created.push(c);
+  if (extractTasks) {
+    for (const t of tasksToCreate) {
+      const c = await createTask(t);
+      created.push(c);
+    }
   }
-  return Response.json({ createdCount: created.length, tasks: created });
+  return Response.json({ createdCount: created.length, tasks: created, courseUpdated: !!meta });
 }

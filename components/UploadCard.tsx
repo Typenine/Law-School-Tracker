@@ -17,6 +17,7 @@ export default function UploadCard() {
   const [coursePreview, setCoursePreview] = useState<any | null>(null);
   const [mergeStatus, setMergeStatus] = useState<string | null>(null);
   const [merging, setMerging] = useState(false);
+  const [extractTasks, setExtractTasks] = useState<boolean>(false);
 
   useEffect(() => {
     // initialize minutes-per-page from settings
@@ -24,6 +25,8 @@ export default function UploadCard() {
     const s = window.localStorage.getItem('minutesPerPage');
     const n = s ? parseInt(s, 10) : NaN;
     setMpp(!isNaN(n) && n > 0 ? String(n) : '3');
+    const et = window.localStorage.getItem('extractTasksDefault');
+    setExtractTasks(et ? et === 'true' : false);
   }, []);
 
   useEffect(() => {
@@ -61,6 +64,10 @@ export default function UploadCard() {
     return () => { aborted = true; };
   }, [course, mpp]);
 
+  useEffect(() => {
+    if (typeof window !== 'undefined') window.localStorage.setItem('extractTasksDefault', String(extractTasks));
+  }, [extractTasks]);
+
   async function onUpload() {
     if (!file) return;
     setLoading(true);
@@ -69,15 +76,21 @@ export default function UploadCard() {
     fd.append('file', file);
     if (course) fd.append('course', course);
     if (mpp) fd.append('mpp', mpp);
+    if (extractTasks) fd.append('extractTasks', '1');
     try {
       const url = preview ? '/api/upload?preview=1' : '/api/upload';
       const res = await fetch(url, { method: 'POST', body: fd });
       if (!res.ok) throw new Error(await res.text());
       const data = await res.json();
       if (preview && data.preview) {
-        setReviewTasks(data.tasks as NewTaskInput[]);
-        setReviewOpen(true);
         setCoursePreview(data.coursePreview || null);
+        const arr = Array.isArray(data.tasks) ? (data.tasks as NewTaskInput[]) : [];
+        if (extractTasks && arr.length > 0) {
+          setReviewTasks(arr);
+          setReviewOpen(true);
+        } else {
+          setReviewOpen(false);
+        }
       } else {
         setStatus(`Created ${data.createdCount} tasks${course ? ` for ${course}` : ''}.`);
         setCoursePreview(null);
@@ -120,9 +133,14 @@ export default function UploadCard() {
             </div>
           )}
         </div>
-        <label className="inline-flex items-center gap-2 text-sm mt-6">
-          <input type="checkbox" checked={preview} onChange={e => setPreview(e.target.checked)} /> Preview before saving
-        </label>
+        <div className="flex items-center gap-4 mt-6">
+          <label className="inline-flex items-center gap-2 text-sm">
+            <input type="checkbox" checked={preview} onChange={e => setPreview(e.target.checked)} /> Preview before saving
+          </label>
+          <label className="inline-flex items-center gap-2 text-sm">
+            <input type="checkbox" checked={extractTasks} onChange={e => setExtractTasks(e.target.checked)} /> Extract tasks
+          </label>
+        </div>
         <div className="flex-1 w-full">
           <label className="block text-sm mb-1">File</label>
           <input type="file" accept=".pdf,.docx,.txt" onChange={e => setFile(e.target.files?.[0] || null)} className="w-full" />
@@ -134,7 +152,7 @@ export default function UploadCard() {
       {status && <p className="mt-3 text-sm text-slate-300/90">{status}</p>}
       {mergeStatus && <p className="mt-2 text-xs text-slate-300/70">{mergeStatus}</p>}
       {/* Course merge preview */}
-      {reviewOpen && coursePreview && (
+      {coursePreview && (
         <div className="mt-4 border border-[#1b2344] rounded p-3">
           <div className="flex items-center justify-between">
             <div className="text-sm font-medium">Course merge preview</div>
