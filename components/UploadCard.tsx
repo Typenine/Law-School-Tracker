@@ -14,6 +14,9 @@ export default function UploadCard() {
   const [reviewTasks, setReviewTasks] = useState<NewTaskInput[]>([]);
   const [recScale, setRecScale] = useState<number | null>(null);
   const [recMpp, setRecMpp] = useState<number | null>(null);
+  const [coursePreview, setCoursePreview] = useState<any | null>(null);
+  const [mergeStatus, setMergeStatus] = useState<string | null>(null);
+  const [merging, setMerging] = useState(false);
 
   useEffect(() => {
     // initialize minutes-per-page from settings
@@ -74,8 +77,10 @@ export default function UploadCard() {
       if (preview && data.preview) {
         setReviewTasks(data.tasks as NewTaskInput[]);
         setReviewOpen(true);
+        setCoursePreview(data.coursePreview || null);
       } else {
         setStatus(`Created ${data.createdCount} tasks${course ? ` for ${course}` : ''}.`);
+        setCoursePreview(null);
       }
       // Remember per-course minutes-per-page
       if (typeof window !== 'undefined' && course && mpp) {
@@ -127,16 +132,68 @@ export default function UploadCard() {
         </div>
       </div>
       {status && <p className="mt-3 text-sm text-slate-300/90">{status}</p>}
-        {reviewOpen && (
-          <div className="mt-4 border border-[#1b2344] rounded p-4">
-            <ParserReview
-              initial={reviewTasks}
-              mppDefault={(() => { const n = parseInt(mpp, 10); return isNaN(n) ? undefined : n; })()}
-              onCancel={() => setReviewOpen(false)}
-              onSaved={(count) => { setReviewOpen(false); setStatus(`Created ${count} tasks${course ? ` for ${course}` : ''}.`); }}
-            />
+      {mergeStatus && <p className="mt-2 text-xs text-slate-300/70">{mergeStatus}</p>}
+      {/* Course merge preview */}
+      {reviewOpen && coursePreview && (
+        <div className="mt-4 border border-[#1b2344] rounded p-3">
+          <div className="flex items-center justify-between">
+            <div className="text-sm font-medium">Course merge preview</div>
+            {coursePreview.hasMeta ? (
+              <div className="text-xs text-slate-300/70">{coursePreview.existing ? 'Existing course detected' : 'New course will be created'}</div>
+            ) : (
+              <div className="text-xs text-slate-300/70">No course metadata detected</div>
+            )}
           </div>
-        )}
+          {coursePreview.hasMeta && (
+            <div className="mt-2 text-xs">
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                <div>
+                  <div className="text-slate-300/70 mb-1">Proposed</div>
+                  <pre className="text-[11px] whitespace-pre-wrap bg-[#0b1020] border border-[#1b2344] rounded p-2">{JSON.stringify(coursePreview.proposed, null, 2)}</pre>
+                </div>
+                <div>
+                  <div className="text-slate-300/70 mb-1">Existing</div>
+                  <pre className="text-[11px] whitespace-pre-wrap bg-[#0b1020] border border-[#1b2344] rounded p-2">{coursePreview.existing ? JSON.stringify(coursePreview.existing, null, 2) : '(none)'}</pre>
+                </div>
+              </div>
+              {coursePreview.changes && coursePreview.changes.length > 0 && (
+                <div className="mt-2 text-slate-300/80">Changed fields: {coursePreview.changes.join(', ')}</div>
+              )}
+              <div className="mt-2">
+                <button disabled={merging || !coursePreview.hasMeta} onClick={async () => {
+                  if (!coursePreview?.hasMeta) return;
+                  setMerging(true); setMergeStatus(null);
+                  try {
+                    if (coursePreview.existing && coursePreview.existing.id) {
+                      const res = await fetch(`/api/courses/${coursePreview.existing.id}`, { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(coursePreview.proposed || {}) });
+                      if (!res.ok) throw new Error(await res.text());
+                      setMergeStatus('Course updated from syllabus.');
+                    } else {
+                      const res = await fetch('/api/courses', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(coursePreview.proposed || {}) });
+                      if (!res.ok) throw new Error(await res.text());
+                      setMergeStatus('Course created from syllabus.');
+                    }
+                  } catch (e: any) {
+                    setMergeStatus('Merge failed: ' + (e?.message || 'Unknown error'));
+                  } finally {
+                    setMerging(false);
+                  }
+                }} className="px-3 py-2 rounded bg-indigo-600 hover:bg-indigo-500 disabled:opacity-50">{merging ? 'Merging…' : (coursePreview.existing ? 'Apply merge' : 'Create course')}</button>
+              </div>
+            </div>
+          )}
+        </div>
+      )}
+      {reviewOpen && (
+        <div className="mt-4 border border-[#1b2344] rounded p-4">
+          <ParserReview
+            initial={reviewTasks}
+            mppDefault={(() => { const n = parseInt(mpp, 10); return isNaN(n) ? undefined : n; })()}
+            onCancel={() => setReviewOpen(false)}
+            onSaved={(count) => { setReviewOpen(false); setStatus(`Created ${count} tasks${course ? ` for ${course}` : ''}.`); }}
+          />
+        </div>
+      )}
     </div>
   );
 }

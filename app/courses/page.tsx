@@ -1,0 +1,397 @@
+"use client";
+import { useEffect, useMemo, useState } from 'react';
+import type { Course, CourseMeetingBlock, Semester } from '@/lib/types';
+import { courseColorClass } from '@/lib/colors';
+
+export const dynamic = 'force-dynamic';
+
+const SEMS: Semester[] = ['Spring','Summer','Fall','Winter'];
+
+export default function CoursesPage() {
+  const [courses, setCourses] = useState<Course[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [yearFilter, setYearFilter] = useState<number | 'all'>('all');
+  const [semFilter, setSemFilter] = useState<Semester | 'all'>('all');
+  const [editingId, setEditingId] = useState<string | null>(null);
+  const [form, setForm] = useState<Partial<Course>>({});
+  const [addOpen, setAddOpen] = useState(false);
+  const [newCourse, setNewCourse] = useState<Partial<Course>>({ title: '', meetingDays: [], semester: undefined, year: undefined });
+
+  async function refresh() {
+    setLoading(true);
+    const res = await fetch('/api/courses', { cache: 'no-store' });
+    const data = await res.json();
+    setCourses((data.courses || []) as Course[]);
+    setLoading(false);
+  }
+  useEffect(() => { refresh(); }, []);
+
+  const years = useMemo(() => {
+    const ys = Array.from(new Set(courses.map(c => c.year).filter((n): n is number => typeof n === 'number'))).sort((a,b)=>b-a);
+    return ys;
+  }, [courses]);
+
+  const filtered = useMemo(() => courses.filter(c =>
+    (yearFilter === 'all' || c.year === yearFilter) &&
+    (semFilter === 'all' || c.semester === semFilter)
+  ), [courses, yearFilter, semFilter]);
+
+  function prettyDays(days?: number[] | null) {
+    if (!days || days.length === 0) return '-';
+    const map = ['Sun','Mon','Tue','Wed','Thu','Fri','Sat'];
+    return days.map(d => map[d] || '').join(' ');
+  }
+
+  const conflictIds = useMemo(() => {
+    // Detect conflicts (time overlaps) between courses in the filtered list
+    const ids = new Set<string>();
+    const toMin = (hhmm?: string | null) => {
+      if (!hhmm) return null;
+      const [h, m] = hhmm.split(':').map(x => parseInt(x, 10));
+      if (isNaN(h) || isNaN(m)) return null; return h*60+m;
+    };
+    type Block = { id: string; days: number[]; startMin: number; endMin: number; startDate?: Date | null; endDate?: Date | null };
+    const blocks: Block[] = [];
+    for (const c of filtered) {
+      const startDate = c.startDate ? new Date(c.startDate) : null;
+      const endDate = c.endDate ? new Date(c.endDate) : null;
+      const mb = Array.isArray(c.meetingBlocks) && c.meetingBlocks.length
+        ? c.meetingBlocks
+        : ((Array.isArray(c.meetingDays) && c.meetingStart && c.meetingEnd) ? [{ days: c.meetingDays, start: c.meetingStart, end: c.meetingEnd } as any] : []);
+      for (const b of mb as CourseMeetingBlock[]) {
+        const s = toMin((b as any).start); const e = toMin((b as any).end);
+        if (s == null || e == null || !Array.isArray(b.days) || b.days.length === 0) continue;
+        blocks.push({ id: c.id, days: b.days, startMin: s, endMin: e, startDate, endDate });
+      }
+    }
+    // Compare pairwise
+    for (let i=0;i<blocks.length;i++) {
+      for (let j=i+1;j<blocks.length;j++) {
+        const a = blocks[i], b = blocks[j];
+        if (a.id === b.id) continue;
+        // date range overlap (ignore if either has no range)
+        const drOverlap = (!a.startDate || !b.startDate || !a.endDate || !b.endDate) || (a.startDate! <= b.endDate! && b.startDate! <= a.endDate!);
+        if (!drOverlap) continue;
+        if (a.days.some(d => b.days.includes(d))) {
+          if (a.startMin < b.endMin && b.startMin < a.endMin) {
+            ids.add(a.id); ids.add(b.id);
+          }
+        }
+      }
+    }
+    return ids;
+  }, [filtered]);
+
+  function startEdit(c: Course) {
+    setEditingId(c.id);
+    setForm({ ...c });
+  }
+
+  function cancelEdit() {
+    setEditingId(null);
+    setForm({});
+  }
+
+  async function saveEdit() {
+    if (!editingId) return;
+    const payload: any = { ...form };
+    // Coerce year to number or null
+    if (payload.year !== undefined) {
+      const n = typeof payload.year === 'string' ? parseInt(payload.year, 10) : payload.year;
+      payload.year = isNaN(n as any) ? null : n;
+    }
+    // Ensure meetingDays is number[]
+    if (Array.isArray(payload.meetingDays)) {
+      payload.meetingDays = (payload.meetingDays as number[]).filter((n) => typeof n === 'number');
+    }
+    const res = await fetch(`/api/courses/${editingId}`, { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) });
+    if (res.ok) {
+      cancelEdit();
+      await refresh();
+    }
+  }
+
+  async function removeCourse(id: string) {
+    if (!confirm('Delete this course?')) return;
+    const res = await fetch(`/api/courses/${id}`, { method: 'DELETE' });
+    if (res.ok) await refresh();
+  }
+
+  return (
+    <main className="space-y-4">
+      <div className="flex items-center justify-between">
+        <h2 className="text-lg font-medium">Courses</h2>
+        <button onClick={refresh} className="px-2 py-1 rounded border border-[#1b2344]">Refresh</button>
+      </div>
+      <div className="border border-[#1b2344] rounded p-3 bg-[#0b1020]">
+        <div className="flex items-center justify-between">
+          <div className="text-sm font-medium">Add Course</div>
+          <button onClick={() => setAddOpen(v => !v)} className="text-xs underline">{addOpen ? 'Hide' : 'Show'}</button>
+        </div>
+        {addOpen && (
+          <div className="mt-2 grid grid-cols-1 md:grid-cols-3 gap-2">
+            <input placeholder="Code (optional)" value={newCourse.code ?? ''} onChange={e => setNewCourse(n => ({ ...n, code: e.target.value }))} className="bg-[#0b1020] border border-[#1b2344] rounded px-2 py-1" />
+            <input placeholder="Title" value={newCourse.title ?? ''} onChange={e => setNewCourse(n => ({ ...n, title: e.target.value }))} className="bg-[#0b1020] border border-[#1b2344] rounded px-2 py-1" />
+            <input placeholder="Instructor" value={newCourse.instructor ?? ''} onChange={e => setNewCourse(n => ({ ...n, instructor: e.target.value }))} className="bg-[#0b1020] border border-[#1b2344] rounded px-2 py-1" />
+            <input placeholder="Instructor Email" value={newCourse.instructorEmail ?? ''} onChange={e => setNewCourse(n => ({ ...n, instructorEmail: e.target.value }))} className="bg-[#0b1020] border border-[#1b2344] rounded px-2 py-1" />
+            <input placeholder="Room/Location" value={newCourse.room ?? newCourse.location ?? ''} onChange={e => setNewCourse(n => ({ ...n, room: e.target.value, location: e.target.value }))} className="bg-[#0b1020] border border-[#1b2344] rounded px-2 py-1" />
+            <div className="flex items-center gap-2 flex-wrap">
+              {['Sun','Mon','Tue','Wed','Thu','Fri','Sat'].map((d, idx) => (
+                <label key={idx} className="inline-flex items-center gap-1 text-xs">
+                  <input type="checkbox" checked={(newCourse.meetingDays || []).includes(idx)} onChange={e => {
+                    const set = new Set(newCourse.meetingDays || [] as number[]);
+                    if (e.target.checked) set.add(idx); else set.delete(idx);
+                    setNewCourse(n => ({ ...n, meetingDays: Array.from(set).sort((a,b)=>a-b) }));
+                  }} />{d}
+                </label>
+              ))}
+            </div>
+            <div className="flex items-center gap-1">
+              <input type="time" value={newCourse.meetingStart ?? ''} onChange={e => setNewCourse(n => ({ ...n, meetingStart: e.target.value }))} className="bg-[#0b1020] border border-[#1b2344] rounded px-2 py-1" />
+              <span className="text-xs">–</span>
+              <input type="time" value={newCourse.meetingEnd ?? ''} onChange={e => setNewCourse(n => ({ ...n, meetingEnd: e.target.value }))} className="bg-[#0b1020] border border-[#1b2344] rounded px-2 py-1" />
+            </div>
+            <div className="flex items-center gap-1">
+              <input type="date" value={(newCourse.startDate ? String(newCourse.startDate).slice(0,10) : '')} onChange={e => setNewCourse(n => ({ ...n, startDate: e.target.value }))} className="bg-[#0b1020] border border-[#1b2344] rounded px-2 py-1" />
+              <span className="text-xs">–</span>
+              <input type="date" value={(newCourse.endDate ? String(newCourse.endDate).slice(0,10) : '')} onChange={e => setNewCourse(n => ({ ...n, endDate: e.target.value }))} className="bg-[#0b1020] border border-[#1b2344] rounded px-2 py-1" />
+            </div>
+            <div className="flex items-center gap-2">
+              <select value={(newCourse.semester as any) ?? ''} onChange={e => setNewCourse(n => ({ ...n, semester: (e.target.value || null) as any }))} className="bg-[#0b1020] border border-[#1b2344] rounded px-2 py-1">
+                <option value="">Semester</option>
+                {SEMS.map(s => (<option key={s} value={s}>{s}</option>))}
+              </select>
+              <input type="number" placeholder="Year" value={(newCourse.year as any) ?? ''} onChange={e => setNewCourse(n => ({ ...n, year: e.target.value ? parseInt(e.target.value, 10) : undefined }))} className="w-28 bg-[#0b1020] border border-[#1b2344] rounded px-2 py-1" />
+            </div>
+            <div className="md:col-span-3">
+              <button onClick={async () => {
+                if (!newCourse.title) return;
+                const payload: any = {
+                  code: newCourse.code ?? null,
+                  title: newCourse.title,
+                  instructor: newCourse.instructor ?? null,
+                  instructorEmail: newCourse.instructorEmail ?? null,
+                  room: newCourse.room ?? newCourse.location ?? null,
+                  location: newCourse.location ?? null,
+                  meetingDays: newCourse.meetingDays ?? null,
+                  meetingStart: newCourse.meetingStart ?? null,
+                  meetingEnd: newCourse.meetingEnd ?? null,
+                  startDate: newCourse.startDate ?? null,
+                  endDate: newCourse.endDate ?? null,
+                  semester: (newCourse.semester as any) ?? null,
+                  year: (typeof newCourse.year === 'number' ? newCourse.year : null),
+                };
+                const res = await fetch('/api/courses', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) });
+                if (res.ok) {
+                  setAddOpen(false);
+                  setNewCourse({ title: '', meetingDays: [] });
+                  await refresh();
+                }
+              }} className="px-3 py-2 rounded bg-blue-600 hover:bg-blue-500">Create</button>
+            </div>
+          </div>
+        )}
+      </div>
+      <div className="grid grid-cols-1 md:grid-cols-3 gap-2">
+        <div>
+          <label className="block text-xs text-slate-300/70 mb-1">Year</label>
+          <select value={yearFilter} onChange={e => setYearFilter(e.target.value === 'all' ? 'all' : parseInt(e.target.value, 10))} className="w-full bg-[#0b1020] border border-[#1b2344] rounded px-3 py-2">
+            <option value="all">All</option>
+            {years.map(y => (<option key={y} value={y}>{y}</option>))}
+          </select>
+        </div>
+        <div>
+          <label className="block text-xs text-slate-300/70 mb-1">Semester</label>
+          <select value={semFilter} onChange={e => setSemFilter(e.target.value as any)} className="w-full bg-[#0b1020] border border-[#1b2344] rounded px-3 py-2">
+            <option value="all">All</option>
+            {SEMS.map(s => (<option key={s} value={s}>{s}</option>))}
+          </select>
+        </div>
+      </div>
+      {loading ? (
+        <div className="text-sm">Loading…</div>
+      ) : filtered.length === 0 ? (
+        <div className="text-sm text-slate-300/80">No courses yet. Upload a syllabus to auto-create a course, or add one manually via the API.</div>
+      ) : (
+        <div className="overflow-x-auto">
+          <table className="w-full text-sm">
+            <thead className="text-left text-slate-300/60">
+              <tr>
+                <th className="py-2 pr-4">Code</th>
+                <th className="py-2 pr-4">Title</th>
+                <th className="py-2 pr-4">Instructor</th>
+                <th className="py-2 pr-4">Email</th>
+                <th className="py-2 pr-4">Room</th>
+                <th className="py-2 pr-4">Meeting</th>
+                <th className="py-2 pr-4">Dates</th>
+                <th className="py-2 pr-4">Term</th>
+                <th className="py-2 pr-4">Actions</th>
+              </tr>
+            </thead>
+            <tbody>
+              {filtered.map(c => (
+                <tr key={c.id} className={`border-t border-[#1b2344] ${conflictIds.has(c.id) ? 'bg-[#151a2d]' : ''}`}>
+                  <td className="py-2 pr-4 whitespace-nowrap">
+                    {editingId === c.id ? (
+                      <input value={form.code ?? ''} onChange={e => setForm(f => ({ ...f, code: e.target.value }))} className="w-28 bg-[#0b1020] border border-[#1b2344] rounded px-2 py-1" />
+                    ) : (
+                      <div className="flex items-center gap-2">
+                        <span className={`inline-block w-2.5 h-2.5 rounded-full ${courseColorClass(c.title || c.code || '', 'bg')}`}></span>
+                        <span>{c.code || '-'}</span>
+                      </div>
+                    )}
+                  </td>
+                  <td className="py-2 pr-4">
+                    {editingId === c.id ? (
+                      <input value={form.title ?? ''} onChange={e => setForm(f => ({ ...f, title: e.target.value }))} className="w-full bg-[#0b1020] border border-[#1b2344] rounded px-2 py-1" />
+                    ) : c.title}
+                  </td>
+                  <td className="py-2 pr-4 whitespace-nowrap">
+                    {editingId === c.id ? (
+                      <input value={form.instructor ?? ''} onChange={e => setForm(f => ({ ...f, instructor: e.target.value }))} className="w-40 bg-[#0b1020] border border-[#1b2344] rounded px-2 py-1" />
+                    ) : (c.instructor || '-')}
+                  </td>
+                  <td className="py-2 pr-4 whitespace-nowrap">
+                    {editingId === c.id ? (
+                      <input value={form.instructorEmail ?? ''} onChange={e => setForm(f => ({ ...f, instructorEmail: e.target.value }))} className="w-44 bg-[#0b1020] border border-[#1b2344] rounded px-2 py-1" />
+                    ) : (c.instructorEmail ? (<a className="underline" href={`mailto:${c.instructorEmail}`}>{c.instructorEmail}</a>) : '-')}
+                  </td>
+                  <td className="py-2 pr-4 whitespace-nowrap">
+                    {editingId === c.id ? (
+                      <input value={form.room ?? form.location ?? ''} onChange={e => setForm(f => ({ ...f, room: e.target.value, location: e.target.value }))} className="w-36 bg-[#0b1020] border border-[#1b2344] rounded px-2 py-1" />
+                    ) : (c.room || c.location || '-')}
+                  </td>
+                  <td className="py-2 pr-4 whitespace-nowrap align-top">
+                    {editingId === c.id ? (
+                      <div className="flex flex-col gap-2">
+                        <div className="flex items-center gap-2 flex-wrap">
+                          <div className="flex items-center gap-1">
+                            {['Sun','Mon','Tue','Wed','Thu','Fri','Sat'].map((d, idx) => (
+                              <label key={idx} className="inline-flex items-center gap-1 text-xs">
+                                <input type="checkbox" checked={(form.meetingDays || []).includes(idx)} onChange={e => {
+                                  const set = new Set(form.meetingDays || []);
+                                  if (e.target.checked) set.add(idx as number); else set.delete(idx as number);
+                                  setForm(f => ({ ...f, meetingDays: Array.from(set).sort((a,b)=>a-b) }));
+                                }} />{d}
+                              </label>
+                            ))}
+                          </div>
+                          <div className="flex items-center gap-1">
+                            <input type="time" value={form.meetingStart ?? ''} onChange={e => setForm(f => ({ ...f, meetingStart: e.target.value }))} className="bg-[#0b1020] border border-[#1b2344] rounded px-1 py-0.5" />
+                            <span className="text-xs">–</span>
+                            <input type="time" value={form.meetingEnd ?? ''} onChange={e => setForm(f => ({ ...f, meetingEnd: e.target.value }))} className="bg-[#0b1020] border border-[#1b2344] rounded px-1 py-0.5" />
+                          </div>
+                        </div>
+                        {/* Meeting blocks editor */}
+                        <div className="border border-[#1b2344] rounded p-2">
+                          <div className="text-xs text-slate-300/70 mb-1">Meeting blocks</div>
+                          <div className="space-y-2">
+                            {(form.meetingBlocks as any as CourseMeetingBlock[] | undefined)?.map((b, bi) => (
+                              <div key={bi} className="flex items-center gap-2 flex-wrap">
+                                <div className="flex items-center gap-1">
+                                  {['Sun','Mon','Tue','Wed','Thu','Fri','Sat'].map((d, idx) => (
+                                    <label key={idx} className="inline-flex items-center gap-1 text-xs">
+                                      <input type="checkbox" checked={(b.days || []).includes(idx)} onChange={e => {
+                                        const list = [...(form.meetingBlocks as any as CourseMeetingBlock[] || [])];
+                                        const set = new Set(list[bi].days || []);
+                                        if (e.target.checked) set.add(idx); else set.delete(idx);
+                                        (list[bi] as any).days = Array.from(set).sort((a,b)=>a-b);
+                                        setForm(f => ({ ...f, meetingBlocks: list }));
+                                      }} />{d}
+                                    </label>
+                                  ))}
+                                </div>
+                                <input type="time" value={(b as any).start || ''} onChange={e => {
+                                  const list = [...(form.meetingBlocks as any as CourseMeetingBlock[] || [])];
+                                  (list[bi] as any).start = e.target.value; setForm(f => ({ ...f, meetingBlocks: list }));
+                                }} className="bg-[#0b1020] border border-[#1b2344] rounded px-1 py-0.5" />
+                                <span className="text-xs">–</span>
+                                <input type="time" value={(b as any).end || ''} onChange={e => {
+                                  const list = [...(form.meetingBlocks as any as CourseMeetingBlock[] || [])];
+                                  (list[bi] as any).end = e.target.value; setForm(f => ({ ...f, meetingBlocks: list }));
+                                }} className="bg-[#0b1020] border border-[#1b2344] rounded px-1 py-0.5" />
+                                <input placeholder="Location" value={(b as any).location || ''} onChange={e => {
+                                  const list = [...(form.meetingBlocks as any as CourseMeetingBlock[] || [])];
+                                  (list[bi] as any).location = e.target.value; setForm(f => ({ ...f, meetingBlocks: list }));
+                                }} className="bg-[#0b1020] border border-[#1b2344] rounded px-1 py-0.5" />
+                                <button type="button" onClick={() => {
+                                  const list = [...(form.meetingBlocks as any as CourseMeetingBlock[] || [])];
+                                  list.splice(bi,1); setForm(f => ({ ...f, meetingBlocks: list }));
+                                }} className="text-xs px-2 py-0.5 rounded border border-[#1b2344]">Remove</button>
+                              </div>
+                            ))}
+                          </div>
+                          <button type="button" onClick={() => {
+                            const list = [...(form.meetingBlocks as any as CourseMeetingBlock[] || [])];
+                            list.push({ days: [], start: '', end: '', location: '' });
+                            setForm(f => ({ ...f, meetingBlocks: list }));
+                          }} className="mt-2 text-xs px-2 py-1 rounded border border-[#1b2344]">Add block</button>
+                        </div>
+                      </div>
+                    ) : (
+                      <div>
+                        {/* Prefer blocks if present */}
+                        {Array.isArray(c.meetingBlocks) && c.meetingBlocks.length ? (
+                          <div className="space-y-0.5">
+                            {c.meetingBlocks.map((b, i) => (
+                              <div key={i} className="whitespace-nowrap">{prettyDays(b.days)} {(b as any).start && (b as any).end ? ` ${(b as any).start}–${(b as any).end}` : ''} {(b as any).location ? ` · ${(b as any).location}` : ''}</div>
+                            ))}
+                          </div>
+                        ) : (
+                          <>
+                            {prettyDays(c.meetingDays)} {c.meetingStart && c.meetingEnd ? ` ${c.meetingStart}–${c.meetingEnd}` : ''}
+                          </>
+                        )}
+                        {conflictIds.has(c.id) ? <div className="mt-1 text-[10px] px-1 rounded border border-rose-500 text-rose-400 inline-block">conflict</div> : null}
+                      </div>
+                    )}
+                  </td>
+                  <td className="py-2 pr-4 whitespace-nowrap">
+                    {editingId === c.id ? (
+                      <div className="flex items-center gap-1">
+                        <input type="date" value={(form.startDate ? form.startDate.slice(0,10) : '')} onChange={e => setForm(f => ({ ...f, startDate: e.target.value }))} className="bg-[#0b1020] border border-[#1b2344] rounded px-1 py-0.5" />
+                        <span className="text-xs">–</span>
+                        <input type="date" value={(form.endDate ? form.endDate.slice(0,10) : '')} onChange={e => setForm(f => ({ ...f, endDate: e.target.value }))} className="bg-[#0b1020] border border-[#1b2344] rounded px-1 py-0.5" />
+                      </div>
+                    ) : (<>
+                      {(c.startDate ? new Date(c.startDate).toLocaleDateString() : '-')}
+                      {' – '}
+                      {(c.endDate ? new Date(c.endDate).toLocaleDateString() : '-')}
+                    </>)}
+                  </td>
+                  <td className="py-2 pr-4 whitespace-nowrap">
+                    {editingId === c.id ? (
+                      <div className="flex items-center gap-2">
+                        <select value={(form.semester as any) ?? ''} onChange={e => setForm(f => ({ ...f, semester: (e.target.value || null) as any }))} className="bg-[#0b1020] border border-[#1b2344] rounded px-1 py-0.5">
+                          <option value="">-</option>
+                          {SEMS.map(s => (<option key={s} value={s}>{s}</option>))}
+                        </select>
+                        <input type="number" value={(form.year as any) ?? ''} onChange={e => setForm(f => ({ ...f, year: e.target.value ? parseInt(e.target.value, 10) : null }))} className="w-24 bg-[#0b1020] border border-[#1b2344] rounded px-1 py-0.5" />
+                      </div>
+                    ) : (<>
+                      {c.semester || '-'} {c.year || ''}
+                    </>)}
+                  </td>
+                  <td className="py-2 pr-4 whitespace-nowrap">
+                    {editingId === c.id ? (
+                      <div className="space-x-1">
+                        <button onClick={saveEdit} className="px-2 py-1 rounded bg-blue-600 hover:bg-blue-500">Save</button>
+                        <button onClick={cancelEdit} className="px-2 py-1 rounded border border-[#1b2344]">Cancel</button>
+                      </div>
+                    ) : (
+                      <div className="space-x-1">
+                        <button onClick={() => startEdit(c)} className="px-2 py-1 rounded border border-[#1b2344]">Edit</button>
+                        <button onClick={() => removeCourse(c.id)} className="px-2 py-1 rounded border border-[#1b2344]">Delete</button>
+                        <a href={`/calendar?course=${encodeURIComponent(c.title)}`} className="px-2 py-1 rounded border border-[#1b2344]">Calendar</a>
+                      </div>
+                    )}
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+    </main>
+  );
+}

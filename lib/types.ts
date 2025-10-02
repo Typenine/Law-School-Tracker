@@ -16,6 +16,68 @@ export interface Task {
   term?: string | null;
 }
 
+export type Semester = 'Spring' | 'Summer' | 'Fall' | 'Winter';
+
+export interface Course {
+  id: string;
+  code?: string | null; // e.g., Torts 101
+  title: string; // e.g., Torts
+  instructor?: string | null;
+  instructorEmail?: string | null;
+  room?: string | null;
+  location?: string | null;
+  meetingDays?: number[] | null; // 0=Sun..6=Sat
+  meetingStart?: string | null; // HH:MM (24h)
+  meetingEnd?: string | null; // HH:MM (24h)
+  meetingBlocks?: CourseMeetingBlock[] | null; // multiple patterns
+  startDate?: string | null; // ISO date
+  endDate?: string | null; // ISO date
+  semester?: Semester | null;
+  year?: number | null;
+  createdAt: string; // ISO
+}
+
+export interface NewCourseInput {
+  code?: string | null;
+  title: string;
+  instructor?: string | null;
+  instructorEmail?: string | null;
+  room?: string | null;
+  location?: string | null;
+  meetingDays?: number[] | null;
+  meetingStart?: string | null;
+  meetingEnd?: string | null;
+  meetingBlocks?: CourseMeetingBlock[] | null;
+  startDate?: string | null;
+  endDate?: string | null;
+  semester?: Semester | null;
+  year?: number | null;
+}
+
+export interface UpdateCourseInput {
+  code?: string | null;
+  title?: string;
+  instructor?: string | null;
+  instructorEmail?: string | null;
+  room?: string | null;
+  location?: string | null;
+  meetingDays?: number[] | null;
+  meetingStart?: string | null;
+  meetingEnd?: string | null;
+  meetingBlocks?: CourseMeetingBlock[] | null;
+  startDate?: string | null;
+  endDate?: string | null;
+  semester?: Semester | null;
+  year?: number | null;
+}
+
+export interface CourseMeetingBlock {
+  days: number[]; // 0=Sun..6=Sat
+  start: string; // HH:MM 24h
+  end: string; // HH:MM 24h
+  location?: string | null;
+}
+
 export interface NewTaskInput {
   title: string;
   course?: string | null;

@@ -25,6 +25,7 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
             <nav className="mt-2 flex gap-3 text-sm">
               <Link href="/" className="px-2 py-1 rounded border border-[#1b2344] hover:bg-[#0b1020]">Home</Link>
               <Link href="/planner" className="px-2 py-1 rounded border border-[#1b2344] hover:bg-[#0b1020]">Planner</Link>
+              <Link href="/courses" className="px-2 py-1 rounded border border-[#1b2344] hover:bg-[#0b1020]">Courses</Link>
               <Link href="/calendar" className="px-2 py-1 rounded border border-[#1b2344] hover:bg-[#0b1020]">Calendar</Link>
               <Link href="/settings" className="px-2 py-1 rounded border border-[#1b2344] hover:bg-[#0b1020]">Settings</Link>
               <Link href="/help" className="px-2 py-1 rounded border border-[#1b2344] hover:bg-[#0b1020]">Help</Link>

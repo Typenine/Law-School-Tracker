@@ -1,6 +1,6 @@
 import * as chrono from 'chrono-node';
 import { endOfDay } from 'date-fns';
-import { NewTaskInput } from './types';
+import { CourseMeetingBlock, NewCourseInput, NewTaskInput, Semester } from './types';
 
 const KEYWORDS = [
   'read', 'reading', 'pages', 'chapter', 'ch.', 'section', '§',
@@ -16,6 +16,150 @@ const STOPWORDS = [
 function hasKeyword(line: string) {
   const l = line.toLowerCase();
   return KEYWORDS.some(k => l.includes(k));
+}
+
+function parseDaysToken(s: string): number[] | null {
+  // Accept tokens like MWF, TR, TuTh, Mon/Wed, Monday & Wednesday
+  const map: Record<string, number> = { su:0, sun:0, sunday:0, m:1, mon:1, monday:1, t:2, tu:2, tue:2, tues:2, tuesday:2, w:3, wed:3, wednesday:3, th:4, thu:4, thur:4, thurs:4, thursday:4, f:5, fri:5, friday:5, sa:6, sat:6, saturday:6 };
+  const tokens: string[] = [];
+  let t = s.toLowerCase().replace(/\./g, '');
+  // Common compact forms
+  t = t.replace(/tth/g, 't th'); // TTh => T Th
+  t = t.replace(/mwf/g, 'm w f');
+  t = t.replace(/mw/g, 'm w');
+  t = t.replace(/tr/g, 't th');
+  // Split by separators
+  for (const part of t.split(/[^a-z]+/g).filter(Boolean)) tokens.push(part);
+  const days: number[] = [];
+  for (const tok of tokens) {
+    const d = map[tok];
+    if (typeof d === 'number' && !days.includes(d)) days.push(d);
+  }
+  return days.length ? days.sort((a,b)=>a-b) : null;
+}
+
+function parseTimeTo24HHMM(s: string): string | null {
+  // Parse formats like 10, 10:30, 1pm, 1:15 pm, 13:00
+  const m = s.trim().match(/^(\d{1,2})(?::(\d{2}))?\s*(am|pm)?$/i);
+  if (!m) return null;
+  let h = parseInt(m[1], 10);
+  const min = m[2] ? parseInt(m[2], 10) : 0;
+  const ap = m[3]?.toLowerCase();
+  if (ap === 'pm' && h < 12) h += 12;
+  if (ap === 'am' && h === 12) h = 0;
+  if (h < 0 || h > 23 || min < 0 || min > 59) return null;
+  return `${String(h).padStart(2,'0')}:${String(min).padStart(2,'0')}`;
+}
+
+function parseSemesterYear(text: string): { semester: Semester | null; year: number | null } {
+  const semRe = /(spring|summer|fall|winter)\s*(\d{4})/i;
+  const m = semRe.exec(text);
+  if (m) {
+    const sem = (m[1][0].toUpperCase() + m[1].slice(1).toLowerCase()) as Semester;
+    const yr = parseInt(m[2], 10);
+    return { semester: sem, year: isNaN(yr) ? null : yr };
+  }
+  const yr = (/(\d{4})/).exec(text)?.[1];
+  return { semester: null, year: yr ? parseInt(yr, 10) : null };
+}
+
+export function parseSyllabusToCourseMeta(text: string, fallbackTitle?: string | null): NewCourseInput | null {
+  const lines = text.split(/\r?\n/).map(l => l.trim()).filter(Boolean);
+  const first = lines.slice(0, 40).join('\n');
+  let title: string | undefined;
+  let code: string | undefined;
+  let instructor: string | undefined;
+  let instructorEmail: string | undefined;
+  let room: string | undefined;
+  let location: string | undefined;
+  let meetingDays: number[] | null = null;
+  let meetingStart: string | null = null;
+  let meetingEnd: string | null = null;
+  const meetingBlocks: CourseMeetingBlock[] = [];
+  let startDate: string | null = null;
+  let endDate: string | null = null;
+  let semester: Semester | null = null;
+  let year: number | null = null;
+
+  // Title/code
+  const titleLine = lines.find(l => /^(course|class)\s*[:\-]/i.test(l)) || lines[0];
+  if (titleLine) {
+    const m = /^(?:course|class)\s*[:\-]\s*(.+)$/i.exec(titleLine);
+    const val = m ? m[1] : titleLine;
+    // Split code and title if like LAW-101 Torts
+    const codeMatch = /(\b[A-Z]{2,}[-\s]?\d{2,}\b)/.exec(val);
+    if (codeMatch) { code = codeMatch[1]; title = val.replace(codeMatch[1], '').trim(); }
+    else title = val.trim();
+  }
+  if (!title && fallbackTitle) title = fallbackTitle;
+
+  // Instructor and email
+  for (const l of lines.slice(0, 80)) {
+    if (/\b(instructor|professor|prof\.)\b/i.test(l) && !instructor) {
+      instructor = l.replace(/^(instructor|professor|prof\.)\s*[:\-]\s*/i, '').trim();
+    }
+    const email = /[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}/.exec(l)?.[0];
+    if (email) instructorEmail = email;
+    if (/\b(room|location|building|classroom)\b/i.test(l) && !room) {
+      room = l.replace(/^(room|location|building|classroom)\s*[:\-]\s*/i, '').trim();
+      location = room;
+    }
+    // Meeting days/times e.g. Mon/Wed 10:00-11:15 am, MWF 1:30–2:45 pm
+    if ((/\b(mwf|mw|tr|tth|mon|tue|tues|wed|thu|thur|thurs|fri|sat|sun)\b/i.test(l) || /\b(mon|tue|wed|thu|fri|sat|sun)\b/i.test(l)) && /\d/.test(l)) {
+      const parts = l.split(/[,;]|\s{2,}/).map(s => s.trim()).filter(Boolean);
+      for (const p of parts) {
+        const dayMatch = parseDaysToken(p);
+        const timeRange = p.match(/(\d{1,2}(?::\d{2})?\s*(?:am|pm)?)\s*[-–—]\s*(\d{1,2}(?::\d{2})?\s*(?:am|pm)?)/i);
+        if (dayMatch && timeRange) {
+          const s = parseTimeTo24HHMM(timeRange[1]);
+          const e = parseTimeTo24HHMM(timeRange[2]);
+          if (s && e) {
+            const block: CourseMeetingBlock = { days: dayMatch, start: s, end: e, location: undefined };
+            const exists = meetingBlocks.some(b => b.start === block.start && b.end === block.end && b.days.join(',') === block.days.join(','));
+            if (!exists) meetingBlocks.push(block);
+          }
+        } else {
+          if (dayMatch) meetingDays = dayMatch;
+          if (timeRange) { meetingStart = parseTimeTo24HHMM(timeRange[1]); meetingEnd = parseTimeTo24HHMM(timeRange[2]); }
+        }
+      }
+    }
+    // Date range e.g., Aug 28 – Dec 6, 2025
+    const dateRange = chrono.parse(l, new Date(), { forwardDate: true });
+    if (dateRange.length >= 2) {
+      const a = dateRange[0]; const b = dateRange[1];
+      const s = a.end?.date ? a.end.date() : (a.start?.date ? a.start.date() : a.date());
+      const e = b.end?.date ? b.end.date() : (b.start?.date ? b.start.date() : b.date());
+      if (s && e) { startDate = endOfDay(s).toISOString(); endDate = endOfDay(e).toISOString(); }
+    }
+  }
+
+  const sy = parseSemesterYear(first);
+  semester = sy.semester; year = sy.year;
+  // If we gathered blocks but not the single fields, seed from first block for backward compatibility
+  if (meetingBlocks.length > 0) {
+    if (!meetingDays) meetingDays = meetingBlocks[0].days.slice();
+    if (!meetingStart) meetingStart = meetingBlocks[0].start;
+    if (!meetingEnd) meetingEnd = meetingBlocks[0].end;
+  }
+  if (!title && !instructor && !meetingDays && !semester && !year) return null;
+  const out: NewCourseInput = {
+    code: code ?? null,
+    title: title || (fallbackTitle || 'Course'),
+    instructor: instructor ?? null,
+    instructorEmail: instructorEmail ?? null,
+    room: room ?? null,
+    location: location ?? null,
+    meetingDays: meetingDays ?? null,
+    meetingStart: meetingStart ?? null,
+    meetingEnd: meetingEnd ?? null,
+    meetingBlocks: meetingBlocks.length ? meetingBlocks : null,
+    startDate: startDate ?? null,
+    endDate: endDate ?? null,
+    semester: semester ?? null,
+    year: year ?? null,
+  };
+  return out;
 }
 
 function isNonTaskLine(line: string) {

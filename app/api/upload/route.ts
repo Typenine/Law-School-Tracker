@@ -1,5 +1,5 @@
-import { ensureSchema, createTask } from '@/lib/storage';
-import { parseSyllabusToTasks } from '@/lib/parser';
+import { ensureSchema, createTask, createCourse, listCourses, updateCourse } from '@/lib/storage';
+import { parseSyllabusToTasks, parseSyllabusToCourseMeta } from '@/lib/parser';
 
 export const dynamic = 'force-dynamic';
 export const runtime = 'nodejs';
@@ -60,16 +60,57 @@ export async function POST(req: Request) {
       return '';
     }
   }
-
   if ((contentType.includes('pdf') || file.name.toLowerCase().endsWith('.pdf')) && (!text || text.trim().length < 20)) {
     const ocrText = await ocrSpaceExtract(file as File);
     if (ocrText && ocrText.trim().length > 0) text = ocrText;
   }
 
+  const meta = (() => { try { return parseSyllabusToCourseMeta(text, course); } catch { return null; } })();
   const tasksToCreate = parseSyllabusToTasks(text, course, { minutesPerPage });
   if (preview) {
-    return Response.json({ preview: true, tasks: tasksToCreate });
+    // Prepare course merge preview
+    let existing: any = null; let changes: string[] = [];
+    if (meta && meta.title) {
+      const all = await listCourses();
+      existing = all.find(c => (
+        (meta.code && c.code && c.code.toLowerCase() === meta.code.toLowerCase()) ||
+        (meta.title && c.title.toLowerCase() === meta.title.toLowerCase())
+      ) && (
+        (!meta.year || c.year === meta.year) && (!meta.semester || c.semester === meta.semester)
+      )) || null;
+      if (existing) {
+        const keys = ['code','title','instructor','instructorEmail','room','location','meetingDays','meetingStart','meetingEnd','meetingBlocks','startDate','endDate','semester','year'] as const;
+        for (const k of keys) {
+          const a = (existing as any)[k];
+          const b = (meta as any)[k];
+          const same = JSON.stringify(a ?? null) === JSON.stringify(b ?? null);
+          if (!same && b !== undefined) changes.push(k as string);
+        }
+      } else {
+        const keys = ['code','title','instructor','instructorEmail','room','location','meetingDays','meetingStart','meetingEnd','meetingBlocks','startDate','endDate','semester','year'] as const;
+        for (const k of keys) if ((meta as any)[k] !== undefined && (meta as any)[k] !== null) changes.push(k as string);
+      }
+    }
+    return Response.json({ preview: true, tasks: tasksToCreate, coursePreview: { hasMeta: !!meta, proposed: meta, existing, changes } });
   }
+
+  // Non-preview: upsert course metadata
+  try {
+    if (meta && meta.title) {
+      const existing = (await listCourses()).find(c => (
+        (meta.code && c.code && c.code.toLowerCase() === meta.code.toLowerCase()) ||
+        (meta.title && c.title.toLowerCase() === meta.title.toLowerCase())
+      ) && (
+        (!meta.year || c.year === meta.year) && (!meta.semester || c.semester === meta.semester)
+      ));
+      if (existing) {
+        await updateCourse(existing.id, meta);
+      } else {
+        await createCourse(meta);
+      }
+    }
+  } catch {}
+
   const created = [] as any[];
   for (const t of tasksToCreate) {
     const c = await createTask(t);

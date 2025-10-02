@@ -2,7 +2,7 @@ import { promises as fs } from 'fs';
 import path from 'path';
 import { Pool } from 'pg';
 import { randomUUID as nodeRandomUUID } from 'crypto';
-import { NewSessionInput, NewTaskInput, StudySession, Task, UpdateTaskInput } from './types';
+import { Course, NewCourseInput, NewSessionInput, NewTaskInput, StudySession, Task, UpdateCourseInput, UpdateTaskInput } from './types';
 
 const DB_URL = process.env.DATABASE_URL;
 const IS_VERCEL = !!process.env.VERCEL;
@@ -16,6 +16,120 @@ function getPool(): Pool {
     pool = new Pool({ connectionString: DB_URL, ssl: DB_URL.includes('sslmode=require') ? { rejectUnauthorized: false } : undefined });
   }
   return pool;
+}
+
+// Courses
+export async function listCourses(): Promise<Course[]> {
+  if (DB_URL) {
+    const p = getPool();
+    type Row = {
+      id: string; code: string | null; title: string; instructor: string | null; instructor_email: string | null; room: string | null; location: string | null;
+      meeting_days: number[] | null; meeting_start: string | null; meeting_end: string | null; meeting_blocks: any | null; start_date: Date | string | null; end_date: Date | string | null;
+      semester: string | null; year: number | null; created_at: Date | string
+    };
+    const res = await p.query(`SELECT id, code, title, instructor, instructor_email, room, location, meeting_days, meeting_start, meeting_end, meeting_blocks, start_date, end_date, semester, year, created_at FROM courses ORDER BY title`);
+    return (res.rows as Row[]).map(r => ({
+      id: r.id, code: r.code, title: r.title, instructor: r.instructor, instructorEmail: r.instructor_email, room: r.room, location: r.location,
+      meetingDays: (r.meeting_days as any) ?? null, meetingStart: r.meeting_start, meetingEnd: r.meeting_end, meetingBlocks: (r.meeting_blocks as any) ?? null,
+      startDate: r.start_date ? new Date(r.start_date).toISOString() : null, endDate: r.end_date ? new Date(r.end_date).toISOString() : null,
+      semester: (r.semester as any) ?? null, year: r.year ?? null, createdAt: new Date(r.created_at as any).toISOString()
+    }));
+  }
+  const db = await readJson();
+  return db.courses.sort((a, b) => a.title.localeCompare(b.title));
+}
+
+export async function createCourse(input: NewCourseInput): Promise<Course> {
+  const now = new Date().toISOString();
+  if (DB_URL) {
+    const p = getPool();
+    const id = uuid();
+    const res = await p.query(
+      `INSERT INTO courses (id, code, title, instructor, instructor_email, room, location, meeting_days, meeting_start, meeting_end, meeting_blocks, start_date, end_date, semester, year, created_at)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16)
+       RETURNING id, code, title, instructor, instructor_email, room, location, meeting_days, meeting_start, meeting_end, meeting_blocks, start_date, end_date, semester, year, created_at`,
+      [id, input.code ?? null, input.title, input.instructor ?? null, input.instructorEmail ?? null, input.room ?? null, input.location ?? null, input.meetingDays ?? null, input.meetingStart ?? null, input.meetingEnd ?? null, input.meetingBlocks ?? null, input.startDate ? new Date(input.startDate) : null, input.endDate ? new Date(input.endDate) : null, input.semester ?? null, input.year ?? null, new Date(now)]
+    );
+    const r = res.rows[0];
+    return {
+      id: r.id, code: r.code, title: r.title, instructor: r.instructor, instructorEmail: r.instructor_email, room: r.room, location: r.location,
+      meetingDays: r.meeting_days ?? null, meetingStart: r.meeting_start, meetingEnd: r.meeting_end, meetingBlocks: r.meeting_blocks ?? null,
+      startDate: r.start_date ? new Date(r.start_date).toISOString() : null, endDate: r.end_date ? new Date(r.end_date).toISOString() : null,
+      semester: r.semester ?? null, year: r.year ?? null, createdAt: new Date(r.created_at).toISOString()
+    };
+  }
+  const db = await readJson();
+  const c: Course = {
+    id: uuid(), code: input.code ?? null, title: input.title, instructor: input.instructor ?? null, instructorEmail: input.instructorEmail ?? null,
+    room: input.room ?? null, location: input.location ?? null, meetingDays: input.meetingDays ?? null, meetingStart: input.meetingStart ?? null, meetingEnd: input.meetingEnd ?? null, meetingBlocks: input.meetingBlocks ?? null,
+    startDate: input.startDate ?? null, endDate: input.endDate ?? null, semester: input.semester ?? null, year: input.year ?? null, createdAt: now
+  };
+  db.courses.push(c);
+  await writeJson(db);
+  return c;
+}
+
+export async function updateCourse(id: string, patch: UpdateCourseInput): Promise<Course | null> {
+  if (DB_URL) {
+    const p = getPool();
+    const fields: string[] = []; const values: any[] = []; let idx = 1;
+    if (patch.code !== undefined) { fields.push(`code = $${idx++}`); values.push(patch.code); }
+    if (patch.title !== undefined) { fields.push(`title = $${idx++}`); values.push(patch.title); }
+    if (patch.instructor !== undefined) { fields.push(`instructor = $${idx++}`); values.push(patch.instructor); }
+    if (patch.instructorEmail !== undefined) { fields.push(`instructor_email = $${idx++}`); values.push(patch.instructorEmail); }
+    if (patch.room !== undefined) { fields.push(`room = $${idx++}`); values.push(patch.room); }
+    if (patch.location !== undefined) { fields.push(`location = $${idx++}`); values.push(patch.location); }
+    if (patch.meetingDays !== undefined) { fields.push(`meeting_days = $${idx++}`); values.push(patch.meetingDays); }
+    if (patch.meetingStart !== undefined) { fields.push(`meeting_start = $${idx++}`); values.push(patch.meetingStart); }
+    if (patch.meetingEnd !== undefined) { fields.push(`meeting_end = $${idx++}`); values.push(patch.meetingEnd); }
+    if (patch.meetingBlocks !== undefined) { fields.push(`meeting_blocks = $${idx++}`); values.push(patch.meetingBlocks as any); }
+    if (patch.startDate !== undefined) { fields.push(`start_date = $${idx++}`); values.push(patch.startDate ? new Date(patch.startDate) : null); }
+    if (patch.endDate !== undefined) { fields.push(`end_date = $${idx++}`); values.push(patch.endDate ? new Date(patch.endDate) : null); }
+    if (patch.semester !== undefined) { fields.push(`semester = $${idx++}`); values.push(patch.semester); }
+    if (patch.year !== undefined) { fields.push(`year = $${idx++}`); values.push(patch.year); }
+    if (!fields.length) {
+      const cur = await p.query(`SELECT id, code, title, instructor, instructor_email, room, location, meeting_days, meeting_start, meeting_end, meeting_blocks, start_date, end_date, semester, year, created_at FROM courses WHERE id=$1`, [id]);
+      if (!cur.rowCount) return null;
+      const r = cur.rows[0];
+      return {
+        id: r.id, code: r.code, title: r.title, instructor: r.instructor, instructorEmail: r.instructor_email, room: r.room, location: r.location,
+        meetingDays: r.meeting_days ?? null, meetingStart: r.meeting_start, meetingEnd: r.meeting_end, meetingBlocks: r.meeting_blocks ?? null,
+        startDate: r.start_date ? new Date(r.start_date).toISOString() : null, endDate: r.end_date ? new Date(r.end_date).toISOString() : null,
+        semester: r.semester ?? null, year: r.year ?? null, createdAt: new Date(r.created_at).toISOString()
+      };
+    }
+    const q = `UPDATE courses SET ${fields.join(', ')} WHERE id = $${idx} RETURNING id, code, title, instructor, instructor_email, room, location, meeting_days, meeting_start, meeting_end, meeting_blocks, start_date, end_date, semester, year, created_at`;
+    values.push(id);
+    const res = await p.query(q, values);
+    if (!res.rowCount) return null;
+    const r = res.rows[0];
+    return {
+      id: r.id, code: r.code, title: r.title, instructor: r.instructor, instructorEmail: r.instructor_email, room: r.room, location: r.location,
+      meetingDays: r.meeting_days ?? null, meetingStart: r.meeting_start, meetingEnd: r.meeting_end, meetingBlocks: r.meeting_blocks ?? null,
+      startDate: r.start_date ? new Date(r.start_date).toISOString() : null, endDate: r.end_date ? new Date(r.end_date).toISOString() : null,
+      semester: r.semester ?? null, year: r.year ?? null, createdAt: new Date(r.created_at).toISOString()
+    };
+  }
+  const db = await readJson();
+  const i = db.courses.findIndex(c => c.id === id);
+  if (i === -1) return null;
+  const updated: Course = { ...db.courses[i], ...patch } as Course;
+  db.courses[i] = updated;
+  await writeJson(db);
+  return updated;
+}
+
+export async function deleteCourse(id: string): Promise<boolean> {
+  if (DB_URL) {
+    const p = getPool();
+    const res = await p.query(`DELETE FROM courses WHERE id=$1`, [id]);
+    return res.rowCount > 0;
+  }
+  const db = await readJson();
+  const before = db.courses.length;
+  db.courses = db.courses.filter(c => c.id !== id);
+  await writeJson(db);
+  return db.courses.length < before;
 }
 
 export async function ensureSchema() {
@@ -37,6 +151,25 @@ export async function ensureSchema() {
     ALTER TABLE tasks ADD COLUMN IF NOT EXISTS depends_on uuid[];
     ALTER TABLE tasks ADD COLUMN IF NOT EXISTS tags jsonb;
     ALTER TABLE tasks ADD COLUMN IF NOT EXISTS term text;
+    CREATE TABLE IF NOT EXISTS courses (
+      id uuid PRIMARY KEY,
+      code text,
+      title text NOT NULL,
+      instructor text,
+      instructor_email text,
+      room text,
+      location text,
+      meeting_days integer[],
+      meeting_start text,
+      meeting_end text,
+      meeting_blocks jsonb,
+      start_date date,
+      end_date date,
+      semester text,
+      year integer,
+      created_at timestamptz NOT NULL DEFAULT now()
+    );
+    ALTER TABLE courses ADD COLUMN IF NOT EXISTS meeting_blocks jsonb;
     CREATE TABLE IF NOT EXISTS sessions (
       id uuid PRIMARY KEY,
       task_id uuid REFERENCES tasks(id) ON DELETE SET NULL,
@@ -53,13 +186,15 @@ function uuid() {
   return (globalThis as any).crypto?.randomUUID?.() || nodeRandomUUID();
 }
 
-async function readJson(): Promise<{ tasks: Task[]; sessions: StudySession[] }> {
+async function readJson(): Promise<{ tasks: Task[]; sessions: StudySession[]; courses: Course[] }> {
   try {
     const raw = await fs.readFile(DATA_FILE, 'utf8');
-    return JSON.parse(raw);
+    const data = JSON.parse(raw);
+    if (!('courses' in data)) data.courses = [];
+    return data;
   } catch (e: any) {
     if (e.code === 'ENOENT') {
-      const empty = { tasks: [], sessions: [] };
+      const empty = { tasks: [], sessions: [], courses: [] };
       await fs.mkdir(path.dirname(DATA_FILE), { recursive: true });
       await fs.writeFile(DATA_FILE, JSON.stringify(empty, null, 2), 'utf8');
       return empty;
@@ -68,7 +203,7 @@ async function readJson(): Promise<{ tasks: Task[]; sessions: StudySession[] }> 
   }
 }
 
-async function writeJson(data: { tasks: Task[]; sessions: StudySession[] }) {
+async function writeJson(data: { tasks: Task[]; sessions: StudySession[]; courses: Course[] }) {
   await fs.mkdir(path.dirname(DATA_FILE), { recursive: true });
   await fs.writeFile(DATA_FILE, JSON.stringify(data, null, 2), 'utf8');
 }

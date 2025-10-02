@@ -16,12 +16,18 @@ export default function CalendarPage() {
   const [courseFilter, setCourseFilter] = useState('');
   const [statusFilter, setStatusFilter] = useState<'all' | 'todo' | 'done'>('all');
   const [selectedDayKey, setSelectedDayKey] = useState<string | null>(null);
+  const [courses, setCourses] = useState<any[]>([]);
 
   async function refresh() {
     setLoading(true);
     const res = await fetch('/api/tasks', { cache: 'no-store' });
     const data = await res.json();
     setTasks(data.tasks as Task[]);
+    try {
+      const cr = await fetch('/api/courses', { cache: 'no-store' });
+      const cd = await cr.json();
+      setCourses(cd.courses || []);
+    } catch {}
     setLoading(false);
   }
   useEffect(() => { refresh(); }, []);
@@ -50,6 +56,64 @@ export default function CalendarPage() {
     for (const k of Object.keys(m)) m[k].sort((a,b) => a.title.localeCompare(b.title));
     return m;
   }, [tasks, courseFilter, statusFilter]);
+
+  const classesByDay = useMemo(() => {
+    type ClassItem = { title: string; code?: string | null; time?: string | null; room?: string | null; colorKey: string; startMin?: number; endMin?: number; conflict?: boolean };
+    const m: Record<string, ClassItem[]> = {};
+    const toMin = (hhmm: string | null | undefined) => {
+      if (!hhmm) return undefined;
+      const [h, mi] = hhmm.split(':').map((x: string) => parseInt(x, 10));
+      if (isNaN(h) || isNaN(mi)) return undefined;
+      return h * 60 + mi;
+    };
+    for (const c of courses) {
+      if (courseFilter) {
+        const hay = `${c.title || ''} ${c.code || ''}`.toLowerCase();
+        if (!hay.includes(courseFilter.toLowerCase())) continue;
+      }
+      const start = c.startDate ? new Date(c.startDate) : null;
+      const end = c.endDate ? new Date(c.endDate) : null;
+      const blocks = (Array.isArray(c.meetingBlocks) && c.meetingBlocks.length)
+        ? c.meetingBlocks
+        : ((Array.isArray(c.meetingDays) && c.meetingStart && c.meetingEnd) ? [{ days: c.meetingDays, start: c.meetingStart, end: c.meetingEnd, location: c.room || c.location || null }] : []);
+      if (!Array.isArray(blocks) || !blocks.length) continue;
+      for (const row of weeks) {
+        for (const d of row) {
+          const within = (!start || d >= start) && (!end || d <= end);
+          if (!within) continue;
+          for (const b of blocks) {
+            if (!Array.isArray(b.days)) continue;
+            if (b.days.includes(d.getDay())) {
+              const sMin = toMin((b as any).start);
+              const eMin = toMin((b as any).end);
+              const key = keyOf(d);
+              (m[key] ||= []).push({
+                title: c.title,
+                code: c.code,
+                time: (b as any).start && (b as any).end ? `${(b as any).start}–${(b as any).end}` : null,
+                room: (b as any).location || c.room || c.location || null,
+                colorKey: c.title || c.code || 'course',
+                startMin: sMin,
+                endMin: eMin,
+              });
+            }
+          }
+        }
+      }
+    }
+    // Mark conflicts within each day by time overlap
+    for (const k of Object.keys(m)) {
+      const list = m[k];
+      const withTimes = list.filter(x => typeof x.startMin === 'number' && typeof x.endMin === 'number');
+      withTimes.sort((a, b) => (a.startMin! - b.startMin!));
+      for (let i = 1; i < withTimes.length; i++) {
+        const prev = withTimes[i - 1];
+        const cur = withTimes[i];
+        if (cur.startMin! < prev.endMin!) { prev.conflict = true; cur.conflict = true; }
+      }
+    }
+    return m;
+  }, [courses, weeks, year, month, courseFilter]);
 
   function onDragStart(e: React.DragEvent, t: Task) {
     e.dataTransfer.setData('text/plain', t.id);
@@ -120,6 +184,21 @@ export default function CalendarPage() {
                 <span>{d.getDate()}</span>
                 {selectedDayKey === k && <span className="text-[10px] text-slate-300/60">Agenda</span>}
               </div>
+              {/* Class meetings */}
+              {(classesByDay[k] && classesByDay[k].length > 0) && (
+                <ul className="space-y-0.5 mb-1">
+                  {classesByDay[k].map((c, idx) => (
+                    <li key={idx} className={`text-[10px] truncate flex items-center gap-1 ${c.conflict ? 'text-rose-400' : 'text-slate-300/80'}`} title={c.conflict ? 'Time conflict' : ''}>
+                      <span className={`inline-block w-2 h-2 rounded-full ${courseColorClass(c.title, 'bg')}`}></span>
+                      <span className="text-slate-300/60">Class:</span> {c.code ? `${c.code} ` : ''}{c.title}
+                      {c.time ? <span className="text-slate-300/60"> · {c.time}</span> : null}
+                      {c.room ? <span className="text-slate-300/60"> · {c.room}</span> : null}
+                      {c.conflict ? <span className="ml-1 text-[9px] px-1 rounded border border-rose-500 text-rose-400">conflict</span> : null}
+                    </li>
+                  ))}
+                </ul>
+              )}
+              {/* Tasks */}
               {list.length === 0 ? (
                 <div className="text-[11px] text-slate-300/50">—</div>
               ) : (
