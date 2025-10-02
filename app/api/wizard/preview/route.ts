@@ -40,5 +40,19 @@ export async function POST(req: Request) {
   if (!text || text.trim().length === 0) return new Response('Unable to extract text from file', { status: 400 });
 
   const preview = buildWizardPreview(text, course, { timezone: tz });
-  return Response.json({ preview });
+  // Provide raw lines (trimmed) for mapping UI and a basic table candidate set
+  const lines = text.split(/\r?\n/).slice(0, 500);
+  const tables: Array<{ rows: string[][] } > = [];
+  for (const ln of lines) {
+    if (!ln) continue;
+    if (ln.includes('|')) {
+      const cells = ln.split('|').map(c => c.trim());
+      if (cells.filter(Boolean).length >= 2) tables.push({ rows: [cells] });
+    } else if (/\t/.test(ln)) {
+      const cells = ln.split(/\t+/).map(c => c.trim());
+      if (cells.filter(Boolean).length >= 2) tables.push({ rows: [cells] });
+    }
+    if (tables.length >= 100) break;
+  }
+  return Response.json({ preview, lines: lines.slice(0, 300), tables });
 }
