@@ -16,6 +16,8 @@ export default function CoursesPage() {
   const [form, setForm] = useState<Partial<Course>>({});
   const [addOpen, setAddOpen] = useState(false);
   const [newCourse, setNewCourse] = useState<Partial<Course>>({ title: '', meetingDays: [], meetingBlocks: [], semester: undefined, year: undefined, color: undefined });
+  const [timeMode, setTimeMode] = useState<'simple' | 'advanced'>('simple');
+  const [simpleDuration, setSimpleDuration] = useState<string>('75'); // minutes
 
   async function refresh() {
     setLoading(true);
@@ -23,6 +25,18 @@ export default function CoursesPage() {
     const data = await res.json();
     setCourses((data.courses || []) as Course[]);
     setLoading(false);
+  }
+
+  function computeEnd(hhmm: string | null | undefined, minutes: number) {
+    if (!hhmm || !/^\d{2}:\d{2}$/.test(hhmm)) return '';
+    const [hStr, mStr] = hhmm.split(':');
+    const h = parseInt(hStr, 10), m = parseInt(mStr, 10);
+    if (isNaN(h) || isNaN(m)) return '';
+    const total = h * 60 + m + (isNaN(minutes) ? 0 : minutes);
+    const norm = ((total % 1440) + 1440) % 1440;
+    const hh = Math.floor(norm / 60);
+    const mi = norm % 60;
+    return `${String(hh).padStart(2,'0')}:${String(mi).padStart(2,'0')}`;
   }
   useEffect(() => { refresh(); }, []);
 
@@ -139,6 +153,18 @@ export default function CoursesPage() {
               <label className="text-xs text-slate-300/70">Color</label>
               <input type="color" value={(newCourse.color as any) ?? '#7c3aed'} onChange={e => setNewCourse(n => ({ ...n, color: e.target.value }))} className="h-8 w-12 bg-transparent" />
             </div>
+
+            {/* Time entry mode */}
+            <div className="md:col-span-3 flex items-center gap-2 mt-1">
+              <span className="text-xs text-slate-300/70">Time entry mode</span>
+              <div className="inline-flex rounded border border-[#1b2344] overflow-hidden text-xs">
+                <button type="button" onClick={() => setTimeMode('simple')} className={`px-2 py-1 ${timeMode==='simple'?'bg-[#1a2243]':''}`}>Simple</button>
+                <button type="button" onClick={() => setTimeMode('advanced')} className={`px-2 py-1 ${timeMode==='advanced'?'bg-[#1a2243]':''}`}>Advanced</button>
+              </div>
+              <span className="text-[11px] text-slate-300/60">Simple: one set of days/time. Advanced: different times per day.</span>
+            </div>
+
+            {timeMode === 'simple' && (
             <div className="flex items-center gap-2 flex-wrap">
               {['Sun','Mon','Tue','Wed','Thu','Fri','Sat'].map((d, idx) => (
                 <label key={idx} className="inline-flex items-center gap-1 text-xs">
@@ -149,13 +175,41 @@ export default function CoursesPage() {
                   }} />{d}
                 </label>
               ))}
+              {/* Quick patterns */}
+              <div className="inline-flex items-center gap-1 ml-2">
+                <span className="text-[11px] text-slate-300/60">Quick:</span>
+                <button type="button" className="text-[11px] px-2 py-0.5 rounded border border-[#1b2344]" onClick={() => setNewCourse(n => ({ ...n, meetingDays: [1,3] }))}>M/W</button>
+                <button type="button" className="text-[11px] px-2 py-0.5 rounded border border-[#1b2344]" onClick={() => setNewCourse(n => ({ ...n, meetingDays: [2,4] }))}>T/Th</button>
+                <button type="button" className="text-[11px] px-2 py-0.5 rounded border border-[#1b2344]" onClick={() => setNewCourse(n => ({ ...n, meetingDays: [1,3,5] }))}>M/W/F</button>
+                <button type="button" className="text-[11px] px-2 py-0.5 rounded border border-[#1b2344]" onClick={() => setNewCourse(n => ({ ...n, meetingDays: [1,2,3,4,5] }))}>Mon–Fri</button>
+                <button type="button" className="text-[11px] px-2 py-0.5 rounded border border-[#1b2344]" onClick={() => setNewCourse(n => ({ ...n, meetingDays: [] }))}>Clear</button>
+              </div>
             </div>
-            <div className="flex items-center gap-1">
-              <input type="time" value={newCourse.meetingStart ?? ''} onChange={e => setNewCourse(n => ({ ...n, meetingStart: e.target.value }))} className="bg-[#0b1020] border border-[#1b2344] rounded px-2 py-1" />
-              <span className="text-xs">–</span>
-              <input type="time" value={newCourse.meetingEnd ?? ''} onChange={e => setNewCourse(n => ({ ...n, meetingEnd: e.target.value }))} className="bg-[#0b1020] border border-[#1b2344] rounded px-2 py-1" />
+            )}
+            {timeMode === 'simple' && (
+            <div className="flex items-center gap-2 flex-wrap">
+              <div className="flex items-center gap-1">
+                <input type="time" value={newCourse.meetingStart ?? ''} onChange={e => {
+                  const v = e.target.value;
+                  setNewCourse(n => ({ ...n, meetingStart: v, meetingEnd: computeEnd(v, parseInt(simpleDuration || '0', 10) || 0) || n.meetingEnd }));
+                }} className="bg-[#0b1020] border border-[#1b2344] rounded px-2 py-1" />
+                <span className="text-xs">–</span>
+                <input type="time" value={newCourse.meetingEnd ?? ''} onChange={e => setNewCourse(n => ({ ...n, meetingEnd: e.target.value }))} className="bg-[#0b1020] border border-[#1b2344] rounded px-2 py-1" />
+              </div>
+              <div className="flex items-center gap-2">
+                <span className="text-[11px] text-slate-300/70">Duration (min)</span>
+                <input type="number" min={0} step={5} value={simpleDuration} onChange={e => { const v = e.target.value; setSimpleDuration(v); setNewCourse(n => ({ ...n, meetingEnd: computeEnd(n.meetingStart || '', parseInt(v || '0', 10) || 0) || n.meetingEnd })); }} className="w-20 bg-[#0b1020] border border-[#1b2344] rounded px-2 py-1" />
+                <div className="inline-flex gap-1">
+                  {['50','75','90'].map(p => (
+                    <button key={p} type="button" onClick={() => { setSimpleDuration(p); setNewCourse(n => ({ ...n, meetingEnd: computeEnd(n.meetingStart || '', parseInt(p, 10)) || n.meetingEnd })); }} className="text-[11px] px-2 py-0.5 rounded border border-[#1b2344]">{p}m</button>
+                  ))}
+                </div>
+              </div>
+              <div className="text-[11px] text-slate-300/60">Preview: {prettyDays(newCourse.meetingDays)} {newCourse.meetingStart && newCourse.meetingEnd ? ` ${newCourse.meetingStart}–${newCourse.meetingEnd}` : ''}{(newCourse.location || newCourse.room) ? ` · ${(newCourse.location || newCourse.room)}` : ''}</div>
             </div>
+            )}
             {/* Meeting blocks editor (advanced) */}
+            {timeMode === 'advanced' && (
             <div className="md:col-span-3 border border-[#1b2344] rounded p-2">
               <div className="text-xs text-slate-300/70 mb-1">Meeting blocks (optional, for different times per day)</div>
               <div className="space-y-2">
@@ -191,6 +245,12 @@ export default function CoursesPage() {
                       const list = [...(newCourse.meetingBlocks as any[] || [])];
                       list.splice(bi,1); setNewCourse(n => ({ ...n, meetingBlocks: list }));
                     }} className="text-xs px-2 py-0.5 rounded border border-[#1b2344]">Remove</button>
+                    <button type="button" onClick={() => {
+                      const list = [...(newCourse.meetingBlocks as any[] || [])];
+                      const dup = { ...(list[bi] as any) };
+                      list.splice(bi+1, 0, dup);
+                      setNewCourse(n => ({ ...n, meetingBlocks: list }));
+                    }} className="text-xs px-2 py-0.5 rounded border border-[#1b2344]">Duplicate</button>
                   </div>
                 ))}
               </div>
@@ -200,15 +260,11 @@ export default function CoursesPage() {
                   list.push({ days: [], start: '', end: '', location: '' });
                   setNewCourse(n => ({ ...n, meetingBlocks: list }));
                 }} className="text-xs px-2 py-1 rounded border border-[#1b2344]">Add block</button>
-                <button type="button" onClick={() => {
-                  if ((newCourse.meetingDays || []).length && newCourse.meetingStart && newCourse.meetingEnd) {
-                    const list = [...(newCourse.meetingBlocks as any[] || [])];
-                    list.push({ days: newCourse.meetingDays, start: newCourse.meetingStart, end: newCourse.meetingEnd, location: newCourse.location || newCourse.room || '' });
-                    setNewCourse(n => ({ ...n, meetingBlocks: list }));
-                  }
-                }} className="text-xs px-2 py-1 rounded border border-[#1b2344]">Use simple fields</button>
+                <span className="text-[11px] text-slate-300/60">Tip: Use Simple mode for a single schedule, Advanced for multiple times.</span>
               </div>
             </div>
+            )}
+
             <div className="flex items-center gap-1">
               <input type="date" value={(newCourse.startDate ? String(newCourse.startDate).slice(0,10) : '')} onChange={e => setNewCourse(n => ({ ...n, startDate: e.target.value }))} className="bg-[#0b1020] border border-[#1b2344] rounded px-2 py-1" />
               <span className="text-xs">–</span>
@@ -245,6 +301,7 @@ export default function CoursesPage() {
                 if (res.ok) {
                   setAddOpen(false);
                   setNewCourse({ title: '', meetingDays: [], meetingBlocks: [], color: undefined });
+                  setTimeMode('simple'); setSimpleDuration('75');
                   await refresh();
                 }
               }} className="px-3 py-2 rounded bg-blue-600 hover:bg-blue-500">Create</button>
