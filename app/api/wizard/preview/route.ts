@@ -70,6 +70,12 @@ export async function POST(req: Request) {
           if (arr.length >= 1) cells = arr.length === 1 ? [arr[0], ''] : arr;
         }
       }
+      // Reading / assignment only line → ['', content]
+      if (!cells) {
+        const hasReading = /(read|reading|casebook|article|pp?\.|chapter|ch\.|§|chs?\.)/i.test(trimmed);
+        const hasAssign = /(due|submit|turn in|upload|brief|memo|quiz|exam|final|midterm)/i.test(trimmed);
+        if (hasReading || hasAssign) cells = ['', trimmed];
+      }
     }
     if (cells && cells.filter(Boolean).length >= 1) tables.push({ rows: [cells] });
     if (tables.length >= 300) break;

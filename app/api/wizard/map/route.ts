@@ -8,7 +8,7 @@ export const dynamic = 'force-dynamic';
 export const runtime = 'nodejs';
 
 function pagesOrSections(line: string): string | null {
-  const m = /(pp?\.)\s*[^;,.]+|\bpages?\s*[^;,.]+|\bch(?:apter)?\.?\s*\d+(?:\s*[-–—]\s*\d+)?|§+\s*[^;,.]+/i.exec(line);
+  const m = /(pp?\.)\s*[^;,.]+|\bpages?\s*[^;,.]+|\bchs?\.?\s*\d+(?:\s*[-–—]\s*\d+)?|\bch(?:apter)?\.?\s*\d+(?:\s*[-–—]\s*\d+)?|§+\s*[^;,.]+/i.exec(line);
   return m ? m[0] : null;
 }
 
@@ -25,7 +25,7 @@ function classifyTask(line: string): TaskType {
   if (l.includes('memo')) return 'memo';
   if (l.includes('quiz')) return 'quiz';
   if (l.includes('exam') || l.includes('midterm') || l.includes('final')) return 'exam';
-  if (/(submit|due|turn in|upload)/i.test(line)) return 'admin';
+  if (/(submit|due|turn in|upload|drafting due|paper due|assignment due)/i.test(line)) return 'admin';
   return 'reading';
 }
 
@@ -39,6 +39,8 @@ export async function POST(req: Request) {
   const rows: string[][] = Array.isArray(body?.rows) ? body.rows : [];
   const map = body?.mapping || {};
   const tz = (body?.timezone as string) || 'America/Chicago';
+  const courseStart: Date | null = body?.courseStart ? new Date(body.courseStart) : null;
+  const courseEnd: Date | null = body?.courseEnd ? new Date(body.courseEnd) : null;
   const dateCol = Number.isInteger(map.dateCol) ? map.dateCol : 0;
   const topicCol = Number.isInteger(map.topicCol) ? map.topicCol : 1;
   const readingsCol = Number.isInteger(map.readingsCol) ? map.readingsCol : 2;
@@ -47,6 +49,7 @@ export async function POST(req: Request) {
   const sessions: Session[] = [];
   const byDateKey = new Map<string, Session>();
   let seq = 1;
+  let currentKey: string | null = null; // carry forward last seen date
 
   for (let i = 0; i < rows.length; i++) {
     const r = rows[i] || [];
@@ -55,9 +58,12 @@ export async function POST(req: Request) {
     const rd = (r[readingsCol] || '').trim();
     const as = (r[assignmentsCol] || '').trim();
     if (!dc && !tp && !rd && !as) continue;
+    const headerish = /\b(professor|instructor|syllabus|suite|office|email|phone)\b/i.test([dc, tp, rd, as].join(' '));
+    if (headerish) continue;
 
     let when: Date | null = null;
-    const ps = chrono.parse(dc, new Date(), { forwardDate: true });
+    const ref = courseStart ?? new Date();
+    const ps = chrono.parse(dc, ref, { forwardDate: true });
     if (ps.length) {
       const p = ps[0];
       when = p.end ? p.end.date() : (p.start ? p.start.date() : p.date());
@@ -65,12 +71,18 @@ export async function POST(req: Request) {
 
     if (!when) {
       // Try alternative: date hidden in concatenated cell
-      const p2 = chrono.parse([dc, tp, rd, as].filter(Boolean).join(' | '), new Date(), { forwardDate: true });
+      const p2 = chrono.parse([dc, tp, rd, as].filter(Boolean).join(' | '), ref, { forwardDate: true });
       if (p2.length) when = p2[0].end ? p2[0].end.date() : (p2[0].start ? p2[0].start.date() : p2[0].date());
     }
 
-    if (!when) continue;
-    const key = endOfDay(when).toISOString().slice(0,10);
+    let key: string | null = null;
+    if (when) {
+      key = endOfDay(when).toISOString().slice(0,10);
+    } else if (currentKey) {
+      key = currentKey; // attach non-date rows to current session
+    } else {
+      continue; // cannot place this row yet
+    }
 
     let s = byDateKey.get(key);
     if (!s) {
@@ -78,11 +90,19 @@ export async function POST(req: Request) {
       byDateKey.set(key, s);
       sessions.push(s);
     }
+    currentKey = key;
 
     if (!s.topic && tp) s.topic = tp.slice(0, 180);
+    // Capture notes like online class / Zoom / Teams
+    const noteBits: string[] = [];
+    if (/(zoom|teams|online class)/i.test(tp)) noteBits.push(tp);
+    if (/(zoom|teams|online class)/i.test(as)) noteBits.push(as);
+    if (noteBits.length) s.notes = [s.notes, ...noteBits].filter(Boolean).join(' | ').slice(0, 280);
 
-    if (rd) {
-      const items = rd.split(/;|•|\u2022|\n/).map(x => x.trim()).filter(Boolean);
+    let rdCell = rd;
+    if (!rdCell && /(pp?\.|chapter|ch\.|§|read\b|casebook|article)/i.test(tp)) rdCell = tp;
+    if (rdCell) {
+      const items = rdCell.split(/;|•|\u2022|\n/).map(x => x.trim()).filter(Boolean);
       for (const it of items) {
         const pg = pagesOrSections(it);
         if (!/(read|casebook|article|pp?\.|chapter|ch\.|§)/i.test(it) && !pg && !isBullet(it)) continue;
@@ -98,8 +118,10 @@ export async function POST(req: Request) {
       }
     }
 
-    if (as) {
-      const items = as.split(/;|•|\u2022|\n/).map(x => x.trim()).filter(Boolean);
+    let asCell = as;
+    if (!asCell && /(due|submit|turn in|upload|brief|memo|quiz|exam|final|midterm)/i.test(tp)) asCell = tp;
+    if (asCell) {
+      const items = asCell.split(/;|•|\u2022|\n/).map(x => x.trim()).filter(Boolean);
       for (const it of items) {
         if (!/(due|submit|turn in|upload|brief|memo|quiz|exam|final|midterm|start of class|at class|by class time|11:59)/i.test(it)) continue;
         const startTime = '09:00'; // fallback; actual meeting_time will be applied later in the full wizard

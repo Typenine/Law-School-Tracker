@@ -1,14 +1,14 @@
-import UploadCard from '@/components/UploadCard'
 import TaskTable from '@/components/TaskTable'
 import SessionLogger from '@/components/SessionLogger'
 import Stats from '@/components/Stats'
 import FocusTimer from '@/components/FocusTimer'
+import DashboardToday from '@/components/DashboardToday'
 
 export default function Home() {
   return (
     <main className="space-y-6">
       <section className="card p-5">
-        <UploadCard />
+        <DashboardToday />
       </section>
 
       <section className="card p-5">

@@ -1,5 +1,6 @@
 "use client";
 import { useEffect, useMemo, useState } from 'react';
+import UploadCard from '@/components/UploadCard';
 
 function getLocalNumber(key: string, fallback: number) {
   if (typeof window === 'undefined') return fallback;
@@ -75,6 +76,10 @@ export default function SettingsPage() {
 
   return (
     <main className="space-y-6">
+      <section className="card p-5">
+        <h2 className="text-lg font-medium mb-3">Syllabus Import</h2>
+        <UploadCard />
+      </section>
       <section className="card p-5">
         <h2 className="text-lg font-medium mb-3">Settings</h2>
         <div className="grid grid-cols-1 md:grid-cols-2 gap-4">

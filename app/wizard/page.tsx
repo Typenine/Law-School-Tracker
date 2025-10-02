@@ -1,5 +1,5 @@
 "use client";
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 
 export default function WizardPreviewPage() {
   const [file, setFile] = useState<File | null>(null);
@@ -70,8 +70,8 @@ export default function WizardPreviewPage() {
 function MappingPanel({ data, tz }: { data: any; tz: string }) {
   const [dateCol, setDateCol] = useState<number>(0);
   const [topicCol, setTopicCol] = useState<number>(1);
-  const [readingsCol, setReadingsCol] = useState<number>(2);
-  const [assignCol, setAssignCol] = useState<number>(3);
+  const [readingsCol, setReadingsCol] = useState<number>(1);
+  const [assignCol, setAssignCol] = useState<number>(1);
   const [mapped, setMapped] = useState<any | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -81,10 +81,30 @@ function MappingPanel({ data, tz }: { data: any; tz: string }) {
   const maxCols = sample.reduce((m: number, r: string[]) => Math.max(m, r.length), 0);
   const options = Array.from({ length: maxCols }, (_, i) => i);
 
+  // Initialize sensible defaults once we know column count
+  const [init, setInit] = useState(false);
+  useEffect(() => {
+    if (init) return;
+    if (maxCols > 0) {
+      setDateCol(0);
+      const right = Math.max(0, maxCols - 1);
+      setTopicCol(right);
+      setReadingsCol(right);
+      setAssignCol(right);
+      setInit(true);
+    }
+  }, [maxCols, init]);
+
   async function applyMapping() {
     setLoading(true); setError(null); setMapped(null);
     try {
-      const body = JSON.stringify({ rows, mapping: { dateCol, topicCol, readingsCol, assignmentsCol: assignCol }, timezone: tz });
+      const body = JSON.stringify({
+        rows,
+        mapping: { dateCol, topicCol, readingsCol, assignmentsCol: assignCol },
+        timezone: tz,
+        courseStart: data?.preview?.course?.start_date || null,
+        courseEnd: data?.preview?.course?.end_date || null,
+      });
       const res = await fetch('/api/wizard/map', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body });
       if (!res.ok) throw new Error(await res.text());
       const json = await res.json();
@@ -100,6 +120,7 @@ function MappingPanel({ data, tz }: { data: any; tz: string }) {
     <div className="card p-4 space-y-3">
       <h2 className="text-lg font-medium">Mapping</h2>
       <div className="text-sm text-slate-300/80">Select which columns correspond to Date, Topic, Readings, Assignments. Then Apply to all rows.</div>
+      <div className="text-xs text-slate-300/60">Detected {rows.length} table-like rows · Most PDFs become 2 columns (Date = 0, Right column = 1). Adjust if needed.</div>
       {sample.length === 0 ? (
         <div className="text-sm text-slate-300/70">No table-like rows detected. Try uploading a DOCX/PDF with a table layout.</div>
       ) : (
