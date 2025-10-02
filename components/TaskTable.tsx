@@ -6,10 +6,6 @@ import { courseColorClass } from '@/lib/colors';
 export default function TaskTable() {
   const [tasks, setTasks] = useState<Task[]>([]);
   const [loading, setLoading] = useState(true);
-  const [newTitle, setNewTitle] = useState('');
-  const [newCourse, setNewCourse] = useState('');
-  const [newDue, setNewDue] = useState('');
-  const [newEst, setNewEst] = useState<string>('');
   const [statusFilter, setStatusFilter] = useState<'all' | 'todo' | 'done'>('all');
   const [courseFilter, setCourseFilter] = useState('');
   const [editingId, setEditingId] = useState<string | null>(null);
@@ -140,42 +136,6 @@ export default function TaskTable() {
     if (res.ok) setTasks(prev => prev.filter(t => t.id !== id));
   }
 
-  async function quickAdd() {
-    if (!newTitle || !newDue) return;
-    try {
-      const res = await fetch('/api/tasks', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          title: newTitle,
-          course: newCourse || null,
-          dueDate: new Date(newDue).toISOString(),
-          status: 'todo',
-          estimatedMinutes: newEst ? parseInt(newEst, 10) : null,
-          term: currentTerm || null,
-        }),
-      });
-      if (res.ok) {
-        setNewTitle('');
-        setNewCourse('');
-        setNewDue('');
-        setNewEst('');
-        await refresh();
-      }
-    } catch (_) {}
-    // If offline or failed, queue it
-    if (typeof navigator !== 'undefined' && !navigator.onLine) {
-      try {
-        const item = { title: newTitle, course: newCourse || null, dueDate: new Date(newDue).toISOString(), status: 'todo', estimatedMinutes: newEst ? parseInt(newEst, 10) : null, term: currentTerm || null };
-        const arr = JSON.parse(window.localStorage.getItem('offlineQueue') || '[]');
-        arr.push(item);
-        window.localStorage.setItem('offlineQueue', JSON.stringify(arr));
-        setOfflineCount(arr.length);
-        setNewTitle(''); setNewCourse(''); setNewDue(''); setNewEst('');
-      } catch {}
-    }
-  }
-
   function isoToLocalInput(iso: string) {
     const d = new Date(iso);
     const pad = (n: number) => String(n).padStart(2, '0');
@@ -284,37 +244,12 @@ export default function TaskTable() {
           }} className="px-2 py-1 rounded border border-[#1b2344]">Sync now</button>
         </div>
       )}
-      <form onSubmit={(e) => { e.preventDefault(); quickAdd(); }} className="mb-3 flex flex-col md:flex-row gap-3 md:items-end justify-between">
-        <div className="grid grid-cols-1 md:grid-cols-5 gap-2 w-full md:w-auto">
-          <div className="flex gap-2">
-            <input value={newTitle} onChange={e => setNewTitle(e.target.value)} placeholder="Title" className="flex-1 bg-[#0b1020] border border-[#1b2344] rounded px-3 py-2" />
-            <button type="button" onClick={async () => {
-              if (!newTitle) return;
-              try {
-                const res = await fetch('/api/parse', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ text: newTitle }) });
-                if (!res.ok) return;
-                const data = await res.json();
-                const t = (data.tasks || [])[0];
-                if (!t) return;
-                setNewTitle(t.title || newTitle);
-                if (t.course) setNewCourse(t.course || '');
-                if (t.dueDate) setNewDue(isoToLocalInput(t.dueDate));
-                if (typeof t.estimatedMinutes === 'number') setNewEst(String(t.estimatedMinutes));
-              } catch {}
-            }} className="px-2 py-2 rounded border border-[#1b2344] text-xs">Parse</button>
-          </div>
-          <input value={newCourse} onChange={e => setNewCourse(e.target.value)} placeholder="Course (optional)" className="w-full bg-[#0b1020] border border-[#1b2344] rounded px-3 py-2" />
-          <input type="datetime-local" value={newDue} onChange={e => setNewDue(e.target.value)} className="w-full bg-[#0b1020] border border-[#1b2344] rounded px-3 py-2" />
-          <input type="number" min={0} step={5} value={newEst} onChange={e => setNewEst(e.target.value)} placeholder="Est. min" className="w-full bg-[#0b1020] border border-[#1b2344] rounded px-3 py-2" />
-          <button type="submit" className="bg-blue-600 hover:bg-blue-500 px-3 py-2 rounded disabled:opacity-50" disabled={!newTitle || !newDue}>Add Task</button>
-        </div>
-        <div className="flex gap-2">
-          <a href={icsHref} className="px-3 py-2 rounded bg-indigo-600 hover:bg-indigo-500">Download .ics</a>
-          <a href={csvHref} className="px-3 py-2 rounded bg-teal-600 hover:bg-teal-500">Export CSV</a>
-          <button type="button" onClick={() => setImportOpen(v => !v)} className="px-3 py-2 rounded bg-amber-600 hover:bg-amber-500">{importOpen ? 'Close Import' : 'Import CSV'}</button>
-          <button onClick={refresh} className="px-3 py-2 rounded border border-[#1b2344]">Refresh</button>
-        </div>
-      </form>
+      <div className="mb-3 flex gap-2">
+        <a href={icsHref} className="px-3 py-2 rounded bg-indigo-600 hover:bg-indigo-500">Download .ics</a>
+        <a href={csvHref} className="px-3 py-2 rounded bg-teal-600 hover:bg-teal-500">Export CSV</a>
+        <button type="button" onClick={() => setImportOpen(v => !v)} className="px-3 py-2 rounded bg-amber-600 hover:bg-amber-500">{importOpen ? 'Close Import' : 'Import CSV'}</button>
+        <button onClick={refresh} className="px-3 py-2 rounded border border-[#1b2344]">Refresh</button>
+      </div>
       {/* Course templates (local) */}
       <div className="mb-3 border border-[#1b2344] rounded p-3 bg-[#0b1020]">
         <div className="text-xs text-slate-300/70 mb-2">Templates per course (local). Use a course filter to select course.</div>

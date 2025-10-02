@@ -2,6 +2,7 @@
 import { useEffect, useMemo, useState } from 'react';
 import { Task, StudySession } from '@/lib/types';
 import { courseColorClass } from '@/lib/colors';
+import TaskAddForm from '@/components/TaskAddForm';
 
 function startOfDay(d: Date) { const x = new Date(d); x.setHours(0,0,0,0); return x; }
 function keyOf(d: Date) { const x = startOfDay(d); return `${x.getFullYear()}-${String(x.getMonth()+1).padStart(2,'0')}-${String(x.getDate()).padStart(2,'0')}`; }
@@ -13,7 +14,6 @@ export default function PlannerBoard() {
   const [loading, setLoading] = useState(false);
   const [currentTerm, setCurrentTerm] = useState<string>('');
   const [courseScales, setCourseScales] = useState<Record<string, number>>({});
-  const [defaultMpp, setDefaultMpp] = useState<number>(3);
   const [openLogKey, setOpenLogKey] = useState<string | null>(null);
   const [logTaskId, setLogTaskId] = useState<string>('');
   const [logActivity, setLogActivity] = useState<string>('reading');
@@ -23,10 +23,6 @@ export default function PlannerBoard() {
   const [logPages, setLogPages] = useState<string>('');
   const [logOutlinePages, setLogOutlinePages] = useState<string>('');
   const [logPracticeQs, setLogPracticeQs] = useState<string>('');
-  // Quick Add / Bulk Paste state per day
-  const [qa, setQa] = useState<Record<string, { title: string; course: string; est: string }>>({});
-  const [pasteKey, setPasteKey] = useState<string | null>(null);
-  const [pasteText, setPasteText] = useState<string>('');
 
   async function refresh() {
     setLoading(true);
@@ -53,7 +49,6 @@ export default function PlannerBoard() {
         const raw = window.localStorage.getItem('courseMppMap') || '{}';
         const map = JSON.parse(raw) as Record<string, number>;
         const def = parseFloat(window.localStorage.getItem('minutesPerPage') || '3') || 3;
-        setDefaultMpp(def);
         const scales: Record<string, number> = {};
         for (const [k, v] of Object.entries(map)) {
           const key = k.toLowerCase();
@@ -269,77 +264,12 @@ export default function PlannerBoard() {
     }
   }
 
-  // Estimate helpers
-  function pagesFromTitle(title: string): number | null {
-    // Sum ranges like 45-52 and 84–90
-    const ranges = [...title.matchAll(/(\d+)\s*[-–—]\s*(\d+)/g)];
-    if (ranges.length) {
-      let sum = 0;
-      for (const m of ranges) {
-        const a = parseInt(m[1], 10); const b = parseInt(m[2], 10);
-        if (!isNaN(a) && !isNaN(b) && b >= a) sum += (b - a + 1);
-      }
-      if (sum > 0) return sum;
-    }
-    // Single number hint (e.g., pp. 10)
-    const single = title.match(/pp?\.?\s*(\d+)/i);
-    if (single) return 1;
-    return null;
-  }
-
-  function estimateMinutesFor(title: string, course: string): number | null {
-    const pages = pagesFromTitle(title);
-    if (!pages) return null;
-    const scale = (course && courseScales[(course || '').toLowerCase()]) || 1;
-    const mpp = defaultMpp * scale;
-    return Math.max(5, Math.round(pages * mpp));
-  }
-
-  async function quickAdd(forKey: string) {
-    const q = qa[forKey] || { title: '', course: '', est: '' };
-    const title = (q.title || '').trim();
-    if (!title) return;
-    const course = (q.course || '').trim();
-    const est = q.est ? parseInt(q.est, 10) : estimateMinutesFor(title, course) || null;
-    const [y, m, d] = forKey.split('-').map(n => parseInt(n, 10));
-    const due = new Date(y, m - 1, d, 23, 59, 59, 999);
-    const body = { title, course: course || null, dueDate: due.toISOString(), status: 'todo', estimatedMinutes: est, term: currentTerm || null };
-    const res = await fetch('/api/tasks', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
-    if (res.ok) {
-      setQa(prev => ({ ...prev, [forKey]: { title: '', course: course, est: '' } }));
-      await refresh();
-    }
-  }
-
-  async function bulkPaste(forKey: string) {
-    const text = pasteText.trim();
-    if (!text) return;
-    const [y, m, d] = forKey.split('-').map(n => parseInt(n, 10));
-    const due = new Date(y, m - 1, d, 23, 59, 59, 999).toISOString();
-    const lines = text.split(/\r?\n/).map(s => s.trim()).filter(Boolean);
-    const items = lines.map(line => {
-      let course = '';
-      let title = line;
-      // try pipe-split first
-      if (line.includes('|')) {
-        const parts = line.split('|').map(x => x.trim());
-        if (parts.length >= 2) { course = parts[0]; title = parts.slice(1).join(' | '); }
-      } else {
-        const m = line.match(/^([^:–—-]{2,40})\s*[:–—-]\s+(.*)$/);
-        if (m) { course = m[1].trim(); title = m[2].trim(); }
-      }
-      const est = estimateMinutesFor(title, course) || null;
-      return { title, dueDate: due, course: course || null, status: 'todo', estimatedMinutes: est, term: currentTerm || null };
-    });
-    const res = await fetch('/api/tasks/bulk', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ tasks: items }) });
-    if (res.ok) {
-      setPasteText(''); setPasteKey(null);
-      await refresh();
-    }
-  }
 
   return (
     <div className="space-y-4">
+      <div className="card p-4">
+        <TaskAddForm onCreated={refresh} />
+      </div>
       {suggestions.length > 0 && (
         <div className="rounded border border-[#1b2344] p-4">
           <div className="text-slate-300/70 text-xs mb-2">Suggestions to spread large readings/assignments across days (date-only)</div>
@@ -389,38 +319,6 @@ export default function PlannerBoard() {
                 ))}
               </ul>
             )}
-            {/* Quick Add for this day */}
-            <div className="mt-3 text-xs grid grid-cols-1 md:grid-cols-5 gap-2 items-end">
-              <div className="md:col-span-2">
-                <label className="block mb-1">Title</label>
-                <input value={(qa[d.key]?.title)||''} onChange={e => setQa(prev => ({ ...prev, [d.key]: { ...(prev[d.key]||{ title:'', course:'', est:'' }), title: e.target.value } }))} className="w-full bg-[#0b1020] border border-[#1b2344] rounded px-2 py-1" />
-              </div>
-              <div>
-                <label className="block mb-1">Course</label>
-                <input value={(qa[d.key]?.course)||''} onChange={e => setQa(prev => ({ ...prev, [d.key]: { ...(prev[d.key]||{ title:'', course:'', est:'' }), course: e.target.value } }))} className="w-full bg-[#0b1020] border border-[#1b2344] rounded px-2 py-1" />
-              </div>
-              <div>
-                <label className="block mb-1">Est. min (opt)</label>
-                <input value={(qa[d.key]?.est)||''} onChange={e => setQa(prev => ({ ...prev, [d.key]: { ...(prev[d.key]||{ title:'', course:'', est:'' }), est: e.target.value } }))} className="w-full bg-[#0b1020] border border-[#1b2344] rounded px-2 py-1" />
-              </div>
-              <div>
-                <button onClick={() => quickAdd(d.key)} className="px-3 py-1.5 rounded bg-emerald-600 hover:bg-emerald-500 w-full">Add</button>
-              </div>
-            </div>
-            {/* Bulk paste */}
-            <div className="mt-2 text-xs">
-              {pasteKey === d.key ? (
-                <div className="space-y-2">
-                  <textarea value={pasteText} onChange={e => setPasteText(e.target.value)} rows={4} className="w-full bg-[#0b1020] border border-[#1b2344] rounded p-2" placeholder="One task per line. Optional formats:\nCourse | Title\nCourse - Title\nTitle (we'll estimate if pages like 'pp. 45-52' are present)" />
-                  <div className="flex gap-2">
-                    <button onClick={() => bulkPaste(d.key)} className="px-3 py-1.5 rounded bg-blue-600 hover:bg-blue-500">Add lines</button>
-                    <button onClick={() => { setPasteKey(null); setPasteText(''); }} className="px-3 py-1.5 rounded border border-[#1b2344]">Cancel</button>
-                  </div>
-                </div>
-              ) : (
-                <button onClick={() => setPasteKey(d.key)} className="mt-2 px-2 py-1 rounded border border-[#1b2344]">Bulk paste</button>
-              )}
-            </div>
             <div className="mt-3">
               <button onClick={() => setOpenLogKey(k => k === d.key ? null : d.key)} className="px-2 py-1 rounded border border-[#1b2344] text-xs">{openLogKey === d.key ? 'Close log' : 'Log session'}</button>
             </div>
