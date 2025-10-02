@@ -1,7 +1,7 @@
 import * as chrono from 'chrono-node';
 import { endOfDay } from 'date-fns';
 import type { WizardCourse, WizardPreview, Session, Reading, WizardTask, ReadingPriority, TaskType } from './wizard_types';
-import type { CourseMeetingBlock, NewCourseInput } from './types';
+import type { NewCourseInput } from './types';
 import { parseSyllabusToCourseMeta } from './parser';
 
 function unwrapHyphenation(s: string): string {
@@ -75,9 +75,8 @@ export function buildWizardPreview(rawText: string, courseHint?: string | null, 
     // Date heading or table date cell triggers a new session
     const ps = chrono.parse(line, new Date(), { forwardDate: true });
     const looksDate = ps.length > 0 && (ps[0].text.length / Math.max(1, line.length)) > 0.3;
-    const tableish = raw.includes('|') || /\t/.test(raw);
     if (looksDate) {
-      const d = ps[0].end?.date ? ps[0].end.date() : (ps[0].start?.date ? ps[0].start.date() : ps[0].date());
+      const d = ps[0].end ? ps[0].end.date() : (ps[0].start ? ps[0].start.date() : ps[0].date());
       const dateISO = endOfDay(d).toISOString();
       currentSession = { date: dateISO.slice(0,10), sequence_number: seq++, topic: null, readings: [], assignments_due: [], notes: null, canceled: /no class|cancell?ed/i.test(line), source_ref: `line:${i}`, confidence: confidence(0.9) };
       sessions.push(currentSession);
