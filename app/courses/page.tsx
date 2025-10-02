@@ -143,7 +143,7 @@ export default function CoursesPage() {
               {['Sun','Mon','Tue','Wed','Thu','Fri','Sat'].map((d, idx) => (
                 <label key={idx} className="inline-flex items-center gap-1 text-xs">
                   <input type="checkbox" checked={(newCourse.meetingDays || []).includes(idx)} onChange={e => {
-                    const set = new Set(newCourse.meetingDays || [] as number[]);
+                    const set: Set<number> = new Set<number>((newCourse.meetingDays || []) as number[]);
                     if (e.target.checked) set.add(idx); else set.delete(idx);
                     setNewCourse(n => ({ ...n, meetingDays: (Array.from(set as Set<number>) as number[]).sort((a, b) => a - b) }));
                   }} />{d}
@@ -166,7 +166,7 @@ export default function CoursesPage() {
                         <label key={idx} className="inline-flex items-center gap-1 text-xs">
                           <input type="checkbox" checked={(b.days || []).includes(idx)} onChange={e => {
                             const list = [...(newCourse.meetingBlocks as any[] || [])];
-                            const set = new Set(list[bi].days || []);
+                            const set: Set<number> = new Set<number>(((list[bi] as any).days || []) as number[]);
                             if (e.target.checked) set.add(idx); else set.delete(idx);
                             (list[bi] as any).days = (Array.from(set as Set<number>) as number[]).sort((a, b) => a - b);
                             setNewCourse(n => ({ ...n, meetingBlocks: list }));
@@ -334,7 +334,7 @@ export default function CoursesPage() {
                             {['Sun','Mon','Tue','Wed','Thu','Fri','Sat'].map((d, idx) => (
                               <label key={idx} className="inline-flex items-center gap-1 text-xs">
                                 <input type="checkbox" checked={(form.meetingDays || []).includes(idx)} onChange={e => {
-                                  const set = new Set(form.meetingDays || []);
+                                  const set: Set<number> = new Set<number>((form.meetingDays || []) as number[]);
                                   if (e.target.checked) set.add(idx as number); else set.delete(idx as number);
                                   setForm(f => ({ ...f, meetingDays: (Array.from(set as Set<number>) as number[]).sort((a, b) => a - b) }));
                                 }} />{d}
@@ -358,7 +358,7 @@ export default function CoursesPage() {
                                     <label key={idx} className="inline-flex items-center gap-1 text-xs">
                                       <input type="checkbox" checked={(b.days || []).includes(idx)} onChange={e => {
                                         const list = [...(form.meetingBlocks as any as CourseMeetingBlock[] || [])];
-                                        const set = new Set(list[bi].days || []);
+                                        const set: Set<number> = new Set<number>(((list[bi] as any).days || []) as number[]);
                                         if (e.target.checked) set.add(idx); else set.delete(idx);
                                         (list[bi] as any).days = (Array.from(set as Set<number>) as number[]).sort((a, b) => a - b);
                                         setForm(f => ({ ...f, meetingBlocks: list }));
