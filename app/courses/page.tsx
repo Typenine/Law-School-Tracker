@@ -26,6 +26,19 @@ export default function CoursesPage() {
     setCourses((data.courses || []) as Course[]);
     setLoading(false);
   }
+  const timeSlots = useMemo(() => {
+    const out: { value: string; label: string }[] = [];
+    for (let h = 0; h < 24; h++) {
+      for (let m = 0; m < 60; m += 30) {
+        const value = `${String(h).padStart(2,'0')}:${String(m).padStart(2,'0')}`;
+        const hh = ((h + 11) % 12) + 1;
+        const ampm = h < 12 ? 'AM' : 'PM';
+        const label = `${hh}:${String(m).padStart(2,'0')} ${ampm}`;
+        out.push({ value, label });
+      }
+    }
+    return out;
+  }, []);
 
   function computeEnd(hhmm: string | null | undefined, minutes: number) {
     if (!hhmm || !/^\d{2}:\d{2}$/.test(hhmm)) return '';
@@ -144,6 +157,10 @@ export default function CoursesPage() {
         </div>
         {addOpen && (
           <div className="mt-2 grid grid-cols-1 md:grid-cols-3 gap-2">
+            {/* Common time options for time inputs */}
+            <datalist id="time-options">
+              {timeSlots.map(ts => (<option key={ts.value} value={ts.value} label={ts.label} />))}
+            </datalist>
             <input placeholder="Code (optional)" value={newCourse.code ?? ''} onChange={e => setNewCourse(n => ({ ...n, code: e.target.value }))} className="bg-[#0b1020] border border-[#1b2344] rounded px-2 py-1" />
             <input placeholder="Title" value={newCourse.title ?? ''} onChange={e => setNewCourse(n => ({ ...n, title: e.target.value }))} className="bg-[#0b1020] border border-[#1b2344] rounded px-2 py-1" />
             <input placeholder="Instructor" value={newCourse.instructor ?? ''} onChange={e => setNewCourse(n => ({ ...n, instructor: e.target.value }))} className="bg-[#0b1020] border border-[#1b2344] rounded px-2 py-1" />
@@ -189,12 +206,12 @@ export default function CoursesPage() {
             {timeMode === 'simple' && (
             <div className="flex items-center gap-2 flex-wrap">
               <div className="flex items-center gap-1">
-                <input type="time" value={newCourse.meetingStart ?? ''} onChange={e => {
+                <input type="time" list="time-options" onFocus={e => (e.currentTarget as any).showPicker?.()} value={newCourse.meetingStart ?? ''} onChange={e => {
                   const v = e.target.value;
                   setNewCourse(n => ({ ...n, meetingStart: v, meetingEnd: computeEnd(v, parseInt(simpleDuration || '0', 10) || 0) || n.meetingEnd }));
                 }} className="bg-[#0b1020] border border-[#1b2344] rounded px-2 py-1" />
                 <span className="text-xs">–</span>
-                <input type="time" value={newCourse.meetingEnd ?? ''} onChange={e => setNewCourse(n => ({ ...n, meetingEnd: e.target.value }))} className="bg-[#0b1020] border border-[#1b2344] rounded px-2 py-1" />
+                <input type="time" list="time-options" onFocus={e => (e.currentTarget as any).showPicker?.()} value={newCourse.meetingEnd ?? ''} onChange={e => setNewCourse(n => ({ ...n, meetingEnd: e.target.value }))} className="bg-[#0b1020] border border-[#1b2344] rounded px-2 py-1" />
               </div>
               <div className="flex items-center gap-2">
                 <span className="text-[11px] text-slate-300/70">Duration (min)</span>
@@ -228,12 +245,12 @@ export default function CoursesPage() {
                         </label>
                       ))}
                     </div>
-                    <input type="time" value={(b as any).start || ''} onChange={e => {
+                    <input type="time" list="time-options" onFocus={e => (e.currentTarget as any).showPicker?.()} value={(b as any).start || ''} onChange={e => {
                       const list = [...(newCourse.meetingBlocks as any[] || [])];
                       (list[bi] as any).start = e.target.value; setNewCourse(n => ({ ...n, meetingBlocks: list }));
                     }} className="bg-[#0b1020] border border-[#1b2344] rounded px-1 py-0.5" />
                     <span className="text-xs">–</span>
-                    <input type="time" value={(b as any).end || ''} onChange={e => {
+                    <input type="time" list="time-options" onFocus={e => (e.currentTarget as any).showPicker?.()} value={(b as any).end || ''} onChange={e => {
                       const list = [...(newCourse.meetingBlocks as any[] || [])];
                       (list[bi] as any).end = e.target.value; setNewCourse(n => ({ ...n, meetingBlocks: list }));
                     }} className="bg-[#0b1020] border border-[#1b2344] rounded px-1 py-0.5" />
@@ -266,9 +283,9 @@ export default function CoursesPage() {
             )}
 
             <div className="flex items-center gap-1">
-              <input type="date" value={(newCourse.startDate ? String(newCourse.startDate).slice(0,10) : '')} onChange={e => setNewCourse(n => ({ ...n, startDate: e.target.value }))} className="bg-[#0b1020] border border-[#1b2344] rounded px-2 py-1" />
+              <input type="date" onFocus={e => (e.currentTarget as any).showPicker?.()} value={(newCourse.startDate ? String(newCourse.startDate).slice(0,10) : '')} onChange={e => setNewCourse(n => ({ ...n, startDate: e.target.value }))} className="bg-[#0b1020] border border-[#1b2344] rounded px-2 py-1" />
               <span className="text-xs">–</span>
-              <input type="date" value={(newCourse.endDate ? String(newCourse.endDate).slice(0,10) : '')} onChange={e => setNewCourse(n => ({ ...n, endDate: e.target.value }))} className="bg-[#0b1020] border border-[#1b2344] rounded px-2 py-1" />
+              <input type="date" onFocus={e => (e.currentTarget as any).showPicker?.()} value={(newCourse.endDate ? String(newCourse.endDate).slice(0,10) : '')} onChange={e => setNewCourse(n => ({ ...n, endDate: e.target.value }))} className="bg-[#0b1020] border border-[#1b2344] rounded px-2 py-1" />
             </div>
             <div className="flex items-center gap-2">
               <select value={(newCourse.semester as any) ?? ''} onChange={e => setNewCourse(n => ({ ...n, semester: (e.target.value || null) as any }))} className="bg-[#0b1020] border border-[#1b2344] rounded px-2 py-1">
