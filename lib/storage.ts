@@ -27,9 +27,10 @@ export async function listCourses(): Promise<Course[]> {
       meeting_days: number[] | null; meeting_start: string | null; meeting_end: string | null; meeting_blocks: any | null; start_date: Date | string | null; end_date: Date | string | null;
       semester: string | null; year: number | null; created_at: Date | string
     };
-    const res = await p.query(`SELECT id, code, title, instructor, instructor_email, room, location, meeting_days, meeting_start, meeting_end, meeting_blocks, start_date, end_date, semester, year, created_at FROM courses ORDER BY title`);
+    const res = await p.query(`SELECT id, code, title, instructor, instructor_email, room, location, color, meeting_days, meeting_start, meeting_end, meeting_blocks, start_date, end_date, semester, year, created_at FROM courses ORDER BY title`);
     return (res.rows as Row[]).map(r => ({
       id: r.id, code: r.code, title: r.title, instructor: r.instructor, instructorEmail: r.instructor_email, room: r.room, location: r.location,
+      color: (r as any).color ?? null,
       meetingDays: (r.meeting_days as any) ?? null, meetingStart: r.meeting_start, meetingEnd: r.meeting_end, meetingBlocks: (r.meeting_blocks as any) ?? null,
       startDate: r.start_date ? new Date(r.start_date).toISOString() : null, endDate: r.end_date ? new Date(r.end_date).toISOString() : null,
       semester: (r.semester as any) ?? null, year: r.year ?? null, createdAt: new Date(r.created_at as any).toISOString()
@@ -45,14 +46,14 @@ export async function createCourse(input: NewCourseInput): Promise<Course> {
     const p = getPool();
     const id = uuid();
     const res = await p.query(
-      `INSERT INTO courses (id, code, title, instructor, instructor_email, room, location, meeting_days, meeting_start, meeting_end, meeting_blocks, start_date, end_date, semester, year, created_at)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16)
-       RETURNING id, code, title, instructor, instructor_email, room, location, meeting_days, meeting_start, meeting_end, meeting_blocks, start_date, end_date, semester, year, created_at`,
-      [id, input.code ?? null, input.title, input.instructor ?? null, input.instructorEmail ?? null, input.room ?? null, input.location ?? null, input.meetingDays ?? null, input.meetingStart ?? null, input.meetingEnd ?? null, input.meetingBlocks ?? null, input.startDate ? new Date(input.startDate) : null, input.endDate ? new Date(input.endDate) : null, input.semester ?? null, input.year ?? null, new Date(now)]
+      `INSERT INTO courses (id, code, title, instructor, instructor_email, room, location, color, meeting_days, meeting_start, meeting_end, meeting_blocks, start_date, end_date, semester, year, created_at)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17)
+       RETURNING id, code, title, instructor, instructor_email, room, location, color, meeting_days, meeting_start, meeting_end, meeting_blocks, start_date, end_date, semester, year, created_at`,
+      [id, input.code ?? null, input.title, input.instructor ?? null, input.instructorEmail ?? null, input.room ?? null, input.location ?? null, (input as any).color ?? null, input.meetingDays ?? null, input.meetingStart ?? null, input.meetingEnd ?? null, input.meetingBlocks ?? null, input.startDate ? new Date(input.startDate) : null, input.endDate ? new Date(input.endDate) : null, input.semester ?? null, input.year ?? null, new Date(now)]
     );
     const r = res.rows[0];
     return {
-      id: r.id, code: r.code, title: r.title, instructor: r.instructor, instructorEmail: r.instructor_email, room: r.room, location: r.location,
+      id: r.id, code: r.code, title: r.title, instructor: r.instructor, instructorEmail: r.instructor_email, room: r.room, location: r.location, color: r.color ?? null,
       meetingDays: r.meeting_days ?? null, meetingStart: r.meeting_start, meetingEnd: r.meeting_end, meetingBlocks: r.meeting_blocks ?? null,
       startDate: r.start_date ? new Date(r.start_date).toISOString() : null, endDate: r.end_date ? new Date(r.end_date).toISOString() : null,
       semester: r.semester ?? null, year: r.year ?? null, createdAt: new Date(r.created_at).toISOString()
@@ -61,7 +62,7 @@ export async function createCourse(input: NewCourseInput): Promise<Course> {
   const db = await readJson();
   const c: Course = {
     id: uuid(), code: input.code ?? null, title: input.title, instructor: input.instructor ?? null, instructorEmail: input.instructorEmail ?? null,
-    room: input.room ?? null, location: input.location ?? null, meetingDays: input.meetingDays ?? null, meetingStart: input.meetingStart ?? null, meetingEnd: input.meetingEnd ?? null, meetingBlocks: input.meetingBlocks ?? null,
+    room: input.room ?? null, location: input.location ?? null, color: (input as any).color ?? null, meetingDays: input.meetingDays ?? null, meetingStart: input.meetingStart ?? null, meetingEnd: input.meetingEnd ?? null, meetingBlocks: input.meetingBlocks ?? null,
     startDate: input.startDate ?? null, endDate: input.endDate ?? null, semester: input.semester ?? null, year: input.year ?? null, createdAt: now
   };
   db.courses.push(c);
@@ -88,23 +89,23 @@ export async function updateCourse(id: string, patch: UpdateCourseInput): Promis
     if (patch.semester !== undefined) { fields.push(`semester = $${idx++}`); values.push(patch.semester); }
     if (patch.year !== undefined) { fields.push(`year = $${idx++}`); values.push(patch.year); }
     if (!fields.length) {
-      const cur = await p.query(`SELECT id, code, title, instructor, instructor_email, room, location, meeting_days, meeting_start, meeting_end, meeting_blocks, start_date, end_date, semester, year, created_at FROM courses WHERE id=$1`, [id]);
+      const cur = await p.query(`SELECT id, code, title, instructor, instructor_email, room, location, color, meeting_days, meeting_start, meeting_end, meeting_blocks, start_date, end_date, semester, year, created_at FROM courses WHERE id=$1`, [id]);
       if (!cur.rowCount) return null;
       const r = cur.rows[0];
       return {
-        id: r.id, code: r.code, title: r.title, instructor: r.instructor, instructorEmail: r.instructor_email, room: r.room, location: r.location,
+        id: r.id, code: r.code, title: r.title, instructor: r.instructor, instructorEmail: r.instructor_email, room: r.room, location: r.location, color: r.color ?? null,
         meetingDays: r.meeting_days ?? null, meetingStart: r.meeting_start, meetingEnd: r.meeting_end, meetingBlocks: r.meeting_blocks ?? null,
         startDate: r.start_date ? new Date(r.start_date).toISOString() : null, endDate: r.end_date ? new Date(r.end_date).toISOString() : null,
         semester: r.semester ?? null, year: r.year ?? null, createdAt: new Date(r.created_at).toISOString()
       };
     }
-    const q = `UPDATE courses SET ${fields.join(', ')} WHERE id = $${idx} RETURNING id, code, title, instructor, instructor_email, room, location, meeting_days, meeting_start, meeting_end, meeting_blocks, start_date, end_date, semester, year, created_at`;
+    const q = `UPDATE courses SET ${fields.join(', ')} WHERE id = $${idx} RETURNING id, code, title, instructor, instructor_email, room, location, color, meeting_days, meeting_start, meeting_end, meeting_blocks, start_date, end_date, semester, year, created_at`;
     values.push(id);
     const res = await p.query(q, values);
     if (!res.rowCount) return null;
     const r = res.rows[0];
     return {
-      id: r.id, code: r.code, title: r.title, instructor: r.instructor, instructorEmail: r.instructor_email, room: r.room, location: r.location,
+      id: r.id, code: r.code, title: r.title, instructor: r.instructor, instructorEmail: r.instructor_email, room: r.room, location: r.location, color: r.color ?? null,
       meetingDays: r.meeting_days ?? null, meetingStart: r.meeting_start, meetingEnd: r.meeting_end, meetingBlocks: r.meeting_blocks ?? null,
       startDate: r.start_date ? new Date(r.start_date).toISOString() : null, endDate: r.end_date ? new Date(r.end_date).toISOString() : null,
       semester: r.semester ?? null, year: r.year ?? null, createdAt: new Date(r.created_at).toISOString()
@@ -177,6 +178,10 @@ export async function ensureSchema() {
       minutes integer NOT NULL,
       focus integer,
       notes text,
+      pages_read integer,
+      outline_pages integer,
+      practice_qs integer,
+      activity text,
       created_at timestamptz NOT NULL DEFAULT now()
     );
   `);
@@ -311,10 +316,10 @@ export async function deleteTask(id: string): Promise<boolean> {
 export async function listSessions(): Promise<StudySession[]> {
   if (DB_URL) {
     const p = getPool();
-    type SessionRow = { id: string; task_id: string | null; when_ts: Date | string; minutes: number; focus: number | null; notes: string | null; created_at: Date | string };
-    const res = await p.query(`SELECT id, task_id, when_ts, minutes, focus, notes, created_at FROM sessions ORDER BY when_ts DESC`);
+    type SessionRow = { id: string; task_id: string | null; when_ts: Date | string; minutes: number; focus: number | null; notes: string | null; pages_read: number | null; outline_pages: number | null; practice_qs: number | null; activity: string | null; created_at: Date | string };
+    const res = await p.query(`SELECT id, task_id, when_ts, minutes, focus, notes, pages_read, outline_pages, practice_qs, activity, created_at FROM sessions ORDER BY when_ts DESC`);
     const rows = res.rows as unknown as SessionRow[];
-    return rows.map(r => ({ id: r.id, taskId: r.task_id, when: new Date(r.when_ts).toISOString(), minutes: r.minutes, focus: r.focus, notes: r.notes, createdAt: new Date(r.created_at).toISOString() }));
+    return rows.map(r => ({ id: r.id, taskId: r.task_id, when: new Date(r.when_ts).toISOString(), minutes: r.minutes, focus: r.focus, notes: r.notes, pagesRead: r.pages_read, outlinePages: r.outline_pages, practiceQs: r.practice_qs, activity: r.activity, createdAt: new Date(r.created_at).toISOString() }));
   }
   const db = await readJson();
   return db.sessions.sort((a, b) => b.when.localeCompare(a.when));
@@ -327,14 +332,16 @@ export async function createSession(input: NewSessionInput): Promise<StudySessio
     const p = getPool();
     const id = uuid();
     const res = await p.query(
-      `INSERT INTO sessions (id, task_id, when_ts, minutes, focus, notes, created_at) VALUES ($1,$2,$3,$4,$5,$6,$7) RETURNING id, task_id, when_ts, minutes, focus, notes, created_at`,
-      [id, input.taskId ?? null, new Date(whenISO), input.minutes, input.focus ?? null, input.notes ?? null, new Date(now)]
+      `INSERT INTO sessions (id, task_id, when_ts, minutes, focus, notes, pages_read, outline_pages, practice_qs, activity, created_at)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)
+       RETURNING id, task_id, when_ts, minutes, focus, notes, pages_read, outline_pages, practice_qs, activity, created_at`,
+      [id, input.taskId ?? null, new Date(whenISO), input.minutes, input.focus ?? null, input.notes ?? null, input.pagesRead ?? null, input.outlinePages ?? null, input.practiceQs ?? null, input.activity ?? null, new Date(now)]
     );
     const r = res.rows[0];
-    return { id: r.id, taskId: r.task_id, when: new Date(r.when_ts).toISOString(), minutes: r.minutes, focus: r.focus, notes: r.notes, createdAt: new Date(r.created_at).toISOString() };
+    return { id: r.id, taskId: r.task_id, when: new Date(r.when_ts).toISOString(), minutes: r.minutes, focus: r.focus, notes: r.notes, pagesRead: r.pages_read, outlinePages: r.outline_pages, practiceQs: r.practice_qs, activity: r.activity, createdAt: new Date(r.created_at).toISOString() };
   }
   const db = await readJson();
-  const s: StudySession = { id: uuid(), taskId: input.taskId ?? null, when: whenISO, minutes: input.minutes, focus: input.focus ?? null, notes: input.notes ?? null, createdAt: now };
+  const s: StudySession = { id: uuid(), taskId: input.taskId ?? null, when: whenISO, minutes: input.minutes, focus: input.focus ?? null, notes: input.notes ?? null, pagesRead: input.pagesRead ?? null, outlinePages: input.outlinePages ?? null, practiceQs: input.practiceQs ?? null, activity: input.activity ?? null, createdAt: now };
   db.sessions.unshift(s);
   await writeJson(db);
   return s;

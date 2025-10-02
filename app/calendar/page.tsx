@@ -17,6 +17,12 @@ export default function CalendarPage() {
   const [statusFilter, setStatusFilter] = useState<'all' | 'todo' | 'done'>('all');
   const [selectedDayKey, setSelectedDayKey] = useState<string | null>(null);
   const [courses, setCourses] = useState<any[]>([]);
+  const [monthOpen, setMonthOpen] = useState(false);
+  const [addOpen, setAddOpen] = useState(false);
+  const [addTitle, setAddTitle] = useState('');
+  const [addCourse, setAddCourse] = useState('');
+  const [addDate, setAddDate] = useState(''); // yyyy-mm-dd
+  const [addEst, setAddEst] = useState('');
 
   async function refresh() {
     setLoading(true);
@@ -115,6 +121,47 @@ export default function CalendarPage() {
     return m;
   }, [courses, weeks, year, month, courseFilter]);
 
+  const monthLabel = useMemo(() => new Date(year, month, 1).toLocaleString(undefined, { month: 'long', year: 'numeric' }), [year, month]);
+  const monthNames = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
+
+  function openAdd() {
+    const today = new Date();
+    let d: Date;
+    if (selectedDayKey) {
+      const [y, m, da] = selectedDayKey.split('-').map(n => parseInt(n, 10));
+      d = new Date(y, (m as number) - 1, da);
+    } else if (today.getFullYear() === year && today.getMonth() === month) {
+      d = today;
+    } else {
+      d = new Date(year, month, 1);
+    }
+    const yyyy = d.getFullYear();
+    const mm = String(d.getMonth()+1).padStart(2,'0');
+    const dd = String(d.getDate()).padStart(2,'0');
+    setAddDate(`${yyyy}-${mm}-${dd}`);
+    setAddCourse(''); setAddTitle(''); setAddEst('');
+    setAddOpen(true); setMonthOpen(false);
+  }
+
+  async function createEvent() {
+    if (!addTitle || !addDate) return;
+    const parts = addDate.split('-').map(n => parseInt(n, 10));
+    if (parts.length !== 3) return;
+    const d = new Date(parts[0], parts[1]-1, parts[2], 23,59,59,999);
+    const body: any = {
+      title: addTitle,
+      course: addCourse ? addCourse : null,
+      dueDate: d.toISOString(),
+      status: 'todo',
+      estimatedMinutes: addEst ? parseInt(addEst, 10) : null,
+    };
+    const res = await fetch('/api/tasks', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
+    if (res.ok) {
+      setAddOpen(false); setAddTitle(''); setAddCourse(''); setAddEst('');
+      await refresh();
+    }
+  }
+
   function onDragStart(e: React.DragEvent, t: Task) {
     e.dataTransfer.setData('text/plain', t.id);
   }
@@ -149,10 +196,64 @@ export default function CalendarPage() {
     <main className="space-y-4">
       <div className="flex items-center justify-between">
         <h2 className="text-lg font-medium">Calendar</h2>
-        <div className="flex items-center gap-2">
-          <button onClick={() => { const d = new Date(year, month - 1, 1); setYear(d.getFullYear()); setMonth(d.getMonth()); }} className="px-2 py-1 rounded border border-[#1b2344]">Prev</button>
-          <div className="text-sm text-slate-300/80 min-w-[140px] text-center">{new Date(year, month, 1).toLocaleString(undefined, { month: 'long', year: 'numeric' })}</div>
-          <button onClick={() => { const d = new Date(year, month + 1, 1); setYear(d.getFullYear()); setMonth(d.getMonth()); }} className="px-2 py-1 rounded border border-[#1b2344]">Next</button>
+        <div className="flex items-center gap-2 relative">
+          <button onClick={() => { const d = new Date(year, month - 1, 1); setYear(d.getFullYear()); setMonth(d.getMonth()); setMonthOpen(false); }} className="px-2 py-1 rounded border border-[#1b2344]">Prev</button>
+          <button onClick={() => setMonthOpen(o => !o)} className="text-sm text-slate-300/90 min-w-[160px] text-center px-3 py-1 rounded border border-[#1b2344] bg-[#0b1020] hover:bg-[#0f1530]">
+            {monthLabel}
+          </button>
+          <button onClick={() => { const d = new Date(year, month + 1, 1); setYear(d.getFullYear()); setMonth(d.getMonth()); setMonthOpen(false); }} className="px-2 py-1 rounded border border-[#1b2344]">Next</button>
+          <button onClick={openAdd} className="px-2 py-1 rounded bg-emerald-600 hover:bg-emerald-500">Add event</button>
+
+          {monthOpen && (
+            <div className="absolute z-10 top-[120%] left-1/2 -translate-x-1/2 bg-[#0b1020] border border-[#1b2344] rounded shadow-xl p-3 w-72">
+              <div className="flex items-center justify-between mb-2">
+                <button onClick={() => setYear(y => y - 1)} className="px-2 py-1 rounded border border-[#1b2344]">◀</button>
+                <div className="text-sm">{year}</div>
+                <button onClick={() => setYear(y => y + 1)} className="px-2 py-1 rounded border border-[#1b2344]">▶</button>
+              </div>
+      {addOpen && (
+        <div className="border border-[#1b2344] rounded p-3 bg-[#0b1020]">
+          <div className="text-sm font-medium mb-2">Add event</div>
+          <div className="grid grid-cols-1 md:grid-cols-5 gap-2 items-end">
+            <div className="md:col-span-2">
+              <label className="block text-xs mb-1">Title</label>
+              <input value={addTitle} onChange={e => setAddTitle(e.target.value)} className="w-full bg-[#0b1020] border border-[#1b2344] rounded px-3 py-2" />
+            </div>
+            <div>
+              <label className="block text-xs mb-1">Date</label>
+              <input type="date" value={addDate} onChange={e => setAddDate(e.target.value)} className="w-full bg-[#0b1020] border border-[#1b2344] rounded px-3 py-2" />
+            </div>
+            <div>
+              <label className="block text-xs mb-1">Course (optional)</label>
+              <select value={addCourse} onChange={e => setAddCourse(e.target.value)} className="w-full bg-[#0b1020] border border-[#1b2344] rounded px-3 py-2">
+                <option value="">-- none --</option>
+                {courses.map((c: any) => (
+                  <option key={c.id} value={c.title || c.code || ''}>{c.title || c.code}</option>
+                ))}
+              </select>
+            </div>
+            <div>
+              <label className="block text-xs mb-1">Est. min (opt)</label>
+              <input type="number" min={0} step={5} value={addEst} onChange={e => setAddEst(e.target.value)} className="w-full bg-[#0b1020] border border-[#1b2344] rounded px-3 py-2" />
+            </div>
+          </div>
+          <div className="mt-3 flex gap-2">
+            <button onClick={createEvent} className="px-3 py-2 rounded bg-blue-600 hover:bg-blue-500 disabled:opacity-50" disabled={!addTitle || !addDate}>Create</button>
+            <button onClick={() => setAddOpen(false)} className="px-3 py-2 rounded border border-[#1b2344]">Cancel</button>
+          </div>
+        </div>
+      )}
+              <div className="grid grid-cols-3 gap-2">
+                {monthNames.map((name, idx) => (
+                  <button key={idx} onClick={() => { setMonth(idx); setMonthOpen(false); }} className={`px-2 py-1 rounded border border-[#1b2344] text-sm ${idx===month ? 'bg-blue-600 hover:bg-blue-500' : 'hover:bg-[#0f1530]'}`}>{name}</button>
+                ))}
+              </div>
+              <div className="mt-3 flex items-center justify-between">
+                <button onClick={() => { const d = new Date(); setYear(d.getFullYear()); setMonth(d.getMonth()); setMonthOpen(false); }} className="px-2 py-1 rounded border border-[#1b2344]">Today</button>
+                <button onClick={() => setMonthOpen(false)} className="px-2 py-1 rounded border border-[#1b2344]">Close</button>
+              </div>
+            </div>
+          )}
         </div>
       </div>
       <div className="grid grid-cols-1 md:grid-cols-3 gap-2">

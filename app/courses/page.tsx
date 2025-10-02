@@ -5,7 +5,7 @@ import { courseColorClass } from '@/lib/colors';
 
 export const dynamic = 'force-dynamic';
 
-const SEMS: Semester[] = ['Spring','Summer','Fall','Winter'];
+const SEMS: Semester[] = ['Spring','Summer','Fall'];
 
 export default function CoursesPage() {
   const [courses, setCourses] = useState<Course[]>([]);
@@ -211,7 +211,9 @@ export default function CoursesPage() {
       {loading ? (
         <div className="text-sm">Loading…</div>
       ) : filtered.length === 0 ? (
-        <div className="text-sm text-slate-300/80">No courses yet. Upload a syllabus to auto-create a course, or add one manually via the API.</div>
+        <div className="text-sm text-slate-300/80">
+          No courses yet. Use the <span className="underline">Syllabus Import</span> on the Settings page, or add a course above.
+        </div>
       ) : (
         <div className="overflow-x-auto">
           <table className="w-full text-sm">

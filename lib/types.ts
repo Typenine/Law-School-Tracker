@@ -16,7 +16,7 @@ export interface Task {
   term?: string | null;
 }
 
-export type Semester = 'Spring' | 'Summer' | 'Fall' | 'Winter';
+export type Semester = 'Spring' | 'Summer' | 'Fall';
 
 export interface Course {
   id: string;
@@ -26,6 +26,7 @@ export interface Course {
   instructorEmail?: string | null;
   room?: string | null;
   location?: string | null;
+  color?: string | null; // hex like #7c3aed
   meetingDays?: number[] | null; // 0=Sun..6=Sat
   meetingStart?: string | null; // HH:MM (24h)
   meetingEnd?: string | null; // HH:MM (24h)
@@ -44,6 +45,7 @@ export interface NewCourseInput {
   instructorEmail?: string | null;
   room?: string | null;
   location?: string | null;
+  color?: string | null;
   meetingDays?: number[] | null;
   meetingStart?: string | null;
   meetingEnd?: string | null;
@@ -61,6 +63,7 @@ export interface UpdateCourseInput {
   instructorEmail?: string | null;
   room?: string | null;
   location?: string | null;
+  color?: string | null;
   meetingDays?: number[] | null;
   meetingStart?: string | null;
   meetingEnd?: string | null;
@@ -113,6 +116,10 @@ export interface StudySession {
   minutes: number;
   focus?: number | null; // 1-10
   notes?: string | null;
+  pagesRead?: number | null;
+  outlinePages?: number | null;
+  practiceQs?: number | null;
+  activity?: string | null; // reading|review|outline|practice|other
   createdAt: string; // ISO
 }
 
@@ -122,6 +129,10 @@ export interface NewSessionInput {
   minutes: number;
   focus?: number | null;
   notes?: string | null;
+  pagesRead?: number | null;
+  outlinePages?: number | null;
+  practiceQs?: number | null;
+  activity?: string | null;
 }
 
 export interface StatsPayload {

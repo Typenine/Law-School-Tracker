@@ -20,6 +20,10 @@ export async function POST(req: NextRequest) {
     minutes: z.number().int().positive(),
     focus: z.number().int().min(1).max(10).optional().nullable(),
     notes: z.string().max(1000).optional().nullable(),
+    pagesRead: z.number().int().min(0).optional().nullable(),
+    outlinePages: z.number().int().min(0).optional().nullable(),
+    practiceQs: z.number().int().min(0).optional().nullable(),
+    activity: z.string().max(32).optional().nullable(),
   });
   const parsed = schema.safeParse(await req.json());
   if (!parsed.success) return new Response('Invalid session body', { status: 400 });
@@ -30,6 +34,10 @@ export async function POST(req: NextRequest) {
     minutes: body.minutes,
     focus: body.focus ?? null,
     notes: body.notes ?? null,
+    pagesRead: body.pagesRead ?? null,
+    outlinePages: body.outlinePages ?? null,
+    practiceQs: body.practiceQs ?? null,
+    activity: body.activity ?? null,
   });
   return Response.json({ session: s }, { status: 201 });
 }
