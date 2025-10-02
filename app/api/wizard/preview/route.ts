@@ -40,19 +40,39 @@ export async function POST(req: Request) {
   if (!text || text.trim().length === 0) return new Response('Unable to extract text from file', { status: 400 });
 
   const preview = buildWizardPreview(text, course, { timezone: tz });
-  // Provide raw lines (trimmed) for mapping UI and a basic table candidate set
-  const lines = text.split(/\r?\n/).slice(0, 500);
+  // Provide raw lines and best-effort table-like rows for Mapping
+  const rawLines = text.split(/\r?\n/);
   const tables: Array<{ rows: string[][] } > = [];
-  for (const ln of lines) {
-    if (!ln) continue;
-    if (ln.includes('|')) {
-      const cells = ln.split('|').map(c => c.trim());
-      if (cells.filter(Boolean).length >= 2) tables.push({ rows: [cells] });
-    } else if (/\t/.test(ln)) {
-      const cells = ln.split(/\t+/).map(c => c.trim());
-      if (cells.filter(Boolean).length >= 2) tables.push({ rows: [cells] });
+  for (const ln of rawLines) {
+    const line = ln; // keep spacing for 3+ space splits
+    const trimmed = line.trim();
+    if (!trimmed) continue;
+    let cells: string[] | null = null;
+    if (line.includes('|')) {
+      cells = line.split('|').map(c => c.trim());
+    } else if (/\t/.test(line)) {
+      cells = line.split(/\t+/).map(c => c.trim());
+    } else if (/\s{3,}/.test(line)) {
+      // columns separated by 3+ spaces (common in PDF text)
+      const parts = line.split(/\s{3,}/).map(c => c.trim()).filter(Boolean);
+      if (parts.length >= 2) cells = parts;
+    } else {
+      // Line starting with a date → [date, rest]
+      const p = (await import('chrono-node')).parse(line, new Date(), { forwardDate: true });
+      if (p.length) {
+        const r = p[0];
+        const idx = (r as any).index ?? line.toLowerCase().indexOf(r.text.toLowerCase());
+        if (idx !== undefined && idx <= 5) {
+          const dateText = r.text;
+          const after = line.slice(idx + dateText.length).trim();
+          const before = line.slice(0, idx).trim();
+          const arr = [dateText, after].filter(Boolean);
+          if (arr.length >= 1) cells = arr.length === 1 ? [arr[0], ''] : arr;
+        }
+      }
     }
-    if (tables.length >= 100) break;
+    if (cells && cells.filter(Boolean).length >= 1) tables.push({ rows: [cells] });
+    if (tables.length >= 300) break;
   }
-  return Response.json({ preview, lines: lines.slice(0, 300), tables });
+  return Response.json({ preview, lines: rawLines.slice(0, 300), tables });
 }
