@@ -1,5 +1,6 @@
 "use client";
 import { useEffect, useState } from 'react';
+import Link from 'next/link';
 import ParserReview from '@/components/ParserReview';
 import type { NewTaskInput } from '@/lib/types';
 
@@ -117,7 +118,10 @@ export default function UploadCard() {
 
   return (
     <div>
-      <h2 className="text-lg font-medium mb-3">Upload Syllabus</h2>
+      <div className="flex items-center justify-between mb-3">
+        <h2 className="text-lg font-medium">Upload Syllabus</h2>
+        <Link href="/wizard" className="text-sm px-3 py-1.5 rounded border border-[#1b2344] hover:bg-[#0b1020]">Open Wizard</Link>
+      </div>
       <div className="flex flex-col md:flex-row gap-3 items-start md:items-end">
         <div className="flex-1 w-full">
           <label className="block text-sm mb-1">Course (optional)</label>
