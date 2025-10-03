@@ -21,20 +21,30 @@ function getPool(): Pool {
 // Courses
 export async function listCourses(): Promise<Course[]> {
   if (DB_URL) {
-    const p = getPool();
-    type Row = {
-      id: string; code: string | null; title: string; instructor: string | null; instructor_email: string | null; room: string | null; location: string | null;
-      meeting_days: number[] | null; meeting_start: string | null; meeting_end: string | null; meeting_blocks: any | null; start_date: Date | string | null; end_date: Date | string | null;
-      semester: string | null; year: number | null; created_at: Date | string
-    };
-    const res = await p.query(`SELECT id, code, title, instructor, instructor_email, room, location, color, meeting_days, meeting_start, meeting_end, meeting_blocks, start_date, end_date, semester, year, created_at FROM courses ORDER BY title`);
-    return (res.rows as Row[]).map(r => ({
-      id: r.id, code: r.code, title: r.title, instructor: r.instructor, instructorEmail: r.instructor_email, room: r.room, location: r.location,
-      color: (r as any).color ?? null,
-      meetingDays: (r.meeting_days as any) ?? null, meetingStart: r.meeting_start, meetingEnd: r.meeting_end, meetingBlocks: (r.meeting_blocks as any) ?? null,
-      startDate: r.start_date ? new Date(r.start_date).toISOString() : null, endDate: r.end_date ? new Date(r.end_date).toISOString() : null,
-      semester: (r.semester as any) ?? null, year: r.year ?? null, createdAt: new Date(r.created_at as any).toISOString()
-    }));
+    try {
+      const p = getPool();
+      type Row = {
+        id: string; code: string | null; title: string; instructor: string | null; instructor_email: string | null; room: string | null; location: string | null;
+        meeting_days: number[] | null; meeting_start: string | null; meeting_end: string | null; meeting_blocks: any | null; start_date: Date | string | null; end_date: Date | string | null;
+        semester: string | null; year: number | null; created_at: Date | string
+      };
+      const res = await p.query(`SELECT id, code, title, instructor, instructor_email, room, location, color, meeting_days, meeting_start, meeting_end, meeting_blocks, start_date, end_date, semester, year, created_at FROM courses ORDER BY title`);
+      const fromDb = (res.rows as Row[]).map(r => ({
+        id: r.id, code: r.code, title: r.title, instructor: r.instructor, instructorEmail: r.instructor_email, room: r.room, location: r.location,
+        color: (r as any).color ?? null,
+        meetingDays: (r.meeting_days as any) ?? null, meetingStart: r.meeting_start, meetingEnd: r.meeting_end, meetingBlocks: (r.meeting_blocks as any) ?? null,
+        startDate: r.start_date ? new Date(r.start_date).toISOString() : null, endDate: r.end_date ? new Date(r.end_date).toISOString() : null,
+        semester: (r.semester as any) ?? null, year: r.year ?? null, createdAt: new Date(r.created_at as any).toISOString()
+      }));
+      if (fromDb.length > 0) return fromDb;
+      // If DB is empty (e.g., local insert fell back to JSON), read JSON file
+      const json = await readJson();
+      if (json.courses?.length) return json.courses.sort((a, b) => a.title.localeCompare(b.title));
+      return fromDb;
+    } catch (e) {
+      // Fallback to JSON store if Postgres is unavailable
+      console.warn('listCourses: falling back to JSON store:', (e as any)?.message || e);
+    }
   }
   const db = await readJson();
   return db.courses.sort((a, b) => a.title.localeCompare(b.title));
@@ -43,21 +53,26 @@ export async function listCourses(): Promise<Course[]> {
 export async function createCourse(input: NewCourseInput): Promise<Course> {
   const now = new Date().toISOString();
   if (DB_URL) {
-    const p = getPool();
-    const id = uuid();
-    const res = await p.query(
-      `INSERT INTO courses (id, code, title, instructor, instructor_email, room, location, color, meeting_days, meeting_start, meeting_end, meeting_blocks, start_date, end_date, semester, year, created_at)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17)
-       RETURNING id, code, title, instructor, instructor_email, room, location, color, meeting_days, meeting_start, meeting_end, meeting_blocks, start_date, end_date, semester, year, created_at`,
-      [id, input.code ?? null, input.title, input.instructor ?? null, input.instructorEmail ?? null, input.room ?? null, input.location ?? null, (input as any).color ?? null, input.meetingDays ?? null, input.meetingStart ?? null, input.meetingEnd ?? null, input.meetingBlocks ?? null, input.startDate ? new Date(input.startDate) : null, input.endDate ? new Date(input.endDate) : null, input.semester ?? null, input.year ?? null, new Date(now)]
-    );
-    const r = res.rows[0];
-    return {
-      id: r.id, code: r.code, title: r.title, instructor: r.instructor, instructorEmail: r.instructor_email, room: r.room, location: r.location, color: r.color ?? null,
-      meetingDays: r.meeting_days ?? null, meetingStart: r.meeting_start, meetingEnd: r.meeting_end, meetingBlocks: r.meeting_blocks ?? null,
-      startDate: r.start_date ? new Date(r.start_date).toISOString() : null, endDate: r.end_date ? new Date(r.end_date).toISOString() : null,
-      semester: r.semester ?? null, year: r.year ?? null, createdAt: new Date(r.created_at).toISOString()
-    };
+    try {
+      const p = getPool();
+      const id = uuid();
+      const res = await p.query(
+        `INSERT INTO courses (id, code, title, instructor, instructor_email, room, location, color, meeting_days, meeting_start, meeting_end, meeting_blocks, start_date, end_date, semester, year, created_at)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17)
+         RETURNING id, code, title, instructor, instructor_email, room, location, color, meeting_days, meeting_start, meeting_end, meeting_blocks, start_date, end_date, semester, year, created_at`,
+        [id, input.code ?? null, input.title, input.instructor ?? null, input.instructorEmail ?? null, input.room ?? null, input.location ?? null, (input as any).color ?? null, input.meetingDays ?? null, input.meetingStart ?? null, input.meetingEnd ?? null, input.meetingBlocks ?? null, input.startDate ? new Date(input.startDate) : null, input.endDate ? new Date(input.endDate) : null, input.semester ?? null, input.year ?? null, new Date(now)]
+      );
+      const r = res.rows[0];
+      return {
+        id: r.id, code: r.code, title: r.title, instructor: r.instructor, instructorEmail: r.instructor_email, room: r.room, location: r.location, color: r.color ?? null,
+        meetingDays: r.meeting_days ?? null, meetingStart: r.meeting_start, meetingEnd: r.meeting_end, meetingBlocks: r.meeting_blocks ?? null,
+        startDate: r.start_date ? new Date(r.start_date).toISOString() : null, endDate: r.end_date ? new Date(r.end_date).toISOString() : null,
+        semester: r.semester ?? null, year: r.year ?? null, createdAt: new Date(r.created_at).toISOString()
+      };
+    } catch (e) {
+      console.warn('createCourse: Postgres insert failed, falling back to JSON store:', (e as any)?.message || e);
+      // Fall through to JSON implementation
+    }
   }
   const db = await readJson();
   const c: Course = {
@@ -135,58 +150,62 @@ export async function deleteCourse(id: string): Promise<boolean> {
 
 export async function ensureSchema() {
   if (!DB_URL) return; // JSON mode doesn't need schema
-  const p = getPool();
-  await p.query(`
-    CREATE TABLE IF NOT EXISTS tasks (
-      id uuid PRIMARY KEY,
-      title text NOT NULL,
-      course text,
-      due_date timestamptz NOT NULL,
-      status text NOT NULL DEFAULT 'todo',
-      created_at timestamptz NOT NULL DEFAULT now()
-    );
-    ALTER TABLE tasks ADD COLUMN IF NOT EXISTS estimated_minutes integer;
-    ALTER TABLE tasks ADD COLUMN IF NOT EXISTS priority integer;
-    ALTER TABLE tasks ADD COLUMN IF NOT EXISTS notes text;
-    ALTER TABLE tasks ADD COLUMN IF NOT EXISTS attachments jsonb;
-    ALTER TABLE tasks ADD COLUMN IF NOT EXISTS depends_on uuid[];
-    ALTER TABLE tasks ADD COLUMN IF NOT EXISTS tags jsonb;
-    ALTER TABLE tasks ADD COLUMN IF NOT EXISTS term text;
-    CREATE TABLE IF NOT EXISTS courses (
-      id uuid PRIMARY KEY,
-      code text,
-      title text NOT NULL,
-      instructor text,
-      instructor_email text,
-      room text,
-      location text,
-      color text,
-      meeting_days integer[],
-      meeting_start text,
-      meeting_end text,
-      meeting_blocks jsonb,
-      start_date date,
-      end_date date,
-      semester text,
-      year integer,
-      created_at timestamptz NOT NULL DEFAULT now()
-    );
-    ALTER TABLE courses ADD COLUMN IF NOT EXISTS meeting_blocks jsonb;
-    ALTER TABLE courses ADD COLUMN IF NOT EXISTS color text;
-    CREATE TABLE IF NOT EXISTS sessions (
-      id uuid PRIMARY KEY,
-      task_id uuid REFERENCES tasks(id) ON DELETE SET NULL,
-      when_ts timestamptz NOT NULL DEFAULT now(),
-      minutes integer NOT NULL,
-      focus integer,
-      notes text,
-      pages_read integer,
-      outline_pages integer,
-      practice_qs integer,
-      activity text,
-      created_at timestamptz NOT NULL DEFAULT now()
-    );
-  `);
+  try {
+    const p = getPool();
+    await p.query(`
+      CREATE TABLE IF NOT EXISTS tasks (
+        id uuid PRIMARY KEY,
+        title text NOT NULL,
+        course text,
+        due_date timestamptz NOT NULL,
+        status text NOT NULL DEFAULT 'todo',
+        created_at timestamptz NOT NULL DEFAULT now()
+      );
+      ALTER TABLE tasks ADD COLUMN IF NOT EXISTS estimated_minutes integer;
+      ALTER TABLE tasks ADD COLUMN IF NOT EXISTS priority integer;
+      ALTER TABLE tasks ADD COLUMN IF NOT EXISTS notes text;
+      ALTER TABLE tasks ADD COLUMN IF NOT EXISTS attachments jsonb;
+      ALTER TABLE tasks ADD COLUMN IF NOT EXISTS depends_on uuid[];
+      ALTER TABLE tasks ADD COLUMN IF NOT EXISTS tags jsonb;
+      ALTER TABLE tasks ADD COLUMN IF NOT EXISTS term text;
+      CREATE TABLE IF NOT EXISTS courses (
+        id uuid PRIMARY KEY,
+        code text,
+        title text NOT NULL,
+        instructor text,
+        instructor_email text,
+        room text,
+        location text,
+        color text,
+        meeting_days integer[],
+        meeting_start text,
+        meeting_end text,
+        meeting_blocks jsonb,
+        start_date date,
+        end_date date,
+        semester text,
+        year integer,
+        created_at timestamptz NOT NULL DEFAULT now()
+      );
+      ALTER TABLE courses ADD COLUMN IF NOT EXISTS meeting_blocks jsonb;
+      ALTER TABLE courses ADD COLUMN IF NOT EXISTS color text;
+      CREATE TABLE IF NOT EXISTS sessions (
+        id uuid PRIMARY KEY,
+        task_id uuid REFERENCES tasks(id) ON DELETE SET NULL,
+        when_ts timestamptz NOT NULL DEFAULT now(),
+        minutes integer NOT NULL,
+        focus integer,
+        notes text,
+        pages_read integer,
+        outline_pages integer,
+        practice_qs integer,
+        activity text,
+        created_at timestamptz NOT NULL DEFAULT now()
+      );
+    `);
+  } catch (e) {
+    console.warn('ensureSchema: Postgres unavailable, continuing with JSON store:', (e as any)?.message || e);
+  }
 }
 
 function uuid() {

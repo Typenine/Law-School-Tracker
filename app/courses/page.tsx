@@ -354,6 +354,11 @@ export default function CoursesPage() {
                   setAddDebug({ status: undefined, message: 'Submitting…', payload });
                   const res = await fetch('/api/courses', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) });
                   if (res.ok) {
+                    const data = await res.json().catch(() => null as any);
+                    const created = (data && (data as any).course) ? (data as any).course : null;
+                    if (created) {
+                      setCourses(prev => [...prev, created as any].sort((a, b) => (a.title || '').localeCompare(b.title || '')));
+                    }
                     setAddOpen(false);
                     setNewCourse({ title: '', meetingDays: [], meetingBlocks: [], color: undefined });
                     setTimeMode('simple'); setSimpleDuration('75');

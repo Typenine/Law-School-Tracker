@@ -9,11 +9,31 @@ export default function TaskAddForm({ onCreated }: Props) {
   const [newDue, setNewDue] = useState('');
   const [newEst, setNewEst] = useState<string>('');
   const [currentTerm, setCurrentTerm] = useState<string>('');
+  const [courseOptions, setCourseOptions] = useState<Array<{ key: string; label: string }>>([]);
 
   useEffect(() => {
     if (typeof window !== 'undefined') {
       try { setCurrentTerm(window.localStorage.getItem('currentTerm') || ''); } catch {}
     }
+  }, []);
+
+  // Load courses for suggestions
+  useEffect(() => {
+    (async () => {
+      try {
+        const res = await fetch('/api/courses', { cache: 'no-store' });
+        if (!res.ok) return;
+        const data = await res.json();
+        const list: Array<{ key: string; label: string }> = (data.courses || []).map((c: any) => {
+          const title = (c.title || '').trim();
+          const code = (c.code || '').trim();
+          const label = code && title ? `${code} — ${title}` : (title || code || '');
+          const key = (title || code || '').toString();
+          return { key, label };
+        }).filter((x: any) => x.key);
+        setCourseOptions(list);
+      } catch {}
+    })();
   }, []);
 
   function isoToLocalInput(iso: string) {
@@ -78,7 +98,14 @@ export default function TaskAddForm({ onCreated }: Props) {
             } catch {}
           }} className="px-2 py-2 rounded border border-[#1b2344] text-xs">Parse</button>
         </div>
-        <input value={newCourse} onChange={e => setNewCourse(e.target.value)} placeholder="Course (optional)" className="w-full bg-[#0b1020] border border-[#1b2344] rounded px-3 py-2" />
+        <>
+          <datalist id="course-list">
+            {courseOptions.map(opt => (
+              <option key={opt.key} value={opt.key} label={opt.label} />
+            ))}
+          </datalist>
+          <input list="course-list" value={newCourse} onChange={e => setNewCourse(e.target.value)} placeholder="Course (optional)" className="w-full bg-[#0b1020] border border-[#1b2344] rounded px-3 py-2" />
+        </>
         <input type="datetime-local" value={newDue} onChange={e => setNewDue(e.target.value)} className="w-full bg-[#0b1020] border border-[#1b2344] rounded px-3 py-2" />
         <input type="number" min={0} step={5} value={newEst} onChange={e => setNewEst(e.target.value)} placeholder="Est. min" className="w-full bg-[#0b1020] border border-[#1b2344] rounded px-3 py-2" />
         <button type="submit" className="bg-blue-600 hover:bg-blue-500 px-3 py-2 rounded disabled:opacity-50" disabled={!newTitle || !newDue}>Add Task</button>
