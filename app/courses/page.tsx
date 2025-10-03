@@ -55,6 +55,16 @@ export default function CoursesPage() {
     const mi = norm % 60;
     return `${String(hh).padStart(2,'0')}:${String(mi).padStart(2,'0')}`;
   }
+  function fmt12(hhmm?: string | null) {
+    if (!hhmm || !/^\d{2}:\d{2}$/.test(hhmm)) return '';
+    const [hStr, mStr] = hhmm.split(':');
+    const h = parseInt(hStr, 10);
+    const m = parseInt(mStr, 10);
+    if (isNaN(h) || isNaN(m)) return '';
+    const h12 = ((h + 11) % 12) + 1;
+    const ampm = h < 12 ? 'AM' : 'PM';
+    return `${h12}:${String(m).padStart(2,'0')} ${ampm}`;
+  }
   useEffect(() => { refresh(); }, []);
 
   // When opening Add Course, prefill semester/year from current filters (if set)
@@ -316,7 +326,7 @@ export default function CoursesPage() {
                   ))}
                 </div>
               </div>
-              <div className="text-[11px] text-slate-300/60">Preview: {prettyDays(newCourse.meetingDays)} {newCourse.meetingStart && newCourse.meetingEnd ? ` ${newCourse.meetingStart}–${newCourse.meetingEnd}` : ''}{(newCourse.location || newCourse.room) ? ` · ${(newCourse.location || newCourse.room)}` : ''}</div>
+              <div className="text-[11px] text-slate-300/60">Preview: {prettyDays(newCourse.meetingDays)} {newCourse.meetingStart && newCourse.meetingEnd ? ` ${fmt12(newCourse.meetingStart)}–${fmt12(newCourse.meetingEnd)}` : ''}{(newCourse.location || newCourse.room) ? ` · ${(newCourse.location || newCourse.room)}` : ''}</div>
             </div>
             )}
             {/* Meeting blocks editor (advanced) */}
@@ -557,12 +567,12 @@ export default function CoursesPage() {
                         {Array.isArray(c.meetingBlocks) && c.meetingBlocks.length ? (
                           <div className="space-y-0.5">
                             {c.meetingBlocks.map((b, i) => (
-                              <div key={i} className="whitespace-nowrap">{prettyDays(b.days)} {(b as any).start && (b as any).end ? ` ${(b as any).start}–${(b as any).end}` : ''} {(b as any).location ? ` · ${(b as any).location}` : ''}</div>
+                              <div key={i} className="whitespace-nowrap">{prettyDays(b.days)} {(b as any).start && (b as any).end ? ` ${fmt12((b as any).start)}–${fmt12((b as any).end)}` : ''} {(b as any).location ? ` · ${(b as any).location}` : ''}</div>
                             ))}
                           </div>
                         ) : (
                           <>
-                            {prettyDays(c.meetingDays)} {c.meetingStart && c.meetingEnd ? ` ${c.meetingStart}–${c.meetingEnd}` : ''}
+                            {prettyDays(c.meetingDays)} {c.meetingStart && c.meetingEnd ? ` ${fmt12(c.meetingStart)}–${fmt12(c.meetingEnd)}` : ''}
                           </>
                         )}
                         {conflictIds.has(c.id) ? <div className="mt-1 text-[10px] px-1 rounded border border-rose-500 text-rose-400 inline-block">conflict</div> : null}

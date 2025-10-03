@@ -7,6 +7,17 @@ export const dynamic = 'force-dynamic';
 
 function startOfDay(d: Date) { const x = new Date(d); x.setHours(0,0,0,0); return x; }
 
+function fmt12(hhmm?: string | null) {
+  if (!hhmm || !/^\d{2}:\d{2}$/.test(hhmm)) return '';
+  const [hStr, mStr] = hhmm.split(':');
+  const h = parseInt(hStr, 10);
+  const m = parseInt(mStr, 10);
+  if (isNaN(h) || isNaN(m)) return '';
+  const h12 = ((h + 11) % 12) + 1;
+  const ampm = h < 12 ? 'AM' : 'PM';
+  return `${h12}:${String(m).padStart(2,'0')} ${ampm}`;
+}
+
 // Inline bulk-add events (tasks) for Calendar
 function BulkAddEvents({ courses, onDone }: { courses: any[]; onDone: () => void }) {
   const [open, setOpen] = useState(false);
@@ -174,7 +185,7 @@ export default function CalendarPage() {
               (m[key] ||= []).push({
                 title: c.title,
                 code: c.code,
-                time: (b as any).start && (b as any).end ? `${(b as any).start}–${(b as any).end}` : null,
+                time: (b as any).start && (b as any).end ? `${fmt12((b as any).start)}–${fmt12((b as any).end)}` : null,
                 room: (b as any).location || c.room || c.location || null,
                 colorKey: c.title || c.code || 'course',
                 color: (c as any).color || null,
