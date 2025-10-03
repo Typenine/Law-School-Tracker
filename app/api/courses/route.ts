@@ -1,5 +1,5 @@
 import { NextRequest } from 'next/server';
-import { ensureSchema, listCourses, createCourse, HAS_DB } from '@/lib/storage';
+import { ensureSchema, listCourses, createCourse, HAS_DB, HAS_BLOB, storageMode } from '@/lib/storage';
 import { NewCourseInput } from '@/lib/types';
 import { z } from 'zod';
 
@@ -9,14 +9,14 @@ export const runtime = 'nodejs';
 export async function GET() {
   await ensureSchema();
   const courses = await listCourses();
-  return Response.json({ courses, mode: HAS_DB ? 'db' : 'json' });
+  return Response.json({ courses, mode: storageMode() });
 }
 
 export async function POST(req: NextRequest) {
   await ensureSchema();
-  if (process.env.VERCEL && !HAS_DB) {
+  if (process.env.VERCEL && !HAS_DB && !HAS_BLOB) {
     return Response.json({
-      error: 'Persistent database is not configured on this deployment. Set DATABASE_URL (or Vercel Postgres POSTGRES_URL*) in Project → Settings → Environment Variables for All Environments, then redeploy.',
+      error: 'Persistent storage is not configured on this deployment. Configure Postgres (DATABASE_URL or POSTGRES_URL*) or connect a Vercel Blob store to this project (so BLOB_READ_WRITE_URL is present), then redeploy.',
     }, { status: 500 });
   }
   const schema = z.object({

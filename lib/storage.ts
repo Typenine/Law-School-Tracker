@@ -2,6 +2,7 @@ import { promises as fs } from 'fs';
 import path from 'path';
 import { Pool } from 'pg';
 import { randomUUID as nodeRandomUUID } from 'crypto';
+import { put, list } from '@vercel/blob';
 import { Course, NewCourseInput, NewSessionInput, NewTaskInput, StudySession, Task, UpdateCourseInput, UpdateTaskInput } from './types';
 
 function resolveDbUrl(): string | null {
@@ -25,8 +26,9 @@ export const HAS_DB = !!DB_URL;
 const IS_VERCEL = !!process.env.VERCEL;
 const DATA_DIR = IS_VERCEL ? path.join('/tmp', 'law-school-tracker') : path.join(process.cwd(), 'data');
 const DATA_FILE = path.join(DATA_DIR, 'db.json');
-const BLOB_RW = process.env.BLOB_READ_WRITE_URL || null;
-export const HAS_BLOB = !!BLOB_RW;
+const BLOB_URL = process.env.BLOB_URL || null; // public base URL, e.g. https://<store-id>.public.blob.vercel-storage.com
+const BLOB_TOKEN = process.env.BLOB_READ_WRITE_TOKEN || null; // optional for SDK when not bound
+export const HAS_BLOB = !!(BLOB_URL || BLOB_TOKEN);
 export function storageMode(): 'db' | 'blob' | 'file' {
   if (HAS_DB) return 'db';
   if (IS_VERCEL && HAS_BLOB) return 'blob';
@@ -240,15 +242,32 @@ function uuid() {
 
 async function readJson(): Promise<{ tasks: Task[]; sessions: StudySession[]; courses: Course[] }> {
   // Prefer remote blob on Vercel when no DB is configured
-  if (IS_VERCEL && !HAS_DB && BLOB_RW) {
+  if (IS_VERCEL && !HAS_DB && HAS_BLOB) {
     try {
-      const res = await fetch(`${BLOB_RW}/db.json`, { cache: 'no-store' });
-      if (res.ok) {
-        const data = await res.json();
-        if (!('courses' in data)) data.courses = [];
-        if (!('tasks' in data)) data.tasks = [];
-        if (!('sessions' in data)) data.sessions = [];
-        return data;
+      // Try direct public URL first
+      if (BLOB_URL) {
+        const res = await fetch(`${BLOB_URL}/db.json`, { cache: 'no-store' });
+        if (res.ok) {
+          const data = await res.json();
+          if (!('courses' in data)) data.courses = [];
+          if (!('tasks' in data)) data.tasks = [];
+          if (!('sessions' in data)) data.sessions = [];
+          return data;
+        }
+      } else {
+        // Fallback to listing and fetching via returned URL
+        const { blobs } = await list();
+        const found = blobs.find(b => b.pathname === 'db.json');
+        if (found?.url) {
+          const res = await fetch(found.url, { cache: 'no-store' });
+          if (res.ok) {
+            const data = await res.json();
+            if (!('courses' in data)) data.courses = [];
+            if (!('tasks' in data)) data.tasks = [];
+            if (!('sessions' in data)) data.sessions = [];
+            return data;
+          }
+        }
       }
       // Initialize if missing
       const empty = { tasks: [], sessions: [], courses: [] };
@@ -276,17 +295,16 @@ async function readJson(): Promise<{ tasks: Task[]; sessions: StudySession[]; co
 
 async function writeJson(data: { tasks: Task[]; sessions: StudySession[]; courses: Course[] }) {
   // Prefer remote blob on Vercel when no DB is configured
-  if (IS_VERCEL && !HAS_DB && BLOB_RW) {
+  if (IS_VERCEL && !HAS_DB && HAS_BLOB) {
     try {
-      const res = await fetch(`${BLOB_RW}/db.json`, {
-        method: 'PUT',
-        headers: { 'content-type': 'application/json' },
-        body: JSON.stringify(data, null, 2),
-      });
-      if (!res.ok) throw new Error(`Blob write failed: ${res.status}`);
+      await put('db.json', JSON.stringify(data, null, 2), {
+        access: 'public',
+        contentType: 'application/json',
+        token: BLOB_TOKEN || undefined,
+      } as any);
       return;
     } catch (err) {
-      // Fall back to file write below
+      // Fall back to file write below if SDK is unavailable
     }
   }
   await fs.mkdir(path.dirname(DATA_FILE), { recursive: true });
