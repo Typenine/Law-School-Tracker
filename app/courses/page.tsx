@@ -179,7 +179,14 @@ export default function CoursesPage() {
           <form
             onSubmit={async (e) => {
               e.preventDefault();
-              if (!newCourse.title || !String(newCourse.title).trim()) { setAddErr('Please enter a course title.'); return; }
+              const fd = new FormData(e.currentTarget as HTMLFormElement);
+              const titleFromForm = String(fd.get('title') ?? '');
+              const titleTrim = (titleFromForm.trim() || String(newCourse.title || '').trim());
+              if (!titleTrim) {
+                setAddErr('Please enter a course title.');
+                setAddDebug({ status: undefined, message: 'Title missing (client validation)', payload: { title_state: newCourse.title ?? null, title_form: titleFromForm, len_state: (newCourse.title ?? '').length, len_form: titleFromForm.length } });
+                return;
+              }
               setAddErr('');
               setAdding(true);
               const clean = (v: any) => (v === undefined || v === '' ? null : v);
@@ -198,7 +205,7 @@ export default function CoursesPage() {
                 .filter(b => b.days.length > 0 && b.start && b.end);
               const payload: any = {
                 code: clean(newCourse.code),
-                title: String(newCourse.title).trim(),
+                title: (titleTrim || String(newCourse.title || '').trim()),
                 instructor: clean(newCourse.instructor),
                 instructorEmail: clean(newCourse.instructorEmail),
                 room: clean(newCourse.room ?? newCourse.location),
@@ -245,8 +252,8 @@ export default function CoursesPage() {
             <div className="grid grid-cols-1 md:grid-cols-3 gap-2">
             <input placeholder="Code (optional)" value={newCourse.code ?? ''} onChange={e => setNewCourse(n => ({ ...n, code: e.target.value }))} className="bg-[#0b1020] border border-[#1b2344] rounded px-2 py-1" />
             <div className="space-y-1">
-              <input placeholder="Title*" value={newCourse.title ?? ''} onChange={e => setNewCourse(n => ({ ...n, title: e.target.value }))} className={`bg-[#0b1020] border rounded px-2 py-1 ${titleInvalid ? 'border-rose-500' : 'border-[#1b2344]'}`} />
-              {titleInvalid && <div className="text-[11px] text-rose-400">Title is required</div>}
+              <input name="title" required placeholder="Title*" value={newCourse.title ?? ''} onChange={e => setNewCourse(n => ({ ...n, title: e.target.value }))} onInput={e => setNewCourse(n => ({ ...n, title: (e.currentTarget as HTMLInputElement).value }))} className={`bg-[#0b1020] border rounded px-2 py-1 ${titleInvalid ? 'border-rose-500' : 'border-[#1b2344]'}`} />
+              {titleInvalid && <div className="text-[11px] text-rose-400">Title is required. Seen: "{String(newCourse.title || '')}"</div>}
             </div>
             <input placeholder="Instructor" value={newCourse.instructor ?? ''} onChange={e => setNewCourse(n => ({ ...n, instructor: e.target.value }))} className="bg-[#0b1020] border border-[#1b2344] rounded px-2 py-1" />
             <input placeholder="Instructor Email" value={newCourse.instructorEmail ?? ''} onChange={e => setNewCourse(n => ({ ...n, instructorEmail: e.target.value }))} className="bg-[#0b1020] border border-[#1b2344] rounded px-2 py-1" />
@@ -381,7 +388,7 @@ export default function CoursesPage() {
             </div>
             <div className="md:col-span-3">
               <div className="flex items-center gap-3 flex-wrap">
-              <button type="submit" className="px-3 py-2 rounded bg-blue-600 hover:bg-blue-500 disabled:opacity-50" disabled={adding || titleInvalid} title={titleInvalid ? 'Enter a course title to enable' : ''}>{adding ? 'Creating…' : 'Create'}</button>
+              <button type="submit" className="px-3 py-2 rounded bg-blue-600 hover:bg-blue-500 disabled:opacity-50" disabled={adding}>{adding ? 'Creating…' : 'Create'}</button>
               {addErr && <div className="text-xs text-rose-400">{addErr}</div>}
               {addDebug && (
                 <div className="text-[11px] text-slate-300/70">
