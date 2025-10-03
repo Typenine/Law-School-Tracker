@@ -180,12 +180,10 @@ export default function CoursesPage() {
           <form
             onSubmit={async (e) => {
               e.preventDefault();
-              const fd = new FormData(e.currentTarget as HTMLFormElement);
-              const titleFromForm = String(fd.get('title') ?? '');
               const titleFromRef = (titleRef.current?.value ?? '');
-              const titleTrim = (titleFromRef.trim() || titleFromForm.trim() || String(newCourse.title || '').trim());
-              const valid = (e.currentTarget as HTMLFormElement).checkValidity?.() ?? true;
-              setAddDebug({ status: undefined, message: 'Submit fired', payload: { valid, title_form: titleFromForm, title_state: newCourse.title ?? null } });
+              const titleFromState = String(newCourse.title || '');
+              const titleTrim = (titleFromRef || titleFromState).trim();
+              setAddDebug({ status: undefined, message: 'Submit fired', payload: { title_ref: titleFromRef, title_state: newCourse.title ?? null } });
               if (!titleTrim) {
                 // Show hint but still attempt POST so server error surfaces clearly.
                 setAddErr('Please enter a course title.');
@@ -256,7 +254,7 @@ export default function CoursesPage() {
             <div className="grid grid-cols-1 md:grid-cols-3 gap-2">
             <input placeholder="Code (optional)" value={newCourse.code ?? ''} onChange={e => setNewCourse(n => ({ ...n, code: e.target.value }))} className="bg-[#0b1020] border border-[#1b2344] rounded px-2 py-1" />
             <div className="space-y-1">
-              <input ref={titleRef} name="title" required placeholder="Title*" value={newCourse.title ?? ''} onChange={e => setNewCourse(n => ({ ...n, title: e.target.value }))} onInput={e => setNewCourse(n => ({ ...n, title: (e.currentTarget as HTMLInputElement).value }))} className={`bg-[#0b1020] border rounded px-2 py-1 ${titleInvalid ? 'border-rose-500' : 'border-[#1b2344]'}`} />
+              <input ref={titleRef} name="title" required placeholder="Title*" value={newCourse.title ?? ''} onChange={e => setNewCourse(n => ({ ...n, title: e.target.value }))} className={`bg-[#0b1020] border rounded px-2 py-1 ${titleInvalid ? 'border-rose-500' : 'border-[#1b2344]'}`} />
               {titleInvalid && <div className="text-[11px] text-rose-400">Title is required. Seen: "{String(newCourse.title || '')}"</div>}
             </div>
             <input placeholder="Instructor" value={newCourse.instructor ?? ''} onChange={e => setNewCourse(n => ({ ...n, instructor: e.target.value }))} className="bg-[#0b1020] border border-[#1b2344] rounded px-2 py-1" />
