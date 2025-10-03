@@ -19,6 +19,7 @@ export default function CoursesPage() {
   const [timeMode, setTimeMode] = useState<'simple' | 'advanced'>('simple');
   const [simpleDuration, setSimpleDuration] = useState<string>('75'); // minutes
   const [addErr, setAddErr] = useState<string>('');
+  const [adding, setAdding] = useState<boolean>(false);
 
   async function refresh() {
     setLoading(true);
@@ -309,8 +310,9 @@ export default function CoursesPage() {
             <div className="md:col-span-3">
               <div className="flex items-center gap-3 flex-wrap">
               <button onClick={async () => {
-                if (!newCourse.title) return;
+                if (!newCourse.title || !String(newCourse.title).trim()) { setAddErr('Please enter a course title.'); return; }
                 setAddErr('');
+                setAdding(true);
                 const clean = (v: any) => (v === undefined || v === '' ? null : v);
                 const semVal = (() => {
                   const s = (newCourse.semester as any) || null;
@@ -355,8 +357,10 @@ export default function CoursesPage() {
                   }
                 } catch (e: any) {
                   setAddErr(e?.message || 'Failed to create course');
+                } finally {
+                  setAdding(false);
                 }
-              }} className="px-3 py-2 rounded bg-blue-600 hover:bg-blue-500">Create</button>
+              }} className="px-3 py-2 rounded bg-blue-600 hover:bg-blue-500 disabled:opacity-50" disabled={adding || !String(newCourse.title || '').trim()}>{adding ? 'Creating…' : 'Create'}</button>
               {addErr && <div className="text-xs text-rose-400">{addErr}</div>}
               </div>
             </div>
