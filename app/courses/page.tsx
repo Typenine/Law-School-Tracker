@@ -18,6 +18,7 @@ export default function CoursesPage() {
   const [newCourse, setNewCourse] = useState<Partial<Course>>({ title: '', meetingDays: [], meetingBlocks: [], semester: undefined, year: undefined, color: undefined });
   const [timeMode, setTimeMode] = useState<'simple' | 'advanced'>('simple');
   const [simpleDuration, setSimpleDuration] = useState<string>('75'); // minutes
+  const [addErr, setAddErr] = useState<string>('');
 
   async function refresh() {
     setLoading(true);
@@ -52,6 +53,17 @@ export default function CoursesPage() {
     return `${String(hh).padStart(2,'0')}:${String(mi).padStart(2,'0')}`;
   }
   useEffect(() => { refresh(); }, []);
+
+  // When opening Add Course, prefill semester/year from current filters (if set)
+  useEffect(() => {
+    if (addOpen) {
+      setNewCourse(n => ({
+        ...n,
+        semester: n.semester ?? (semFilter !== 'all' ? semFilter : n.semester),
+        year: n.year ?? (yearFilter !== 'all' ? yearFilter : n.year),
+      }));
+    }
+  }, [addOpen, semFilter, yearFilter]);
 
   const years = useMemo(() => {
     const ys = Array.from(new Set(courses.map(c => c.year).filter((n): n is number => typeof n === 'number'))).sort((a,b)=>b-a);
@@ -295,33 +307,58 @@ export default function CoursesPage() {
               <input type="number" placeholder="Year" value={(newCourse.year as any) ?? ''} onChange={e => setNewCourse(n => ({ ...n, year: e.target.value ? parseInt(e.target.value, 10) : undefined }))} className="w-28 bg-[#0b1020] border border-[#1b2344] rounded px-2 py-1" />
             </div>
             <div className="md:col-span-3">
+              <div className="flex items-center gap-3 flex-wrap">
               <button onClick={async () => {
                 if (!newCourse.title) return;
+                setAddErr('');
+                const clean = (v: any) => (v === undefined || v === '' ? null : v);
+                const semVal = (() => {
+                  const s = (newCourse.semester as any) || null;
+                  return (s === 'Spring' || s === 'Summer' || s === 'Fall' || s === 'Winter') ? s : null;
+                })();
+                const blocksRaw = Array.isArray(newCourse.meetingBlocks) ? (newCourse.meetingBlocks as any[]) : [];
+                const blocks = blocksRaw
+                  .map(b => ({
+                    days: Array.isArray((b as any).days) ? ((b as any).days as number[]) : [],
+                    start: String((b as any).start || '').trim(),
+                    end: String((b as any).end || '').trim(),
+                    location: clean((b as any).location),
+                  }))
+                  .filter(b => b.days.length > 0 && b.start && b.end);
                 const payload: any = {
-                  code: newCourse.code ?? null,
-                  title: newCourse.title,
-                  instructor: newCourse.instructor ?? null,
-                  instructorEmail: newCourse.instructorEmail ?? null,
-                  room: newCourse.room ?? newCourse.location ?? null,
-                  location: newCourse.location ?? null,
-                  color: (newCourse.color as any) ?? null,
-                  meetingDays: newCourse.meetingDays ?? null,
-                  meetingStart: newCourse.meetingStart ?? null,
-                  meetingEnd: newCourse.meetingEnd ?? null,
-                  meetingBlocks: (newCourse.meetingBlocks as any) ?? null,
-                  startDate: newCourse.startDate ?? null,
-                  endDate: newCourse.endDate ?? null,
-                  semester: (newCourse.semester as any) ?? null,
-                  year: (typeof newCourse.year === 'number' ? newCourse.year : null),
+                  code: clean(newCourse.code),
+                  title: String(newCourse.title).trim(),
+                  instructor: clean(newCourse.instructor),
+                  instructorEmail: clean(newCourse.instructorEmail),
+                  room: clean(newCourse.room ?? newCourse.location),
+                  location: clean(newCourse.location),
+                  color: clean(newCourse.color as any),
+                  meetingDays: (newCourse.meetingDays && (newCourse.meetingDays as number[]).length) ? newCourse.meetingDays : null,
+                  meetingStart: clean(newCourse.meetingStart),
+                  meetingEnd: clean(newCourse.meetingEnd),
+                  meetingBlocks: blocks.length ? blocks : null,
+                  startDate: clean(newCourse.startDate ? String(newCourse.startDate).slice(0,10) : ''),
+                  endDate: clean(newCourse.endDate ? String(newCourse.endDate).slice(0,10) : ''),
+                  semester: semVal,
+                  year: typeof newCourse.year === 'number' ? newCourse.year : (newCourse.year ? parseInt(String(newCourse.year), 10) : null),
                 };
-                const res = await fetch('/api/courses', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) });
-                if (res.ok) {
-                  setAddOpen(false);
-                  setNewCourse({ title: '', meetingDays: [], meetingBlocks: [], color: undefined });
-                  setTimeMode('simple'); setSimpleDuration('75');
-                  await refresh();
+                try {
+                  const res = await fetch('/api/courses', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) });
+                  if (res.ok) {
+                    setAddOpen(false);
+                    setNewCourse({ title: '', meetingDays: [], meetingBlocks: [], color: undefined });
+                    setTimeMode('simple'); setSimpleDuration('75');
+                    await refresh();
+                  } else {
+                    const txt = await res.text();
+                    setAddErr(txt || 'Failed to create course');
+                  }
+                } catch (e: any) {
+                  setAddErr(e?.message || 'Failed to create course');
                 }
               }} className="px-3 py-2 rounded bg-blue-600 hover:bg-blue-500">Create</button>
+              {addErr && <div className="text-xs text-rose-400">{addErr}</div>}
+              </div>
             </div>
           </div>
         )}

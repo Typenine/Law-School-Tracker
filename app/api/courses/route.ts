@@ -21,6 +21,7 @@ export async function POST(req: NextRequest) {
     instructorEmail: z.string().email().nullable().optional(),
     room: z.string().trim().min(1).nullable().optional(),
     location: z.string().trim().min(1).nullable().optional(),
+    color: z.string().trim().min(1).nullable().optional(),
     meetingDays: z.array(z.number().int().min(0).max(6)).nullable().optional(),
     meetingStart: z.string().trim().min(1).nullable().optional(),
     meetingEnd: z.string().trim().min(1).nullable().optional(),
