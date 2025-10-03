@@ -176,7 +176,73 @@ export default function CoursesPage() {
           <button onClick={() => setAddOpen(v => !v)} className="text-xs underline">{addOpen ? 'Hide' : 'Show'}</button>
         </div>
         {addOpen && (
-          <div className="mt-2 grid grid-cols-1 md:grid-cols-3 gap-2">
+          <form
+            onSubmit={async (e) => {
+              e.preventDefault();
+              if (!newCourse.title || !String(newCourse.title).trim()) { setAddErr('Please enter a course title.'); return; }
+              setAddErr('');
+              setAdding(true);
+              const clean = (v: any) => (v === undefined || v === '' ? null : v);
+              const semVal = (() => {
+                const s = (newCourse.semester as any) || null;
+                return (s === 'Spring' || s === 'Summer' || s === 'Fall' || s === 'Winter') ? s : null;
+              })();
+              const blocksRaw = Array.isArray(newCourse.meetingBlocks) ? (newCourse.meetingBlocks as any[]) : [];
+              const blocks = blocksRaw
+                .map(b => ({
+                  days: Array.isArray((b as any).days) ? ((b as any).days as number[]) : [],
+                  start: String((b as any).start || '').trim(),
+                  end: String((b as any).end || '').trim(),
+                  location: clean((b as any).location),
+                }))
+                .filter(b => b.days.length > 0 && b.start && b.end);
+              const payload: any = {
+                code: clean(newCourse.code),
+                title: String(newCourse.title).trim(),
+                instructor: clean(newCourse.instructor),
+                instructorEmail: clean(newCourse.instructorEmail),
+                room: clean(newCourse.room ?? newCourse.location),
+                location: clean(newCourse.location),
+                color: clean(newCourse.color as any),
+                meetingDays: (newCourse.meetingDays && (newCourse.meetingDays as number[]).length) ? newCourse.meetingDays : null,
+                meetingStart: clean(newCourse.meetingStart),
+                meetingEnd: clean(newCourse.meetingEnd),
+                meetingBlocks: blocks.length ? blocks : null,
+                startDate: clean(newCourse.startDate ? String(newCourse.startDate).slice(0,10) : ''),
+                endDate: clean(newCourse.endDate ? String(newCourse.endDate).slice(0,10) : ''),
+                semester: semVal,
+                year: typeof newCourse.year === 'number' ? newCourse.year : (newCourse.year ? parseInt(String(newCourse.year), 10) : null),
+              };
+              try {
+                setAddDebug({ status: undefined, message: 'Submitting…', payload });
+                const res = await fetch('/api/courses', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) });
+                if (res.ok) {
+                  const data = await res.json().catch(() => null as any);
+                  const created = (data && (data as any).course) ? (data as any).course : null;
+                  if (created) {
+                    setCourses(prev => [...prev, created as any].sort((a, b) => (a.title || '').localeCompare(b.title || '')));
+                  }
+                  setNewCourse({ title: '', meetingDays: [], meetingBlocks: [], color: undefined });
+                  setTimeMode('simple'); setSimpleDuration('75');
+                  await refresh();
+                  setAddDebug({ status: res.status, message: created?.id ? `Created (${created.id})` : 'Created', payload: undefined });
+                } else {
+                  const ct = res.headers.get('content-type') || '';
+                  const body = ct.includes('application/json') ? await res.json() : await res.text();
+                  const msg = typeof body === 'string' ? body : (body?.error || JSON.stringify(body));
+                  setAddErr(msg || 'Failed to create course');
+                  setAddDebug({ status: res.status, message: msg, payload });
+                }
+              } catch (e: any) {
+                setAddErr(e?.message || 'Failed to create course');
+                setAddDebug({ status: undefined, message: e?.message || 'Network error', payload });
+              } finally {
+                setAdding(false);
+              }
+            }}
+            className="mt-2"
+          >
+            <div className="grid grid-cols-1 md:grid-cols-3 gap-2">
             <input placeholder="Code (optional)" value={newCourse.code ?? ''} onChange={e => setNewCourse(n => ({ ...n, code: e.target.value }))} className="bg-[#0b1020] border border-[#1b2344] rounded px-2 py-1" />
             <div className="space-y-1">
               <input placeholder="Title*" value={newCourse.title ?? ''} onChange={e => setNewCourse(n => ({ ...n, title: e.target.value }))} className={`bg-[#0b1020] border rounded px-2 py-1 ${titleInvalid ? 'border-rose-500' : 'border-[#1b2344]'}`} />
@@ -315,69 +381,7 @@ export default function CoursesPage() {
             </div>
             <div className="md:col-span-3">
               <div className="flex items-center gap-3 flex-wrap">
-              <button onClick={async () => {
-                if (!newCourse.title || !String(newCourse.title).trim()) { setAddErr('Please enter a course title.'); return; }
-                setAddErr('');
-                setAdding(true);
-                const clean = (v: any) => (v === undefined || v === '' ? null : v);
-                const semVal = (() => {
-                  const s = (newCourse.semester as any) || null;
-                  return (s === 'Spring' || s === 'Summer' || s === 'Fall' || s === 'Winter') ? s : null;
-                })();
-                const blocksRaw = Array.isArray(newCourse.meetingBlocks) ? (newCourse.meetingBlocks as any[]) : [];
-                const blocks = blocksRaw
-                  .map(b => ({
-                    days: Array.isArray((b as any).days) ? ((b as any).days as number[]) : [],
-                    start: String((b as any).start || '').trim(),
-                    end: String((b as any).end || '').trim(),
-                    location: clean((b as any).location),
-                  }))
-                  .filter(b => b.days.length > 0 && b.start && b.end);
-                const payload: any = {
-                  code: clean(newCourse.code),
-                  title: String(newCourse.title).trim(),
-                  instructor: clean(newCourse.instructor),
-                  instructorEmail: clean(newCourse.instructorEmail),
-                  room: clean(newCourse.room ?? newCourse.location),
-                  location: clean(newCourse.location),
-                  color: clean(newCourse.color as any),
-                  meetingDays: (newCourse.meetingDays && (newCourse.meetingDays as number[]).length) ? newCourse.meetingDays : null,
-                  meetingStart: clean(newCourse.meetingStart),
-                  meetingEnd: clean(newCourse.meetingEnd),
-                  meetingBlocks: blocks.length ? blocks : null,
-                  startDate: clean(newCourse.startDate ? String(newCourse.startDate).slice(0,10) : ''),
-                  endDate: clean(newCourse.endDate ? String(newCourse.endDate).slice(0,10) : ''),
-                  semester: semVal,
-                  year: typeof newCourse.year === 'number' ? newCourse.year : (newCourse.year ? parseInt(String(newCourse.year), 10) : null),
-                };
-                try {
-                  setAddDebug({ status: undefined, message: 'Submitting…', payload });
-                  const res = await fetch('/api/courses', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) });
-                  if (res.ok) {
-                    const data = await res.json().catch(() => null as any);
-                    const created = (data && (data as any).course) ? (data as any).course : null;
-                    if (created) {
-                      setCourses(prev => [...prev, created as any].sort((a, b) => (a.title || '').localeCompare(b.title || '')));
-                    }
-                    setAddOpen(false);
-                    setNewCourse({ title: '', meetingDays: [], meetingBlocks: [], color: undefined });
-                    setTimeMode('simple'); setSimpleDuration('75');
-                    await refresh();
-                    setAddDebug({ status: res.status, message: 'Created', payload: undefined });
-                  } else {
-                    const ct = res.headers.get('content-type') || '';
-                    const body = ct.includes('application/json') ? await res.json() : await res.text();
-                    const msg = typeof body === 'string' ? body : (body?.error || JSON.stringify(body));
-                    setAddErr(msg || 'Failed to create course');
-                    setAddDebug({ status: res.status, message: msg, payload });
-                  }
-                } catch (e: any) {
-                  setAddErr(e?.message || 'Failed to create course');
-                  setAddDebug({ status: undefined, message: e?.message || 'Network error', payload });
-                } finally {
-                  setAdding(false);
-                }
-              }} className="px-3 py-2 rounded bg-blue-600 hover:bg-blue-500 disabled:opacity-50" disabled={adding || titleInvalid} title={titleInvalid ? 'Enter a course title to enable' : ''}>{adding ? 'Creating…' : 'Create'}</button>
+              <button type="submit" className="px-3 py-2 rounded bg-blue-600 hover:bg-blue-500 disabled:opacity-50" disabled={adding || titleInvalid} title={titleInvalid ? 'Enter a course title to enable' : ''}>{adding ? 'Creating…' : 'Create'}</button>
               {addErr && <div className="text-xs text-rose-400">{addErr}</div>}
               {addDebug && (
                 <div className="text-[11px] text-slate-300/70">
@@ -393,7 +397,8 @@ export default function CoursesPage() {
               )}
               </div>
             </div>
-          </div>
+            </div>
+          </form>
         )}
       </div>
       <div className="grid grid-cols-1 md:grid-cols-3 gap-2">
