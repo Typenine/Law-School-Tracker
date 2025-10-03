@@ -14,11 +14,7 @@ export async function GET() {
 
 export async function POST(req: NextRequest) {
   await ensureSchema();
-  if (process.env.VERCEL && !HAS_DB && !HAS_BLOB) {
-    return Response.json({
-      error: 'Persistent storage is not configured on this deployment. Configure Postgres (DATABASE_URL or POSTGRES_URL*) or connect a Vercel Blob store to this project (so BLOB_READ_WRITE_URL is present), then redeploy.',
-    }, { status: 500 });
-  }
+  // No blocking guard: if neither DB nor Blob is configured in prod, we fall back to JSON file (ephemeral on Vercel).
   const schema = z.object({
     code: z.string().trim().min(1).nullable().optional(),
     title: z.string().min(1),
