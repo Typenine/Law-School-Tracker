@@ -1,5 +1,5 @@
 "use client";
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import type { Course, CourseMeetingBlock, Semester } from '@/lib/types';
 import { courseColorClass } from '@/lib/colors';
 
@@ -21,6 +21,7 @@ export default function CoursesPage() {
   const [addErr, setAddErr] = useState<string>('');
   const [adding, setAdding] = useState<boolean>(false);
   const [addDebug, setAddDebug] = useState<{ status?: number; message?: string; payload?: any } | null>(null);
+  const titleRef = useRef<HTMLInputElement | null>(null);
 
   async function refresh() {
     setLoading(true);
@@ -181,13 +182,16 @@ export default function CoursesPage() {
               e.preventDefault();
               const fd = new FormData(e.currentTarget as HTMLFormElement);
               const titleFromForm = String(fd.get('title') ?? '');
-              const titleTrim = (titleFromForm.trim() || String(newCourse.title || '').trim());
+              const titleFromRef = (titleRef.current?.value ?? '');
+              const titleTrim = (titleFromRef.trim() || titleFromForm.trim() || String(newCourse.title || '').trim());
+              const valid = (e.currentTarget as HTMLFormElement).checkValidity?.() ?? true;
+              setAddDebug({ status: undefined, message: 'Submit fired', payload: { valid, title_form: titleFromForm, title_state: newCourse.title ?? null } });
               if (!titleTrim) {
+                // Show hint but still attempt POST so server error surfaces clearly.
                 setAddErr('Please enter a course title.');
-                setAddDebug({ status: undefined, message: 'Title missing (client validation)', payload: { title_state: newCourse.title ?? null, title_form: titleFromForm, len_state: (newCourse.title ?? '').length, len_form: titleFromForm.length } });
-                return;
+              } else {
+                setAddErr('');
               }
-              setAddErr('');
               setAdding(true);
               const clean = (v: any) => (v === undefined || v === '' ? null : v);
               const semVal = (() => {
@@ -205,7 +209,7 @@ export default function CoursesPage() {
                 .filter(b => b.days.length > 0 && b.start && b.end);
               const payload: any = {
                 code: clean(newCourse.code),
-                title: (titleTrim || String(newCourse.title || '').trim()),
+                title: (titleTrim || ''),
                 instructor: clean(newCourse.instructor),
                 instructorEmail: clean(newCourse.instructorEmail),
                 room: clean(newCourse.room ?? newCourse.location),
@@ -252,7 +256,7 @@ export default function CoursesPage() {
             <div className="grid grid-cols-1 md:grid-cols-3 gap-2">
             <input placeholder="Code (optional)" value={newCourse.code ?? ''} onChange={e => setNewCourse(n => ({ ...n, code: e.target.value }))} className="bg-[#0b1020] border border-[#1b2344] rounded px-2 py-1" />
             <div className="space-y-1">
-              <input name="title" required placeholder="Title*" value={newCourse.title ?? ''} onChange={e => setNewCourse(n => ({ ...n, title: e.target.value }))} onInput={e => setNewCourse(n => ({ ...n, title: (e.currentTarget as HTMLInputElement).value }))} className={`bg-[#0b1020] border rounded px-2 py-1 ${titleInvalid ? 'border-rose-500' : 'border-[#1b2344]'}`} />
+              <input ref={titleRef} name="title" required placeholder="Title*" value={newCourse.title ?? ''} onChange={e => setNewCourse(n => ({ ...n, title: e.target.value }))} onInput={e => setNewCourse(n => ({ ...n, title: (e.currentTarget as HTMLInputElement).value }))} className={`bg-[#0b1020] border rounded px-2 py-1 ${titleInvalid ? 'border-rose-500' : 'border-[#1b2344]'}`} />
               {titleInvalid && <div className="text-[11px] text-rose-400">Title is required. Seen: "{String(newCourse.title || '')}"</div>}
             </div>
             <input placeholder="Instructor" value={newCourse.instructor ?? ''} onChange={e => setNewCourse(n => ({ ...n, instructor: e.target.value }))} className="bg-[#0b1020] border border-[#1b2344] rounded px-2 py-1" />
@@ -388,7 +392,7 @@ export default function CoursesPage() {
             </div>
             <div className="md:col-span-3">
               <div className="flex items-center gap-3 flex-wrap">
-              <button type="submit" className="px-3 py-2 rounded bg-blue-600 hover:bg-blue-500 disabled:opacity-50" disabled={adding}>{adding ? 'Creating…' : 'Create'}</button>
+              <button type="submit" onClick={() => setAddDebug({ status: undefined, message: 'Clicked submit', payload: { title_state: newCourse.title ?? null } })} className="px-3 py-2 rounded bg-blue-600 hover:bg-blue-500 disabled:opacity-50" disabled={adding}>{adding ? 'Creating…' : 'Create'}</button>
               {addErr && <div className="text-xs text-rose-400">{addErr}</div>}
               {addDebug && (
                 <div className="text-[11px] text-slate-300/70">

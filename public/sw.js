@@ -1,5 +1,7 @@
 // Minimal service worker for Law School Tracker
-// Caches the app shell and provides basic offline support.
+// Kill-switch enabled to avoid stale UI during development.
+
+const DISABLE_SW = true; // Set to false to enable caching again
 
 const CACHE_NAME = 'lst-app-shell-v1';
 const APP_SHELL = [
@@ -12,6 +14,7 @@ const APP_SHELL = [
 
 self.addEventListener('install', (event) => {
   self.skipWaiting();
+  if (DISABLE_SW) return; // skip any caching
   event.waitUntil((async () => {
     try {
       const cache = await caches.open(CACHE_NAME);
@@ -25,8 +28,11 @@ self.addEventListener('install', (event) => {
 self.addEventListener('activate', (event) => {
   event.waitUntil((async () => {
     const keys = await caches.keys();
-    await Promise.all(keys.filter(k => k !== CACHE_NAME).map(k => caches.delete(k)));
+    await Promise.all(keys.map(k => caches.delete(k)));
     await self.clients.claim();
+    if (DISABLE_SW) {
+      try { await self.registration.unregister(); } catch {}
+    }
   })());
 });
 
@@ -37,6 +43,11 @@ self.addEventListener('fetch', (event) => {
 
   // Only handle same-origin
   if (url.origin !== self.location.origin) return;
+
+  if (DISABLE_SW) {
+    // Bypass SW entirely
+    return; // let the network handle it
+  }
 
   // For navigation requests (HTML), use network-first with cache fallback
   if (req.mode === 'navigate') {
