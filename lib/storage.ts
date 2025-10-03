@@ -4,10 +4,34 @@ import { Pool } from 'pg';
 import { randomUUID as nodeRandomUUID } from 'crypto';
 import { Course, NewCourseInput, NewSessionInput, NewTaskInput, StudySession, Task, UpdateCourseInput, UpdateTaskInput } from './types';
 
-const DB_URL = process.env.DATABASE_URL;
+function resolveDbUrl(): string | null {
+  // Prefer DATABASE_URL, else fall back to Vercel Postgres envs
+  const direct = process.env.DATABASE_URL
+    || process.env.POSTGRES_URL
+    || process.env.POSTGRES_PRISMA_URL
+    || process.env.POSTGRES_URL_NON_POOLING
+    || null;
+  if (direct) return direct;
+  const { PGHOST, PGPORT, PGUSER, PGPASSWORD, PGDATABASE } = process.env as Record<string, string | undefined>;
+  if (PGHOST && PGUSER && PGPASSWORD && PGDATABASE) {
+    const port = PGPORT ? `:${PGPORT}` : '';
+    // Default to sslmode=require for hosted providers
+    return `postgres://${encodeURIComponent(PGUSER)}:${encodeURIComponent(PGPASSWORD)}@${PGHOST}${port}/${PGDATABASE}?sslmode=require`;
+  }
+  return null;
+}
+const DB_URL = resolveDbUrl();
+export const HAS_DB = !!DB_URL;
 const IS_VERCEL = !!process.env.VERCEL;
 const DATA_DIR = IS_VERCEL ? path.join('/tmp', 'law-school-tracker') : path.join(process.cwd(), 'data');
 const DATA_FILE = path.join(DATA_DIR, 'db.json');
+const BLOB_RW = process.env.BLOB_READ_WRITE_URL || null;
+export const HAS_BLOB = !!BLOB_RW;
+export function storageMode(): 'db' | 'blob' | 'file' {
+  if (HAS_DB) return 'db';
+  if (IS_VERCEL && HAS_BLOB) return 'blob';
+  return 'file';
+}
 
 let pool: Pool | null = null;
 function getPool(): Pool {
@@ -215,6 +239,25 @@ function uuid() {
 }
 
 async function readJson(): Promise<{ tasks: Task[]; sessions: StudySession[]; courses: Course[] }> {
+  // Prefer remote blob on Vercel when no DB is configured
+  if (IS_VERCEL && !HAS_DB && BLOB_RW) {
+    try {
+      const res = await fetch(`${BLOB_RW}/db.json`, { cache: 'no-store' });
+      if (res.ok) {
+        const data = await res.json();
+        if (!('courses' in data)) data.courses = [];
+        if (!('tasks' in data)) data.tasks = [];
+        if (!('sessions' in data)) data.sessions = [];
+        return data;
+      }
+      // Initialize if missing
+      const empty = { tasks: [], sessions: [], courses: [] };
+      await writeJson(empty);
+      return empty;
+    } catch (err) {
+      // Fallback to ephemeral file as last resort
+    }
+  }
   try {
     const raw = await fs.readFile(DATA_FILE, 'utf8');
     const data = JSON.parse(raw);
@@ -232,6 +275,20 @@ async function readJson(): Promise<{ tasks: Task[]; sessions: StudySession[]; co
 }
 
 async function writeJson(data: { tasks: Task[]; sessions: StudySession[]; courses: Course[] }) {
+  // Prefer remote blob on Vercel when no DB is configured
+  if (IS_VERCEL && !HAS_DB && BLOB_RW) {
+    try {
+      const res = await fetch(`${BLOB_RW}/db.json`, {
+        method: 'PUT',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify(data, null, 2),
+      });
+      if (!res.ok) throw new Error(`Blob write failed: ${res.status}`);
+      return;
+    } catch (err) {
+      // Fall back to file write below
+    }
+  }
   await fs.mkdir(path.dirname(DATA_FILE), { recursive: true });
   await fs.writeFile(DATA_FILE, JSON.stringify(data, null, 2), 'utf8');
 }
