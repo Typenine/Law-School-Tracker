@@ -20,6 +20,7 @@ export default function CoursesPage() {
   const [simpleDuration, setSimpleDuration] = useState<string>('75'); // minutes
   const [addErr, setAddErr] = useState<string>('');
   const [adding, setAdding] = useState<boolean>(false);
+  const [addDebug, setAddDebug] = useState<{ status?: number; message?: string; payload?: any } | null>(null);
 
   async function refresh() {
     setLoading(true);
@@ -70,6 +71,8 @@ export default function CoursesPage() {
     const ys = Array.from(new Set(courses.map(c => c.year).filter((n): n is number => typeof n === 'number'))).sort((a,b)=>b-a);
     return ys;
   }, [courses]);
+
+  const titleInvalid = !String(newCourse.title || '').trim();
 
   const filtered = useMemo(() => courses.filter(c =>
     (yearFilter === 'all' || c.year === yearFilter) &&
@@ -175,7 +178,10 @@ export default function CoursesPage() {
         {addOpen && (
           <div className="mt-2 grid grid-cols-1 md:grid-cols-3 gap-2">
             <input placeholder="Code (optional)" value={newCourse.code ?? ''} onChange={e => setNewCourse(n => ({ ...n, code: e.target.value }))} className="bg-[#0b1020] border border-[#1b2344] rounded px-2 py-1" />
-            <input placeholder="Title" value={newCourse.title ?? ''} onChange={e => setNewCourse(n => ({ ...n, title: e.target.value }))} className="bg-[#0b1020] border border-[#1b2344] rounded px-2 py-1" />
+            <div className="space-y-1">
+              <input placeholder="Title*" value={newCourse.title ?? ''} onChange={e => setNewCourse(n => ({ ...n, title: e.target.value }))} className={`bg-[#0b1020] border rounded px-2 py-1 ${titleInvalid ? 'border-rose-500' : 'border-[#1b2344]'}`} />
+              {titleInvalid && <div className="text-[11px] text-rose-400">Title is required</div>}
+            </div>
             <input placeholder="Instructor" value={newCourse.instructor ?? ''} onChange={e => setNewCourse(n => ({ ...n, instructor: e.target.value }))} className="bg-[#0b1020] border border-[#1b2344] rounded px-2 py-1" />
             <input placeholder="Instructor Email" value={newCourse.instructorEmail ?? ''} onChange={e => setNewCourse(n => ({ ...n, instructorEmail: e.target.value }))} className="bg-[#0b1020] border border-[#1b2344] rounded px-2 py-1" />
             <input placeholder="Room/Location" value={newCourse.room ?? newCourse.location ?? ''} onChange={e => setNewCourse(n => ({ ...n, room: e.target.value, location: e.target.value }))} className="bg-[#0b1020] border border-[#1b2344] rounded px-2 py-1" />
@@ -345,23 +351,41 @@ export default function CoursesPage() {
                   year: typeof newCourse.year === 'number' ? newCourse.year : (newCourse.year ? parseInt(String(newCourse.year), 10) : null),
                 };
                 try {
+                  setAddDebug({ status: undefined, message: 'Submitting…', payload });
                   const res = await fetch('/api/courses', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) });
                   if (res.ok) {
                     setAddOpen(false);
                     setNewCourse({ title: '', meetingDays: [], meetingBlocks: [], color: undefined });
                     setTimeMode('simple'); setSimpleDuration('75');
                     await refresh();
+                    setAddDebug({ status: res.status, message: 'Created', payload: undefined });
                   } else {
-                    const txt = await res.text();
-                    setAddErr(txt || 'Failed to create course');
+                    const ct = res.headers.get('content-type') || '';
+                    const body = ct.includes('application/json') ? await res.json() : await res.text();
+                    const msg = typeof body === 'string' ? body : (body?.error || JSON.stringify(body));
+                    setAddErr(msg || 'Failed to create course');
+                    setAddDebug({ status: res.status, message: msg, payload });
                   }
                 } catch (e: any) {
                   setAddErr(e?.message || 'Failed to create course');
+                  setAddDebug({ status: undefined, message: e?.message || 'Network error', payload });
                 } finally {
                   setAdding(false);
                 }
-              }} className="px-3 py-2 rounded bg-blue-600 hover:bg-blue-500 disabled:opacity-50" disabled={adding || !String(newCourse.title || '').trim()}>{adding ? 'Creating…' : 'Create'}</button>
+              }} className="px-3 py-2 rounded bg-blue-600 hover:bg-blue-500 disabled:opacity-50" disabled={adding || titleInvalid} title={titleInvalid ? 'Enter a course title to enable' : ''}>{adding ? 'Creating…' : 'Create'}</button>
               {addErr && <div className="text-xs text-rose-400">{addErr}</div>}
+              {addDebug && (
+                <div className="text-[11px] text-slate-300/70">
+                  <span className="mr-2">Status: {addDebug.status ?? '-'}</span>
+                  <span className="mr-2">Message: {addDebug.message ?? '-'}</span>
+                  {addDebug.payload ? (
+                    <details className="inline-block ml-2">
+                      <summary>Payload</summary>
+                      <pre className="whitespace-pre-wrap break-all text-[10px]">{JSON.stringify(addDebug.payload, null, 2)}</pre>
+                    </details>
+                  ) : null}
+                </div>
+              )}
               </div>
             </div>
           </div>

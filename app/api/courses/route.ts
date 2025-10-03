@@ -32,7 +32,9 @@ export async function POST(req: NextRequest) {
     year: z.number().int().min(2000).max(2100).nullable().optional(),
   });
   const parsed = schema.safeParse(await req.json());
-  if (!parsed.success) return new Response('Invalid course body', { status: 400 });
+  if (!parsed.success) {
+    return Response.json({ error: 'Invalid course body', issues: parsed.error.issues }, { status: 400 });
+  }
   const body = parsed.data as NewCourseInput;
   const c = await createCourse(body);
   return Response.json({ course: c }, { status: 201 });
