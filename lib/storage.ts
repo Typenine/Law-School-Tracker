@@ -46,7 +46,6 @@ function getPool(): Pool {
 
 // Courses
 export async function listCourses(): Promise<Course[]> {
-  let results: Course[] = [];
   if (DB_URL) {
     try {
       const p = getPool();
@@ -56,26 +55,26 @@ export async function listCourses(): Promise<Course[]> {
         semester: string | null; year: number | null; created_at: Date | string
       };
       const res = await p.query(`SELECT id, code, title, instructor, instructor_email, room, location, color, meeting_days, meeting_start, meeting_end, meeting_blocks, start_date, end_date, semester, year, created_at FROM courses ORDER BY title`);
-      results = (res.rows as Row[]).map(r => ({
+      const results = (res.rows as Row[]).map(r => ({
         id: r.id, code: r.code, title: r.title, instructor: r.instructor, instructorEmail: r.instructor_email, room: r.room, location: r.location,
         color: (r as any).color ?? null,
         meetingDays: (r.meeting_days as any) ?? null, meetingStart: r.meeting_start, meetingEnd: r.meeting_end, meetingBlocks: (r.meeting_blocks as any) ?? null,
         startDate: r.start_date ? new Date(r.start_date).toISOString() : null, endDate: r.end_date ? new Date(r.end_date).toISOString() : null,
         semester: (r.semester as any) ?? null, year: r.year ?? null, createdAt: new Date(r.created_at as any).toISOString()
       }));
+      return results.sort((a, b) => (a.title || '').localeCompare(b.title || ''));
     } catch (e) {
-      console.warn('listCourses: DB query failed, will use JSON store as well:', (e as any)?.message || e);
+      console.warn('listCourses: DB query failed, falling back to JSON store:', (e as any)?.message || e);
+      // fall through to JSON below
     }
   }
-  // Always merge JSON courses (useful when DB is empty locally)
+  // Fallback to JSON-only store when DB is unavailable or query failed
   try {
     const json = await readJson();
-    const byId = new Map(results.map(c => [c.id, true] as const));
-    for (const c of json.courses) {
-      if (!byId.has(c.id)) results.push(c);
-    }
-  } catch { /* ignore */ }
-  return results.sort((a, b) => (a.title || '').localeCompare(b.title || ''));
+    return json.courses.sort((a, b) => (a.title || '').localeCompare(b.title || ''));
+  } catch {
+    return [];
+  }
 }
 
 export async function createCourse(input: NewCourseInput): Promise<Course> {
