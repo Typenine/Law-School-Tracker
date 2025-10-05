@@ -160,46 +160,13 @@ function uuid() {
 }
 
 async function readJson(): Promise<{ tasks: Task[]; sessions: StudySession[]; courses: Course[] }> {
-  // Prefer remote blob on Vercel when no DB is configured
-  if (IS_VERCEL && !HAS_DB && HAS_BLOB) {
-    try {
-      // Try direct public URL first
-      if (BLOB_URL) {
-        const res = await fetch(`${BLOB_URL}/db.json`, { cache: 'no-store' });
-        if (res.ok) {
-          const data = await res.json();
-          if (!('courses' in data)) data.courses = [];
-          if (!('tasks' in data)) data.tasks = [];
-          if (!('sessions' in data)) data.sessions = [];
-          return data;
-        }
-      } else {
-        // Fallback to listing and fetching via returned URL
-        const { blobs } = await list({ token: BLOB_TOKEN || undefined } as any);
-        const found = blobs.find((b: any) => b.pathname === 'db.json');
-        if (found?.url) {
-          const res = await fetch(found.url, { cache: 'no-store' });
-          if (res.ok) {
-            const data = await res.json();
-            if (!('courses' in data)) data.courses = [];
-            if (!('tasks' in data)) data.tasks = [];
-            if (!('sessions' in data)) data.sessions = [];
-            return data;
-          }
-        }
-      }
-      // Initialize if missing
-      const empty = { tasks: [], sessions: [], courses: [] };
-      await writeJson(empty);
-      return empty;
-    } catch (err) {
-      // Fallback to ephemeral file as last resort
-    }
-  }
+  // Use local file storage for development
   try {
     const raw = await fs.readFile(DATA_FILE, 'utf8');
     const data = JSON.parse(raw);
     if (!('courses' in data)) data.courses = [];
+    if (!('tasks' in data)) data.tasks = [];
+    if (!('sessions' in data)) data.sessions = [];
     return data;
   } catch (e: any) {
     if (e.code === 'ENOENT') {
@@ -213,25 +180,9 @@ async function readJson(): Promise<{ tasks: Task[]; sessions: StudySession[]; co
 }
 
 async function writeJson(data: { tasks: Task[]; sessions: StudySession[]; courses: Course[] }) {
-  // Prefer remote blob on Vercel when no DB is configured
-  if (IS_VERCEL && !HAS_DB && HAS_BLOB) {
-    try {
-      await put('db.json', JSON.stringify(data, null, 2), {
-        access: 'public',
-        contentType: 'application/json',
-        token: BLOB_TOKEN || undefined,
-      } as any);
-      console.log('Successfully wrote to blob storage');
-      return;
-    } catch (err) {
-      console.error('Blob storage write failed, falling back to local file:', err);
-      // Fall through to local file below instead of throwing
-    }
-  }
-  // Local file storage (development or blob storage fallback)
+  // Use local file storage for development
   await fs.mkdir(path.dirname(DATA_FILE), { recursive: true });
   await fs.writeFile(DATA_FILE, JSON.stringify(data, null, 2), 'utf8');
-  console.log('Successfully wrote to local file:', DATA_FILE);
 }
 
 // Tasks

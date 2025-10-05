@@ -152,25 +152,31 @@ export default function CoursesPage() {
                       <div className="flex items-center gap-2">
                         <a href={`/calendar?course=${encodeURIComponent(c.title)}`} className="px-2 py-1 rounded border border-[#1b2344] text-xs">Calendar</a>
                         <button 
-                          onClick={() => setEditCourse(c)} 
+                          onClick={() => {
+                            console.log('Edit clicked for course:', c.id, c.title);
+                            setEditCourse(c);
+                          }} 
                           className="px-2 py-1 rounded border border-[#1b2344] text-xs hover:bg-[#1b2344]"
                         >
                           Edit
                         </button>
                         <button 
                           onClick={async () => {
+                            console.log('Delete clicked for course:', c.id, c.title);
                             if (!confirm(`Delete "${c.title}"? This will not delete related tasks.`)) return;
-                            try {
-                              const res = await fetch(`/api/courses/${c.id}`, { method: 'DELETE' });
-                              if (res.ok) {
-                                // Remove from UI immediately
-                                setCourses(prev => prev.filter(x => x.id !== c.id));
-                              } else {
-                                const errorText = await res.text();
-                                alert(`Delete failed: ${errorText}`);
-                              }
-                            } catch (error) {
-                              alert(`Delete failed: ${error}`);
+                            
+                            console.log('Making DELETE request to:', `/api/courses/${c.id}`);
+                            const res = await fetch(`/api/courses/${c.id}`, { method: 'DELETE' });
+                            console.log('DELETE response status:', res.status);
+                            
+                            if (res.ok) {
+                              console.log('Delete successful, removing from UI');
+                              setCourses(prev => prev.filter(x => x.id !== c.id));
+                              alert('Course deleted successfully');
+                            } else {
+                              const errorText = await res.text();
+                              console.error('Delete failed:', errorText);
+                              alert(`Delete failed: ${errorText}`);
                             }
                           }} 
                           className="px-2 py-1 rounded border border-rose-600 text-rose-300 text-xs hover:bg-rose-600 hover:text-white"
