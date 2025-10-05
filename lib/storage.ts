@@ -160,7 +160,49 @@ function uuid() {
 }
 
 async function readJson(): Promise<{ tasks: Task[]; sessions: StudySession[]; courses: Course[] }> {
-  // Use local file storage for development
+  // On Vercel without DB, we REQUIRE Blob store. No local fallback.
+  if (IS_VERCEL && !HAS_DB) {
+    if (!HAS_BLOB) {
+      throw new Error('Blob store not configured. Bind Vercel Blob or set BLOB_URL/BLOB_READ_WRITE_TOKEN.');
+    }
+    try {
+      // Try direct public URL first
+      if (BLOB_URL) {
+        const res = await fetch(`${BLOB_URL}/db.json`, { cache: 'no-store' });
+        if (res.ok) {
+          const data = await res.json();
+          if (!('courses' in data)) data.courses = [];
+          if (!('tasks' in data)) data.tasks = [];
+          if (!('sessions' in data)) data.sessions = [];
+          return data;
+        }
+      } else {
+        // Fallback to listing and fetching via returned URL
+        const { blobs } = await list();
+        const found = blobs.find((b: any) => b.pathname === 'db.json');
+        if (found?.url) {
+          const res = await fetch(found.url, { cache: 'no-store' });
+          if (res.ok) {
+            const data = await res.json();
+            if (!('courses' in data)) data.courses = [];
+            if (!('tasks' in data)) data.tasks = [];
+            if (!('sessions' in data)) data.sessions = [];
+            return data;
+          }
+        }
+      }
+      // Initialize if missing in Blob store
+      const empty = { tasks: [], sessions: [], courses: [] };
+      await writeJson(empty);
+      return empty;
+    } catch (err) {
+      // On Vercel without a working Blob binding, do not silently fall back
+      // to ephemeral local file. Surface the error so API returns a failure
+      // instead of pretending it worked.
+      throw err;
+    }
+  }
+  // Local file storage (development or fallback)
   try {
     const raw = await fs.readFile(DATA_FILE, 'utf8');
     const data = JSON.parse(raw);
@@ -173,7 +215,6 @@ async function readJson(): Promise<{ tasks: Task[]; sessions: StudySession[]; co
       const empty = { tasks: [], sessions: [], courses: [] };
       await fs.mkdir(path.dirname(DATA_FILE), { recursive: true });
       await fs.writeFile(DATA_FILE, JSON.stringify(empty, null, 2), 'utf8');
-      console.log('Created new db.json file at:', DATA_FILE);
       return empty;
     }
     throw e;
@@ -181,7 +222,24 @@ async function readJson(): Promise<{ tasks: Task[]; sessions: StudySession[]; co
 }
 
 async function writeJson(data: { tasks: Task[]; sessions: StudySession[]; courses: Course[] }) {
-  // Use local file storage for development
+  // On Vercel without DB, we REQUIRE Blob store. No local fallback.
+  if (IS_VERCEL && !HAS_DB) {
+    if (!HAS_BLOB) {
+      throw new Error('Blob store not configured. Bind Vercel Blob or set BLOB_URL/BLOB_READ_WRITE_TOKEN.');
+    }
+    try {
+      await put('db.json', JSON.stringify(data, null, 2), {
+        access: 'public',
+        contentType: 'application/json',
+      } as any);
+      return;
+    } catch (err) {
+      // On Vercel, failing to write to Blob should not fall back to
+      // ephemeral local file which disappears on cold start. Surface error.
+      throw err as any;
+    }
+  }
+  // Local file storage (development or fallback)
   await fs.mkdir(path.dirname(DATA_FILE), { recursive: true });
   await fs.writeFile(DATA_FILE, JSON.stringify(data, null, 2), 'utf8');
 }
