@@ -58,7 +58,27 @@ export default function CoursesPage() {
         <h2 className="text-lg font-medium">Courses</h2>
         <div className="flex gap-2">
           <button onClick={() => setShowBacklog(true)} className="px-3 py-1 rounded border border-[#1b2344] text-sm hover:bg-[#1b2344]">Add Historical Task</button>
-          <button onClick={() => setShowWizard(true)} className="px-3 py-1 rounded bg-blue-600 hover:bg-blue-500 text-white text-sm">Add Course</button>
+          <button onClick={async () => {
+            const title = prompt('Course title:');
+            if (!title) return;
+            try {
+              const res = await fetch('/api/courses', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ title })
+              });
+              if (res.ok) {
+                await refresh();
+                alert('Course created!');
+              } else {
+                const error = await res.text();
+                alert('Error: ' + error);
+              }
+            } catch (err) {
+              alert('Network error: ' + err);
+            }
+          }} className="px-3 py-1 rounded bg-green-600 hover:bg-green-500 text-white text-sm">Quick Add</button>
+          <button onClick={() => setShowWizard(true)} className="px-3 py-1 rounded bg-blue-600 hover:bg-blue-500 text-white text-sm">Add Course Wizard</button>
           <button onClick={refresh} className="px-2 py-1 rounded border border-[#1b2344]">Refresh</button>
         </div>
       </div>

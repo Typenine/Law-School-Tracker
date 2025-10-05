@@ -77,11 +77,15 @@ export default function AddCourseWizard({ onCourseAdded, onClose }: AddCourseWiz
 
       if (res.ok) {
         const data = await res.json();
-        onCourseAdded(data.course);
-        onClose();
+        if (data.course) {
+          onCourseAdded(data.course);
+          onClose();
+        } else {
+          setError('No course returned from server');
+        }
       } else {
-        const errorData = await res.json().catch(() => ({ error: 'Failed to create course' }));
-        setError(errorData.error || 'Failed to create course');
+        const errorText = await res.text();
+        setError(`API Error (${res.status}): ${errorText}`);
       }
     } catch (err: any) {
       setError(err.message || 'Network error');
