@@ -47,6 +47,15 @@ export default function EditCourseModal({ course, onSaved, onClose }: Props) {
   async function save() {
     setSaving(true); setError('');
     try {
+      // Clean blocks: only keep ones with at least one day and both start & end
+      const cleanBlocks: CourseMeetingBlock[] = (mode === 'blocks')
+        ? ((draft.meetingBlocks || []) as CourseMeetingBlock[]).filter(b =>
+            Array.isArray(b?.days) && b.days.length > 0 &&
+            !!(b?.start && String(b.start).trim()) &&
+            !!(b?.end && String(b.end).trim())
+          )
+        : [];
+
       const body: UpdateCourseInput = {
         code: (draft.code ?? null) || null,
         title: draft.title || course.title,
@@ -58,13 +67,12 @@ export default function EditCourseModal({ course, onSaved, onClose }: Props) {
         meetingDays: mode === 'simple' ? (draft.meetingDays || null) : null,
         meetingStart: mode === 'simple' ? (draft.meetingStart || null) : null,
         meetingEnd: mode === 'simple' ? (draft.meetingEnd || null) : null,
-        meetingBlocks: mode === 'blocks' ? (draft.meetingBlocks || []) as CourseMeetingBlock[] : null,
+        meetingBlocks: mode === 'blocks' ? (cleanBlocks.length ? cleanBlocks : null) : null,
         startDate: draft.startDate || null,
         endDate: draft.endDate || null,
         semester: (draft.semester as any) || null,
         year: (typeof draft.year === 'number' ? draft.year : (draft.year ? parseInt(String(draft.year), 10) : null)) || null,
       };
-
       const res = await fetch(`/api/courses/${course.id}`, { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
       if (!res.ok) {
         const text = await res.text();

@@ -123,6 +123,7 @@ export async function updateCourse(id: string, patch: UpdateCourseInput): Promis
     if (patch.instructorEmail !== undefined) { fields.push(`instructor_email = $${idx++}`); values.push(patch.instructorEmail); }
     if (patch.room !== undefined) { fields.push(`room = $${idx++}`); values.push(patch.room); }
     if (patch.location !== undefined) { fields.push(`location = $${idx++}`); values.push(patch.location); }
+    if (patch.color !== undefined) { fields.push(`color = $${idx++}`); values.push(patch.color); }
     if (patch.meetingDays !== undefined) { fields.push(`meeting_days = $${idx++}`); values.push(patch.meetingDays); }
     if (patch.meetingStart !== undefined) { fields.push(`meeting_start = $${idx++}`); values.push(patch.meetingStart); }
     if (patch.meetingEnd !== undefined) { fields.push(`meeting_end = $${idx++}`); values.push(patch.meetingEnd); }

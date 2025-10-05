@@ -1,6 +1,7 @@
 "use client";
 import { useState, useRef } from 'react';
 import type { Course, Semester } from '@/lib/types';
+import TimePickerField from '@/components/TimePickerField';
 
 interface AddCourseWizardProps {
   onCourseAdded: (course: Course) => void;
@@ -234,20 +235,16 @@ export default function AddCourseWizard({ onCourseAdded, onClose }: AddCourseWiz
               <div className="grid grid-cols-2 gap-4">
                 <div>
                   <label className="block text-sm font-medium mb-2">Start Time</label>
-                  <input
-                    type="time"
+                  <TimePickerField
                     value={course.meetingStart || ''}
-                    onChange={(e) => setCourse(prev => ({ ...prev, meetingStart: e.target.value }))}
-                    className="w-full bg-[#0b1020] border border-[#1b2344] rounded px-3 py-2 focus:border-blue-500 focus:outline-none"
+                    onChange={(v) => setCourse(prev => ({ ...prev, meetingStart: v }))}
                   />
                 </div>
                 <div>
                   <label className="block text-sm font-medium mb-2">End Time</label>
-                  <input
-                    type="time"
+                  <TimePickerField
                     value={course.meetingEnd || ''}
-                    onChange={(e) => setCourse(prev => ({ ...prev, meetingEnd: e.target.value }))}
-                    className="w-full bg-[#0b1020] border border-[#1b2344] rounded px-3 py-2 focus:border-blue-500 focus:outline-none"
+                    onChange={(v) => setCourse(prev => ({ ...prev, meetingEnd: v }))}
                   />
                 </div>
               </div>
