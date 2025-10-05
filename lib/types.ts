@@ -8,12 +8,17 @@ export interface Task {
   status: TaskStatus;
   createdAt: string; // ISO
   estimatedMinutes?: number | null;
+  actualMinutes?: number | null; // logged time when completed
   priority?: number | null; // 1-5
   notes?: string | null;
   attachments?: string[] | null; // URLs
   dependsOn?: string[] | null; // task IDs
   tags?: string[] | null;
   term?: string | null;
+  completedAt?: string | null; // ISO when marked done
+  focus?: number | null; // 1-10 focus level when completed
+  pagesRead?: number | null; // pages read for this task
+  activity?: string | null; // reading|review|outline|practice|other
 }
 
 export type Semester = 'Spring' | 'Summer' | 'Fall';
@@ -101,12 +106,17 @@ export interface UpdateTaskInput {
   dueDate?: string; // ISO
   status?: TaskStatus;
   estimatedMinutes?: number | null;
+  actualMinutes?: number | null;
   priority?: number | null;
   notes?: string | null;
   attachments?: string[] | null;
   dependsOn?: string[] | null;
   tags?: string[] | null;
   term?: string | null;
+  completedAt?: string | null;
+  focus?: number | null;
+  pagesRead?: number | null;
+  activity?: string | null;
 }
 
 export interface StudySession {
@@ -151,4 +161,14 @@ export interface StatsPayload {
   dailyEst?: Array<{ date: string; estMinutes: number }>;
   heavyDays?: number;
   maxDayMinutes?: number;
+  // New 7-day averages
+  avgFocus7d?: number | null;
+  avgHours7d?: number | null;
+  // Predictive timing based on historical data
+  subjectAverages?: Array<{
+    subject: string;
+    avgMinutesPerTask: number;
+    avgFocus: number;
+    totalTasks: number;
+  }>;
 }

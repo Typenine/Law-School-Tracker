@@ -46,7 +46,7 @@ export default function Stats() {
         <p className="text-sm">Loading...</p>
       ) : (
         <div className="space-y-3">
-          <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
+          <div className="grid grid-cols-1 md:grid-cols-5 gap-3">
             <div className="rounded border border-[#1b2344] p-4">
               <div className="text-slate-300/70 text-xs">Upcoming 7 days</div>
               <div className="text-2xl font-semibold mt-1">{stats.upcoming7d}</div>
@@ -56,8 +56,16 @@ export default function Stats() {
               <div className="text-2xl font-semibold mt-1">{stats.hoursThisWeek}</div>
             </div>
             <div className="rounded border border-[#1b2344] p-4">
-              <div className="text-slate-300/70 text-xs">Avg focus this week</div>
+              <div className="text-slate-300/70 text-xs">Focus this week</div>
               <div className="text-2xl font-semibold mt-1">{stats.avgFocusThisWeek ?? '-'}</div>
+            </div>
+            <div className="rounded border border-[#1b2344] p-4 bg-blue-900/20">
+              <div className="text-slate-300/70 text-xs">Hours / 7d avg</div>
+              <div className="text-2xl font-semibold mt-1 text-blue-400">{stats.avgHours7d?.toFixed(1) ?? '-'}</div>
+            </div>
+            <div className="rounded border border-[#1b2344] p-4 bg-purple-900/20">
+              <div className="text-slate-300/70 text-xs">Focus / 7d avg</div>
+              <div className="text-2xl font-semibold mt-1 text-purple-400">{stats.avgFocus7d?.toFixed(1) ?? '-'}</div>
             </div>
           </div>
 

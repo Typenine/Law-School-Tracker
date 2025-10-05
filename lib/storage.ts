@@ -28,7 +28,7 @@ const DATA_DIR = IS_VERCEL ? path.join('/tmp', 'law-school-tracker') : path.join
 const DATA_FILE = path.join(DATA_DIR, 'db.json');
 const BLOB_URL = process.env.BLOB_URL || null; // public base URL, e.g. https://<store-id>.public.blob.vercel-storage.com
 const BLOB_TOKEN = process.env.BLOB_READ_WRITE_TOKEN || null; // optional for SDK when not bound
-export const HAS_BLOB = !!(BLOB_URL || BLOB_TOKEN);
+export const HAS_BLOB = !!(BLOB_URL || BLOB_TOKEN || process.env.VERCEL_BLOB_STORE_ID);
 export function storageMode(): 'db' | 'blob' | 'file' {
   if (HAS_DB) return 'db';
   if (IS_VERCEL && HAS_BLOB) return 'blob';
@@ -190,12 +190,17 @@ export async function ensureSchema() {
         created_at timestamptz NOT NULL DEFAULT now()
       );
       ALTER TABLE tasks ADD COLUMN IF NOT EXISTS estimated_minutes integer;
+      ALTER TABLE tasks ADD COLUMN IF NOT EXISTS actual_minutes integer;
       ALTER TABLE tasks ADD COLUMN IF NOT EXISTS priority integer;
       ALTER TABLE tasks ADD COLUMN IF NOT EXISTS notes text;
       ALTER TABLE tasks ADD COLUMN IF NOT EXISTS attachments jsonb;
       ALTER TABLE tasks ADD COLUMN IF NOT EXISTS depends_on uuid[];
       ALTER TABLE tasks ADD COLUMN IF NOT EXISTS tags jsonb;
       ALTER TABLE tasks ADD COLUMN IF NOT EXISTS term text;
+      ALTER TABLE tasks ADD COLUMN IF NOT EXISTS completed_at timestamptz;
+      ALTER TABLE tasks ADD COLUMN IF NOT EXISTS focus integer;
+      ALTER TABLE tasks ADD COLUMN IF NOT EXISTS pages_read integer;
+      ALTER TABLE tasks ADD COLUMN IF NOT EXISTS activity text;
       CREATE TABLE IF NOT EXISTS courses (
         id uuid PRIMARY KEY,
         code text,
@@ -256,8 +261,8 @@ async function readJson(): Promise<{ tasks: Task[]; sessions: StudySession[]; co
         }
       } else {
         // Fallback to listing and fetching via returned URL
-        const { blobs } = await list();
-        const found = blobs.find(b => b.pathname === 'db.json');
+        const { blobs } = await list({ token: BLOB_TOKEN || undefined } as any);
+        const found = blobs.find((b: any) => b.pathname === 'db.json');
         if (found?.url) {
           const res = await fetch(found.url, { cache: 'no-store' });
           if (res.ok) {
@@ -315,8 +320,8 @@ async function writeJson(data: { tasks: Task[]; sessions: StudySession[]; course
 export async function listTasks(): Promise<Task[]> {
   if (DB_URL) {
     const p = getPool();
-    type TaskRow = { id: string; title: string; course: string | null; due_date: Date | string; status: 'todo' | 'done'; created_at: Date | string; estimated_minutes: number | null; priority: number | null; notes: string | null; attachments: string[] | null; depends_on: string[] | null; tags: string[] | null; term: string | null };
-    const res = await p.query(`SELECT id, title, course, due_date, status, created_at, estimated_minutes, priority, notes, attachments, depends_on, tags, term FROM tasks ORDER BY due_date ASC`);
+    type TaskRow = { id: string; title: string; course: string | null; due_date: Date | string; status: 'todo' | 'done'; created_at: Date | string; estimated_minutes: number | null; actual_minutes: number | null; priority: number | null; notes: string | null; attachments: string[] | null; depends_on: string[] | null; tags: string[] | null; term: string | null; completed_at: Date | string | null; focus: number | null; pages_read: number | null; activity: string | null };
+    const res = await p.query(`SELECT id, title, course, due_date, status, created_at, estimated_minutes, actual_minutes, priority, notes, attachments, depends_on, tags, term, completed_at, focus, pages_read, activity FROM tasks ORDER BY due_date ASC`);
     const rows = res.rows as unknown as TaskRow[];
     return rows.map(r => ({
       id: r.id,
@@ -326,12 +331,17 @@ export async function listTasks(): Promise<Task[]> {
       status: r.status,
       createdAt: new Date(r.created_at).toISOString(),
       estimatedMinutes: r.estimated_minutes ?? null,
+      actualMinutes: r.actual_minutes ?? null,
       priority: r.priority ?? null,
       notes: r.notes ?? null,
       attachments: (r.attachments as any) ?? null,
       dependsOn: (r.depends_on as any) ?? null,
       tags: (r.tags as any) ?? null,
       term: r.term ?? null,
+      completedAt: r.completed_at ? new Date(r.completed_at).toISOString() : null,
+      focus: r.focus ?? null,
+      pagesRead: r.pages_read ?? null,
+      activity: r.activity ?? null,
     }));
   }
   const db = await readJson();
@@ -511,5 +521,52 @@ export async function statsNow() {
   const maxDayMinutes = daily.reduce((m, x) => Math.max(m, x.estMinutes), 0);
   const heavyDays = daily.filter(x => x.estMinutes >= 240).length; // 4+ hrs considered heavy
 
-  return { upcoming7d, hoursThisWeek, avgFocusThisWeek, estMinutesThisWeek, loggedMinutesThisWeek, remainingMinutesThisWeek, courseBreakdown, dailyEst: daily, heavyDays, maxDayMinutes };
+  // 7-day rolling averages (past 7 days)
+  const past7Start = new Date(now.getTime() - 7 * 24 * 60 * 60 * 1000);
+  const past7Sessions = sessions.filter(s => new Date(s.when) >= past7Start && new Date(s.when) <= now);
+  const past7Minutes = past7Sessions.reduce((acc, s) => acc + (s.minutes || 0), 0);
+  const avgHours7d = past7Minutes > 0 ? Math.round((past7Minutes / 60 / 7) * 10) / 10 : null;
+  const past7Focus = past7Sessions.map(s => s.focus).filter((n): n is number => typeof n === 'number');
+  const avgFocus7d = past7Focus.length ? Math.round((past7Focus.reduce((a, b) => a + b, 0) / past7Focus.length) * 10) / 10 : null;
+
+  // Subject averages for predictive timing (completed tasks with actual minutes)
+  const completedTasks = tasks.filter(t => t.status === 'done' && t.actualMinutes && t.actualMinutes > 0);
+  const subjectMap = new Map<string, { totalMinutes: number; totalFocus: number; count: number }>();
+  
+  for (const task of completedTasks) {
+    const subject = task.course || 'Other';
+    const existing = subjectMap.get(subject) || { totalMinutes: 0, totalFocus: 0, count: 0 };
+    existing.totalMinutes += task.actualMinutes!;
+    existing.count += 1;
+    if (task.focus && task.focus > 0) {
+      existing.totalFocus += task.focus;
+    }
+    subjectMap.set(subject, existing);
+  }
+  
+  const subjectAverages = Array.from(subjectMap.entries())
+    .map(([subject, data]) => ({
+      subject,
+      avgMinutesPerTask: Math.round(data.totalMinutes / data.count),
+      avgFocus: data.totalFocus > 0 ? Math.round((data.totalFocus / data.count) * 10) / 10 : 0,
+      totalTasks: data.count,
+    }))
+    .filter(item => item.totalTasks >= 2) // Only include subjects with at least 2 completed tasks
+    .sort((a, b) => b.totalTasks - a.totalTasks);
+
+  return { 
+    upcoming7d, 
+    hoursThisWeek, 
+    avgFocusThisWeek, 
+    estMinutesThisWeek, 
+    loggedMinutesThisWeek, 
+    remainingMinutesThisWeek, 
+    courseBreakdown, 
+    dailyEst: daily, 
+    heavyDays, 
+    maxDayMinutes,
+    avgHours7d,
+    avgFocus7d,
+    subjectAverages
+  };
 }

@@ -2,6 +2,7 @@ import SessionLogger from '@/components/SessionLogger'
 import Stats from '@/components/Stats'
 import FocusTimer from '@/components/FocusTimer'
 import DashboardToday from '@/components/DashboardToday'
+import PredictiveTimingCard from '@/components/PredictiveTimingCard'
 
 export default function Home() {
   return (
@@ -10,12 +11,15 @@ export default function Home() {
         <DashboardToday />
       </section>
 
-      <section className="grid grid-cols-1 md:grid-cols-3 gap-6">
+      <section className="grid grid-cols-1 lg:grid-cols-4 gap-6">
         <div className="card p-5">
           <FocusTimer />
         </div>
         <div className="card p-5">
           <SessionLogger />
+        </div>
+        <div className="card p-5">
+          <PredictiveTimingCard />
         </div>
         <div className="card p-5">
           <Stats />

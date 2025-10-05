@@ -2,6 +2,8 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import type { Course, CourseMeetingBlock, Semester } from '@/lib/types';
 import { courseColorClass } from '@/lib/colors';
+import AddCourseWizard from '@/components/AddCourseWizard';
+import TaskBacklogEntry from '@/components/TaskBacklogEntry';
 
 export const dynamic = 'force-dynamic';
 
@@ -15,6 +17,8 @@ export default function CoursesPage() {
   const [editingId, setEditingId] = useState<string | null>(null);
   const [form, setForm] = useState<Partial<Course>>({});
   const [addOpen, setAddOpen] = useState(false);
+  const [showWizard, setShowWizard] = useState(false);
+  const [showBacklog, setShowBacklog] = useState(false);
   const [newCourse, setNewCourse] = useState<Partial<Course>>({ title: '', meetingDays: [], meetingBlocks: [], semester: undefined, year: undefined, color: undefined });
   const [timeMode, setTimeMode] = useState<'simple' | 'advanced'>('simple');
   const [simpleDuration, setSimpleDuration] = useState<string>('75'); // minutes
@@ -248,7 +252,11 @@ export default function CoursesPage() {
       </datalist>
       <div className="flex items-center justify-between">
         <h2 className="text-lg font-medium">Courses</h2>
-        <button onClick={refresh} className="px-2 py-1 rounded border border-[#1b2344]">Refresh</button>
+        <div className="flex gap-2">
+          <button onClick={() => setShowBacklog(true)} className="px-3 py-1 rounded border border-[#1b2344] text-sm hover:bg-[#1b2344]">Add Historical Task</button>
+          <button onClick={() => setShowWizard(true)} className="px-3 py-1 rounded bg-blue-600 hover:bg-blue-500 text-white text-sm">Add Course</button>
+          <button onClick={refresh} className="px-2 py-1 rounded border border-[#1b2344]">Refresh</button>
+        </div>
       </div>
       <div className="border border-[#1b2344] rounded p-3 bg-[#0b1020]">
         <div className="flex items-center justify-between">
@@ -623,6 +631,28 @@ export default function CoursesPage() {
             </tbody>
           </table>
         </div>
+      )}
+      
+      {/* Modals */}
+      {showWizard && (
+        <AddCourseWizard
+          onCourseAdded={(course) => {
+            setCourses(prev => [...prev, course].sort((a, b) => (a.title || '').localeCompare(b.title || '')));
+            refresh();
+          }}
+          onClose={() => setShowWizard(false)}
+        />
+      )}
+      
+      {showBacklog && (
+        <TaskBacklogEntry
+          courses={courses}
+          onTaskAdded={() => {
+            // Refresh any task-related data if needed
+            console.log('Historical task added');
+          }}
+          onClose={() => setShowBacklog(false)}
+        />
       )}
     </main>
   );
