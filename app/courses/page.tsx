@@ -254,7 +254,7 @@ export default function CoursesPage() {
         <h2 className="text-lg font-medium">Courses</h2>
         <div className="flex gap-2">
           <button onClick={() => setShowBacklog(true)} className="px-3 py-1 rounded border border-[#1b2344] text-sm hover:bg-[#1b2344]">Add Historical Task</button>
-          <button onClick={() => setShowWizard(true)} className="px-3 py-1 rounded bg-blue-600 hover:bg-blue-500 text-white text-sm">Add Course</button>
+          <button onClick={() => { console.log('Add Course clicked'); setShowWizard(true); }} className="px-3 py-1 rounded bg-blue-600 hover:bg-blue-500 text-white text-sm">Add Course</button>
           <button onClick={refresh} className="px-2 py-1 rounded border border-[#1b2344]">Refresh</button>
         </div>
       </div>
@@ -637,11 +637,19 @@ export default function CoursesPage() {
       {showWizard && (
         <AddCourseWizard
           onCourseAdded={(course) => {
+            console.log('Course added:', course);
             setCourses(prev => [...prev, course].sort((a, b) => (a.title || '').localeCompare(b.title || '')));
             refresh();
           }}
-          onClose={() => setShowWizard(false)}
+          onClose={() => { console.log('Wizard closed'); setShowWizard(false); }}
         />
+      )}
+      
+      {/* Debug info */}
+      {process.env.NODE_ENV === 'development' && (
+        <div className="fixed bottom-4 right-4 bg-black/80 text-white p-2 rounded text-xs">
+          showWizard: {showWizard ? 'true' : 'false'}
+        </div>
       )}
       
       {showBacklog && (
