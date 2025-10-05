@@ -166,32 +166,21 @@ async function readJson(): Promise<{ tasks: Task[]; sessions: StudySession[]; co
       throw new Error('Blob store not configured. Bind Vercel Blob or set BLOB_URL/BLOB_READ_WRITE_TOKEN.');
     }
     try {
-      // Try direct public URL first
-      if (BLOB_URL) {
-        const res = await fetch(`${BLOB_URL}/db.json`, { cache: 'no-store' });
-        if (res.ok) {
-          const data = await res.json();
-          if (!('courses' in data)) data.courses = [];
-          if (!('tasks' in data)) data.tasks = [];
-          if (!('sessions' in data)) data.sessions = [];
-          return data;
+      // Read via Blob listing (exact key)
+      const { blobs } = await list({ prefix: 'db.json' } as any);
+      const found = blobs.find((b: any) => b.pathname === 'db.json');
+      if (found?.url) {
+        const res = await fetch(found.url, { cache: 'no-store' });
+        if (!res.ok) {
+          throw new Error(`Failed to read blob db.json: HTTP ${res.status}`);
         }
-      } else {
-        // Fallback to listing and fetching via returned URL
-        const { blobs } = await list();
-        const found = blobs.find((b: any) => b.pathname === 'db.json');
-        if (found?.url) {
-          const res = await fetch(found.url, { cache: 'no-store' });
-          if (res.ok) {
-            const data = await res.json();
-            if (!('courses' in data)) data.courses = [];
-            if (!('tasks' in data)) data.tasks = [];
-            if (!('sessions' in data)) data.sessions = [];
-            return data;
-          }
-        }
+        const data = await res.json();
+        if (!('courses' in data)) data.courses = [];
+        if (!('tasks' in data)) data.tasks = [];
+        if (!('sessions' in data)) data.sessions = [];
+        return data;
       }
-      // Initialize if missing in Blob store
+      // Initialize if the blob truly does not exist
       const empty = { tasks: [], sessions: [], courses: [] };
       await writeJson(empty);
       return empty;
@@ -231,6 +220,7 @@ async function writeJson(data: { tasks: Task[]; sessions: StudySession[]; course
       await put('db.json', JSON.stringify(data, null, 2), {
         access: 'public',
         contentType: 'application/json',
+        addRandomSuffix: false,
       } as any);
       return;
     } catch (err) {
