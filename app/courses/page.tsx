@@ -4,6 +4,7 @@ import type { Course, Semester } from '@/lib/types';
 import { courseColorClass } from '@/lib/colors';
 import AddCourseWizard from '@/components/AddCourseWizard';
 import TaskBacklogEntry from '@/components/TaskBacklogEntry';
+import EditCourseModal from '@/components/EditCourseModal';
 
 export const dynamic = 'force-dynamic';
 
@@ -16,6 +17,7 @@ export default function CoursesPage() {
   const [semFilter, setSemFilter] = useState<Semester | 'all'>('all');
   const [showWizard, setShowWizard] = useState(false);
   const [showBacklog, setShowBacklog] = useState(false);
+  const [editCourse, setEditCourse] = useState<Course | null>(null);
 
   async function refresh() {
     setLoading(true);
@@ -58,27 +60,7 @@ export default function CoursesPage() {
         <h2 className="text-lg font-medium">Courses</h2>
         <div className="flex gap-2">
           <button onClick={() => setShowBacklog(true)} className="px-3 py-1 rounded border border-[#1b2344] text-sm hover:bg-[#1b2344]">Add Historical Task</button>
-          <button onClick={async () => {
-            const title = prompt('Course title:');
-            if (!title) return;
-            try {
-              const res = await fetch('/api/courses', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ title })
-              });
-              if (res.ok) {
-                await refresh();
-                alert('Course created!');
-              } else {
-                const error = await res.text();
-                alert('Error: ' + error);
-              }
-            } catch (err) {
-              alert('Network error: ' + err);
-            }
-          }} className="px-3 py-1 rounded bg-green-600 hover:bg-green-500 text-white text-sm">Quick Add</button>
-          <button onClick={() => setShowWizard(true)} className="px-3 py-1 rounded bg-blue-600 hover:bg-blue-500 text-white text-sm">Add Course Wizard</button>
+          <button onClick={() => setShowWizard(true)} className="px-3 py-1 rounded bg-blue-600 hover:bg-blue-500 text-white text-sm">Add Course</button>
           <button onClick={refresh} className="px-2 py-1 rounded border border-[#1b2344]">Refresh</button>
         </div>
       </div>
@@ -116,50 +98,74 @@ export default function CoursesPage() {
               <tr>
                 <th className="py-2 pr-4">Course</th>
                 <th className="py-2 pr-4">Meeting</th>
-                <th className="py-2 pr-4">Dates</th>
                 <th className="py-2 pr-4">Term</th>
                 <th className="py-2 pr-4">Actions</th>
               </tr>
             </thead>
             <tbody>
-              {filtered.map((c) => (
-                <tr key={c.id} className="border-t border-[#1b2344]">
-                  <td className="py-2 pr-4">
-                    <div className="flex items-center gap-2">
-                      <span className={`inline-block w-3 h-3 rounded-full ${c.color ? '' : courseColorClass(c.title, 'bg')}`} style={c.color ? { backgroundColor: c.color } : undefined}></span>
-                      <div>
-                        <div className="font-medium">{c.title}</div>
-                        {c.code && <div className="text-xs text-slate-400">{c.code}</div>}
-                        {c.instructor && <div className="text-xs text-slate-400">{c.instructor}</div>}
+              {filtered.map((c) => {
+                const blocks = (Array.isArray(c.meetingBlocks) && c.meetingBlocks.length)
+                  ? c.meetingBlocks
+                  : ((Array.isArray(c.meetingDays) && c.meetingStart && c.meetingEnd)
+                      ? [{ days: c.meetingDays, start: c.meetingStart, end: c.meetingEnd, location: c.room || c.location || null }]
+                      : []);
+                return (
+                  <tr key={c.id} className="border-t border-[#1b2344]">
+                    <td className="py-2 pr-4">
+                      <div className="flex items-center gap-2">
+                        <span className={`inline-block w-3 h-3 rounded-full ${c.color ? '' : courseColorClass(c.title, 'bg')}`} style={c.color ? { backgroundColor: c.color } : undefined}></span>
+                        <div>
+                          <div className="font-medium">{c.title}</div>
+                          {c.code && <div className="text-xs text-slate-400">{c.code}</div>}
+                          {c.instructor && <div className="text-xs text-slate-400">{c.instructor}</div>}
+                        </div>
                       </div>
-                    </div>
-                  </td>
-                  <td className="py-2 pr-4 whitespace-nowrap">
-                    {c.meetingDays?.length && c.meetingStart && c.meetingEnd ? (
-                      <div>
-                        {c.meetingDays.map(d => ['Sun','Mon','Tue','Wed','Thu','Fri','Sat'][d]).join(', ')} • {fmt12(c.meetingStart)}–{fmt12(c.meetingEnd)}
+                    </td>
+                    <td className="py-2 pr-4 whitespace-nowrap">
+                      {Array.isArray(blocks) && blocks.length ? (
+                        <ul className="space-y-0.5">
+                          {blocks.map((b: any, i: number) => (
+                            <li key={i} className="text-xs">
+                              {(b.days || []).map((d: number) => ['Sun','Mon','Tue','Wed','Thu','Fri','Sat'][d]).join(', ')}
+                              {b.start && b.end ? ` • ${fmt12(String(b.start))}–${fmt12(String(b.end))}` : ''}
+                            </li>
+                          ))}
+                        </ul>
+                      ) : (
+                        <div className="text-slate-500">—</div>
+                      )}
+                    </td>
+                    <td className="py-2 pr-4 whitespace-nowrap">
+                      {c.startDate && c.endDate ? (
+                        <div>
+                          {new Date(c.startDate).toLocaleDateString()} – {new Date(c.endDate).toLocaleDateString()}
+                        </div>
+                      ) : (
+                        <div className="text-slate-500">—</div>
+                      )}
+                    </td>
+                    <td className="py-2 pr-4 whitespace-nowrap">
+                      {c.semester && c.year ? `${c.semester} ${c.year}` : '—'}
+                    </td>
+                    <td className="py-2 pr-4 whitespace-nowrap">
+                      <div className="flex items-center gap-2">
+                        <a href={`/calendar?course=${encodeURIComponent(c.title)}`} className="px-2 py-1 rounded border border-[#1b2344] text-xs">Calendar</a>
+                        <button onClick={() => setEditCourse(c)} className="px-2 py-1 rounded border border-[#1b2344] text-xs">Edit</button>
+                        <button onClick={async () => {
+                          if (!confirm('Delete this course? This does not delete tasks.')) return;
+                          const res = await fetch(`/api/courses/${c.id}`, { method: 'DELETE' });
+                          if (res.ok) {
+                            setCourses(prev => prev.filter(x => x.id !== c.id));
+                          } else {
+                            const text = await res.text();
+                            alert('Delete failed: ' + text);
+                          }
+                        }} className="px-2 py-1 rounded border border-rose-600 text-rose-300 text-xs">Delete</button>
                       </div>
-                    ) : (
-                      <div className="text-slate-500">—</div>
-                    )}
-                  </td>
-                  <td className="py-2 pr-4 whitespace-nowrap">
-                    {c.startDate && c.endDate ? (
-                      <div>
-                        {new Date(c.startDate).toLocaleDateString()} – {new Date(c.endDate).toLocaleDateString()}
-                      </div>
-                    ) : (
-                      <div className="text-slate-500">—</div>
-                    )}
-                  </td>
-                  <td className="py-2 pr-4 whitespace-nowrap">
-                    {c.semester && c.year ? `${c.semester} ${c.year}` : '—'}
-                  </td>
-                  <td className="py-2 pr-4 whitespace-nowrap">
-                    <a href={`/calendar?course=${encodeURIComponent(c.title)}`} className="px-2 py-1 rounded border border-[#1b2344] text-xs">Calendar</a>
-                  </td>
-                </tr>
-              ))}
+                    </td>
+                  </tr>
+                );
+              })}
             </tbody>
           </table>
         </div>
@@ -175,7 +181,18 @@ export default function CoursesPage() {
           onClose={() => setShowWizard(false)}
         />
       )}
-      
+      {editCourse && (
+        <EditCourseModal
+          course={editCourse}
+          onSaved={(updated) => {
+            setCourses(prev => prev.map(c => c.id === updated.id ? updated : c));
+            setEditCourse(null);
+            refresh();
+          }}
+          onClose={() => setEditCourse(null)}
+        />
+      )}
+
       {showBacklog && (
         <TaskBacklogEntry
           courses={courses}
