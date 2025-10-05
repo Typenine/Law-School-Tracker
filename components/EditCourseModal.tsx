@@ -1,6 +1,7 @@
 "use client";
 import { useMemo, useState } from 'react';
 import type { Course, CourseMeetingBlock, Semester, UpdateCourseInput } from '@/lib/types';
+import TimePickerField from '@/components/TimePickerField';
 
 type Props = {
   course: Course;
@@ -163,9 +164,9 @@ export default function EditCourseModal({ course, onSaved, onClose }: Props) {
                 ))}
               </div>
               <div className="flex items-center gap-2">
-                <input type="time" value={draft.meetingStart || ''} onChange={e => setDraft(d => ({ ...d, meetingStart: e.target.value }))} className="bg-[#0b1020] border border-[#1b2344] rounded px-2 py-1" />
+                <TimePickerField value={draft.meetingStart || ''} onChange={(v) => setDraft(d => ({ ...d, meetingStart: v }))} />
                 <span className="text-xs">–</span>
-                <input type="time" value={draft.meetingEnd || ''} onChange={e => setDraft(d => ({ ...d, meetingEnd: e.target.value }))} className="bg-[#0b1020] border border-[#1b2344] rounded px-2 py-1" />
+                <TimePickerField value={draft.meetingEnd || ''} onChange={(v) => setDraft(d => ({ ...d, meetingEnd: v }))} />
               </div>
               <button onClick={convertSimpleToBlocks} className="text-xs underline">Convert to different times per day</button>
             </div>
@@ -185,15 +186,15 @@ export default function EditCourseModal({ course, onSaved, onClose }: Props) {
                     ))}
                   </div>
                   <div className="flex items-center gap-2 flex-wrap">
-                    <input type="time" value={b.start || ''} onChange={e => {
-                      const list = [...blocks]; list[i] = { ...list[i], start: e.target.value };
+                    <TimePickerField value={b.start || ''} onChange={(v) => {
+                      const list = [...blocks]; list[i] = { ...list[i], start: v };
                       setDraft(d => ({ ...d, meetingBlocks: list }));
-                    }} className="bg-[#0b1020] border border-[#1b2344] rounded px-2 py-1" />
+                    }} />
                     <span className="text-xs">–</span>
-                    <input type="time" value={b.end || ''} onChange={e => {
-                      const list = [...blocks]; list[i] = { ...list[i], end: e.target.value };
+                    <TimePickerField value={b.end || ''} onChange={(v) => {
+                      const list = [...blocks]; list[i] = { ...list[i], end: v };
                       setDraft(d => ({ ...d, meetingBlocks: list }));
-                    }} className="bg-[#0b1020] border border-[#1b2344] rounded px-2 py-1" />
+                    }} />
                     <input placeholder="Location (optional)" value={b.location || ''} onChange={e => {
                       const list = [...blocks]; list[i] = { ...list[i], location: e.target.value };
                       setDraft(d => ({ ...d, meetingBlocks: list }));
