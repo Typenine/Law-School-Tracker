@@ -173,6 +173,7 @@ async function readJson(): Promise<{ tasks: Task[]; sessions: StudySession[]; co
       const empty = { tasks: [], sessions: [], courses: [] };
       await fs.mkdir(path.dirname(DATA_FILE), { recursive: true });
       await fs.writeFile(DATA_FILE, JSON.stringify(empty, null, 2), 'utf8');
+      console.log('Created new db.json file at:', DATA_FILE);
       return empty;
     }
     throw e;
