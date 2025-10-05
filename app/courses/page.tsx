@@ -156,6 +156,7 @@ export default function CoursesPage() {
                           const res = await fetch(`/api/courses/${c.id}`, { method: 'DELETE' });
                           if (res.ok) {
                             setCourses(prev => prev.filter(x => x.id !== c.id));
+                            await refresh();
                           } else {
                             const text = await res.text();
                             alert('Delete failed: ' + text);
@@ -174,9 +175,9 @@ export default function CoursesPage() {
       {/* Modals */}
       {showWizard && (
         <AddCourseWizard
-          onCourseAdded={(course) => {
+          onCourseAdded={async (course) => {
             setCourses(prev => [...prev, course].sort((a, b) => (a.title || '').localeCompare(b.title || '')));
-            refresh();
+            await refresh();
           }}
           onClose={() => setShowWizard(false)}
         />
@@ -184,10 +185,10 @@ export default function CoursesPage() {
       {editCourse && (
         <EditCourseModal
           course={editCourse}
-          onSaved={(updated) => {
+          onSaved={async (updated) => {
             setCourses(prev => prev.map(c => c.id === updated.id ? updated : c));
             setEditCourse(null);
-            refresh();
+            await refresh();
           }}
           onClose={() => setEditCourse(null)}
         />
