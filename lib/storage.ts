@@ -114,45 +114,50 @@ export async function createCourse(input: NewCourseInput): Promise<Course> {
 
 export async function updateCourse(id: string, patch: UpdateCourseInput): Promise<Course | null> {
   if (DB_URL) {
-    const p = getPool();
-    const fields: string[] = []; const values: any[] = []; let idx = 1;
-    if (patch.code !== undefined) { fields.push(`code = $${idx++}`); values.push(patch.code); }
-    if (patch.title !== undefined) { fields.push(`title = $${idx++}`); values.push(patch.title); }
-    if (patch.instructor !== undefined) { fields.push(`instructor = $${idx++}`); values.push(patch.instructor); }
-    if (patch.instructorEmail !== undefined) { fields.push(`instructor_email = $${idx++}`); values.push(patch.instructorEmail); }
-    if (patch.room !== undefined) { fields.push(`room = $${idx++}`); values.push(patch.room); }
-    if (patch.location !== undefined) { fields.push(`location = $${idx++}`); values.push(patch.location); }
-    if (patch.color !== undefined) { fields.push(`color = $${idx++}`); values.push(patch.color); }
-    if (patch.meetingDays !== undefined) { fields.push(`meeting_days = $${idx++}`); values.push(patch.meetingDays); }
-    if (patch.meetingStart !== undefined) { fields.push(`meeting_start = $${idx++}`); values.push(patch.meetingStart); }
-    if (patch.meetingEnd !== undefined) { fields.push(`meeting_end = $${idx++}`); values.push(patch.meetingEnd); }
-    if (patch.meetingBlocks !== undefined) { fields.push(`meeting_blocks = $${idx++}`); values.push(patch.meetingBlocks as any); }
-    if (patch.startDate !== undefined) { fields.push(`start_date = $${idx++}`); values.push(patch.startDate ? new Date(patch.startDate) : null); }
-    if (patch.endDate !== undefined) { fields.push(`end_date = $${idx++}`); values.push(patch.endDate ? new Date(patch.endDate) : null); }
-    if (patch.semester !== undefined) { fields.push(`semester = $${idx++}`); values.push(patch.semester); }
-    if (patch.year !== undefined) { fields.push(`year = $${idx++}`); values.push(patch.year); }
-    if (!fields.length) {
-      const cur = await p.query(`SELECT id, code, title, instructor, instructor_email, room, location, color, meeting_days, meeting_start, meeting_end, meeting_blocks, start_date, end_date, semester, year, created_at FROM courses WHERE id=$1`, [id]);
-      if (!cur.rowCount) return null;
-      const r = cur.rows[0];
+    try {
+      const p = getPool();
+      const fields: string[] = []; const values: any[] = []; let idx = 1;
+      if (patch.code !== undefined) { fields.push(`code = $${idx++}`); values.push(patch.code); }
+      if (patch.title !== undefined) { fields.push(`title = $${idx++}`); values.push(patch.title); }
+      if (patch.instructor !== undefined) { fields.push(`instructor = $${idx++}`); values.push(patch.instructor); }
+      if (patch.instructorEmail !== undefined) { fields.push(`instructor_email = $${idx++}`); values.push(patch.instructorEmail); }
+      if (patch.room !== undefined) { fields.push(`room = $${idx++}`); values.push(patch.room); }
+      if (patch.location !== undefined) { fields.push(`location = $${idx++}`); values.push(patch.location); }
+      if (patch.color !== undefined) { fields.push(`color = $${idx++}`); values.push(patch.color); }
+      if (patch.meetingDays !== undefined) { fields.push(`meeting_days = $${idx++}`); values.push(patch.meetingDays); }
+      if (patch.meetingStart !== undefined) { fields.push(`meeting_start = $${idx++}`); values.push(patch.meetingStart); }
+      if (patch.meetingEnd !== undefined) { fields.push(`meeting_end = $${idx++}`); values.push(patch.meetingEnd); }
+      if (patch.meetingBlocks !== undefined) { fields.push(`meeting_blocks = $${idx++}`); values.push(patch.meetingBlocks as any); }
+      if (patch.startDate !== undefined) { fields.push(`start_date = $${idx++}`); values.push(patch.startDate ? new Date(patch.startDate) : null); }
+      if (patch.endDate !== undefined) { fields.push(`end_date = $${idx++}`); values.push(patch.endDate ? new Date(patch.endDate) : null); }
+      if (patch.semester !== undefined) { fields.push(`semester = $${idx++}`); values.push(patch.semester); }
+      if (patch.year !== undefined) { fields.push(`year = $${idx++}`); values.push(patch.year); }
+      if (!fields.length) {
+        const cur = await p.query(`SELECT id, code, title, instructor, instructor_email, room, location, color, meeting_days, meeting_start, meeting_end, meeting_blocks, start_date, end_date, semester, year, created_at FROM courses WHERE id=$1`, [id]);
+        if (!cur.rowCount) return null;
+        const r = cur.rows[0];
+        return {
+          id: r.id, code: r.code, title: r.title, instructor: r.instructor, instructorEmail: r.instructor_email, room: r.room, location: r.location, color: r.color ?? null,
+          meetingDays: r.meeting_days ?? null, meetingStart: r.meeting_start, meetingEnd: r.meeting_end, meetingBlocks: r.meeting_blocks ?? null,
+          startDate: r.start_date ? new Date(r.start_date).toISOString() : null, endDate: r.end_date ? new Date(r.end_date).toISOString() : null,
+          semester: r.semester ?? null, year: r.year ?? null, createdAt: new Date(r.created_at).toISOString()
+        };
+      }
+      const q = `UPDATE courses SET ${fields.join(', ')} WHERE id = $${idx} RETURNING id, code, title, instructor, instructor_email, room, location, color, meeting_days, meeting_start, meeting_end, meeting_blocks, start_date, end_date, semester, year, created_at`;
+      values.push(id);
+      const res = await p.query(q, values);
+      if (!res.rowCount) return null;
+      const r = res.rows[0];
       return {
         id: r.id, code: r.code, title: r.title, instructor: r.instructor, instructorEmail: r.instructor_email, room: r.room, location: r.location, color: r.color ?? null,
         meetingDays: r.meeting_days ?? null, meetingStart: r.meeting_start, meetingEnd: r.meeting_end, meetingBlocks: r.meeting_blocks ?? null,
         startDate: r.start_date ? new Date(r.start_date).toISOString() : null, endDate: r.end_date ? new Date(r.end_date).toISOString() : null,
         semester: r.semester ?? null, year: r.year ?? null, createdAt: new Date(r.created_at).toISOString()
       };
+    } catch (e) {
+      console.warn('updateCourse: DB update failed, falling back to JSON store:', (e as any)?.message || e);
+      // fall through to JSON below
     }
-    const q = `UPDATE courses SET ${fields.join(', ')} WHERE id = $${idx} RETURNING id, code, title, instructor, instructor_email, room, location, color, meeting_days, meeting_start, meeting_end, meeting_blocks, start_date, end_date, semester, year, created_at`;
-    values.push(id);
-    const res = await p.query(q, values);
-    if (!res.rowCount) return null;
-    const r = res.rows[0];
-    return {
-      id: r.id, code: r.code, title: r.title, instructor: r.instructor, instructorEmail: r.instructor_email, room: r.room, location: r.location, color: r.color ?? null,
-      meetingDays: r.meeting_days ?? null, meetingStart: r.meeting_start, meetingEnd: r.meeting_end, meetingBlocks: r.meeting_blocks ?? null,
-      startDate: r.start_date ? new Date(r.start_date).toISOString() : null, endDate: r.end_date ? new Date(r.end_date).toISOString() : null,
-      semester: r.semester ?? null, year: r.year ?? null, createdAt: new Date(r.created_at).toISOString()
-    };
   }
   const db = await readJson();
   const i = db.courses.findIndex(c => c.id === id);
@@ -165,9 +170,14 @@ export async function updateCourse(id: string, patch: UpdateCourseInput): Promis
 
 export async function deleteCourse(id: string): Promise<boolean> {
   if (DB_URL) {
-    const p = getPool();
-    const res = await p.query(`DELETE FROM courses WHERE id=$1`, [id]);
-    return res.rowCount > 0;
+    try {
+      const p = getPool();
+      const res = await p.query(`DELETE FROM courses WHERE id=$1`, [id]);
+      return res.rowCount > 0;
+    } catch (e) {
+      console.warn('deleteCourse: DB delete failed, falling back to JSON store:', (e as any)?.message || e);
+      // fall through to JSON below
+    }
   }
   const db = await readJson();
   const before = db.courses.length;

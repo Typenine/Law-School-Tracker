@@ -98,6 +98,7 @@ export default function CoursesPage() {
               <tr>
                 <th className="py-2 pr-4">Course</th>
                 <th className="py-2 pr-4">Meeting</th>
+                <th className="py-2 pr-4">Dates</th>
                 <th className="py-2 pr-4">Term</th>
                 <th className="py-2 pr-4">Actions</th>
               </tr>
@@ -150,18 +151,32 @@ export default function CoursesPage() {
                     <td className="py-2 pr-4 whitespace-nowrap">
                       <div className="flex items-center gap-2">
                         <a href={`/calendar?course=${encodeURIComponent(c.title)}`} className="px-2 py-1 rounded border border-[#1b2344] text-xs">Calendar</a>
-                        <button onClick={() => setEditCourse(c)} className="px-2 py-1 rounded border border-[#1b2344] text-xs">Edit</button>
-                        <button onClick={async () => {
-                          if (!confirm('Delete this course? This does not delete tasks.')) return;
-                          const res = await fetch(`/api/courses/${c.id}`, { method: 'DELETE' });
-                          if (res.ok) {
-                            setCourses(prev => prev.filter(x => x.id !== c.id));
-                            await refresh();
-                          } else {
-                            const text = await res.text();
-                            alert('Delete failed: ' + text);
-                          }
-                        }} className="px-2 py-1 rounded border border-rose-600 text-rose-300 text-xs">Delete</button>
+                        <button 
+                          onClick={() => setEditCourse(c)} 
+                          className="px-2 py-1 rounded border border-[#1b2344] text-xs hover:bg-[#1b2344]"
+                        >
+                          Edit
+                        </button>
+                        <button 
+                          onClick={async () => {
+                            if (!confirm(`Delete "${c.title}"? This will not delete related tasks.`)) return;
+                            try {
+                              const res = await fetch(`/api/courses/${c.id}`, { method: 'DELETE' });
+                              if (res.ok) {
+                                // Remove from UI immediately
+                                setCourses(prev => prev.filter(x => x.id !== c.id));
+                              } else {
+                                const errorText = await res.text();
+                                alert(`Delete failed: ${errorText}`);
+                              }
+                            } catch (error) {
+                              alert(`Delete failed: ${error}`);
+                            }
+                          }} 
+                          className="px-2 py-1 rounded border border-rose-600 text-rose-300 text-xs hover:bg-rose-600 hover:text-white"
+                        >
+                          Delete
+                        </button>
                       </div>
                     </td>
                   </tr>
@@ -185,10 +200,11 @@ export default function CoursesPage() {
       {editCourse && (
         <EditCourseModal
           course={editCourse}
-          onSaved={async (updated) => {
+          onSaved={(updated) => {
+            // Update the course in the list immediately
             setCourses(prev => prev.map(c => c.id === updated.id ? updated : c));
+            // Close the modal
             setEditCourse(null);
-            await refresh();
           }}
           onClose={() => setEditCourse(null)}
         />
