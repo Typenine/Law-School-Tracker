@@ -46,61 +46,19 @@ function getPool(): Pool {
 
 // Courses
 export async function listCourses(): Promise<Course[]> {
-  if (DB_URL) {
-    try {
-      const p = getPool();
-      type Row = {
-        id: string; code: string | null; title: string; instructor: string | null; instructor_email: string | null; room: string | null; location: string | null;
-        meeting_days: number[] | null; meeting_start: string | null; meeting_end: string | null; meeting_blocks: any | null; start_date: Date | string | null; end_date: Date | string | null;
-        semester: string | null; year: number | null; created_at: Date | string
-      };
-      const res = await p.query(`SELECT id, code, title, instructor, instructor_email, room, location, color, meeting_days, meeting_start, meeting_end, meeting_blocks, start_date, end_date, semester, year, created_at FROM courses ORDER BY title`);
-      const results = (res.rows as Row[]).map(r => ({
-        id: r.id, code: r.code, title: r.title, instructor: r.instructor, instructorEmail: r.instructor_email, room: r.room, location: r.location,
-        color: (r as any).color ?? null,
-        meetingDays: (r.meeting_days as any) ?? null, meetingStart: r.meeting_start, meetingEnd: r.meeting_end, meetingBlocks: (r.meeting_blocks as any) ?? null,
-        startDate: r.start_date ? new Date(r.start_date).toISOString() : null, endDate: r.end_date ? new Date(r.end_date).toISOString() : null,
-        semester: (r.semester as any) ?? null, year: r.year ?? null, createdAt: new Date(r.created_at as any).toISOString()
-      }));
-      return results.sort((a, b) => (a.title || '').localeCompare(b.title || ''));
-    } catch (e) {
-      console.warn('listCourses: DB query failed, falling back to JSON store:', (e as any)?.message || e);
-      // fall through to JSON below
-    }
-  }
-  // Fallback to JSON-only store when DB is unavailable or query failed
+  // Skip DB entirely since you're using blob storage
   try {
     const json = await readJson();
     return json.courses.sort((a, b) => (a.title || '').localeCompare(b.title || ''));
-  } catch {
+  } catch (e) {
+    console.error('listCourses failed:', e);
     return [];
   }
 }
 
 export async function createCourse(input: NewCourseInput): Promise<Course> {
   const now = new Date().toISOString();
-  if (DB_URL) {
-    try {
-      const p = getPool();
-      const id = uuid();
-      const res = await p.query(
-        `INSERT INTO courses (id, code, title, instructor, instructor_email, room, location, color, meeting_days, meeting_start, meeting_end, meeting_blocks, start_date, end_date, semester, year, created_at)
-         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17)
-         RETURNING id, code, title, instructor, instructor_email, room, location, color, meeting_days, meeting_start, meeting_end, meeting_blocks, start_date, end_date, semester, year, created_at`,
-        [id, input.code ?? null, input.title, input.instructor ?? null, input.instructorEmail ?? null, input.room ?? null, input.location ?? null, (input as any).color ?? null, input.meetingDays ?? null, input.meetingStart ?? null, input.meetingEnd ?? null, input.meetingBlocks ?? null, input.startDate ? new Date(input.startDate) : null, input.endDate ? new Date(input.endDate) : null, input.semester ?? null, input.year ?? null, new Date(now)]
-      );
-      const r = res.rows[0];
-      return {
-        id: r.id, code: r.code, title: r.title, instructor: r.instructor, instructorEmail: r.instructor_email, room: r.room, location: r.location, color: r.color ?? null,
-        meetingDays: r.meeting_days ?? null, meetingStart: r.meeting_start, meetingEnd: r.meeting_end, meetingBlocks: r.meeting_blocks ?? null,
-        startDate: r.start_date ? new Date(r.start_date).toISOString() : null, endDate: r.end_date ? new Date(r.end_date).toISOString() : null,
-        semester: r.semester ?? null, year: r.year ?? null, createdAt: new Date(r.created_at).toISOString()
-      };
-    } catch (e) {
-      console.warn('createCourse: Postgres insert failed, falling back to JSON store:', (e as any)?.message || e);
-      // Fall through to JSON implementation
-    }
-  }
+  // Skip DB entirely since you're using blob storage
   const db = await readJson();
   const c: Course = {
     id: uuid(), code: input.code ?? null, title: input.title, instructor: input.instructor ?? null, instructorEmail: input.instructorEmail ?? null,
@@ -266,12 +224,14 @@ async function writeJson(data: { tasks: Task[]; sessions: StudySession[]; course
       console.log('Successfully wrote to blob storage');
       return;
     } catch (err) {
-      console.error('Blob storage write failed:', err);
-      throw new Error(`Blob storage write failed: ${(err as any)?.message || err}`);
+      console.error('Blob storage write failed, falling back to local file:', err);
+      // Fall through to local file below instead of throwing
     }
   }
+  // Local file storage (development or blob storage fallback)
   await fs.mkdir(path.dirname(DATA_FILE), { recursive: true });
   await fs.writeFile(DATA_FILE, JSON.stringify(data, null, 2), 'utf8');
+  console.log('Successfully wrote to local file:', DATA_FILE);
 }
 
 // Tasks
