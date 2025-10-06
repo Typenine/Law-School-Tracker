@@ -28,7 +28,8 @@ const DATA_DIR = IS_VERCEL ? path.join('/tmp', 'law-school-tracker') : path.join
 const DATA_FILE = path.join(DATA_DIR, 'db.json');
 const BLOB_URL = process.env.BLOB_URL || null; // public base URL, e.g. https://<store-id>.public.blob.vercel-storage.com
 const BLOB_TOKEN = process.env.BLOB_READ_WRITE_TOKEN || null; // optional for SDK when not bound
-export const HAS_BLOB = !!(BLOB_URL || BLOB_TOKEN || process.env.VERCEL_BLOB_STORE_ID);
+// When running on Vercel, Blob is expected via binding; env vars may be absent.
+export const HAS_BLOB = !!process.env.VERCEL || !!BLOB_URL || !!BLOB_TOKEN;
 export function storageMode(): 'db' | 'blob' | 'file' {
   if (HAS_DB) return 'db';
   if (IS_VERCEL && HAS_BLOB) return 'blob';
@@ -166,21 +167,25 @@ async function readJson(): Promise<{ tasks: Task[]; sessions: StudySession[]; co
       throw new Error('Blob store not configured. Bind Vercel Blob or set BLOB_URL/BLOB_READ_WRITE_TOKEN.');
     }
     try {
-      // Read via Blob listing (exact key)
+      // Read via Blob listing with robust selection
       const { blobs } = await list({ prefix: 'db.json' } as any);
-      const found = blobs.find((b: any) => b.pathname === 'db.json');
-      if (found?.url) {
-        const res = await fetch(found.url, { cache: 'no-store' });
-        if (!res.ok) {
-          throw new Error(`Failed to read blob db.json: HTTP ${res.status}`);
-        }
+      const exact = blobs.find((b: any) => b.pathname === 'db.json');
+      const endsWith = blobs.find((b: any) => (b.pathname || '').endsWith('/db.json'));
+      // Fallback to latest suffixed db.json-* if present
+      const suffixed = blobs
+        .filter((b: any) => (b.pathname || '').startsWith('db.json-'))
+        .sort((a: any, b: any) => new Date(b.uploadedAt || b.createdAt || b.lastModified || 0).getTime() - new Date(a.uploadedAt || a.createdAt || a.lastModified || 0).getTime())[0];
+      const pick = exact || endsWith || suffixed;
+      if (pick?.url) {
+        const res = await fetch(pick.url, { cache: 'no-store' });
+        if (!res.ok) throw new Error(`Failed to read blob ${pick.pathname}: HTTP ${res.status}`);
         const data = await res.json();
         if (!('courses' in data)) data.courses = [];
         if (!('tasks' in data)) data.tasks = [];
         if (!('sessions' in data)) data.sessions = [];
         return data;
       }
-      // Initialize if the blob truly does not exist
+      // Initialize if no existing blob
       const empty = { tasks: [], sessions: [], courses: [] };
       await writeJson(empty);
       return empty;
