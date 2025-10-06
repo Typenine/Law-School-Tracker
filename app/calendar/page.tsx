@@ -552,7 +552,7 @@ export default function CalendarPage() {
               ) : (
                 <ul className="space-y-1">
                   {list.map(t => (
-                    <li key={t.id} className="text-[11px] flex items-center justify-between gap-1 cursor-pointer" draggable onDragStart={(e) => onDragStart(e, t)} onClick={(e) => { e.stopPropagation(); openEdit(t); }}>
+                    <li key={t.id} className="text-[11px] flex items-start gap-1 cursor-pointer" draggable onDragStart={(e) => onDragStart(e, t)} onClick={(e) => { e.stopPropagation(); openEdit(t); }}>
                       <div className="min-w-0">
                         <div className="truncate flex items-center gap-2">
                           {t.course ? (
@@ -577,10 +577,6 @@ export default function CalendarPage() {
                             ))}
                           </div>
                         )}
-                      </div>
-                      <div className="shrink-0 space-x-1">
-                        <button className="px-1 py-0.5 text-[10px] rounded border border-[#1b2344]" onClick={(e) => { e.stopPropagation(); toggleDone(t); }}>{t.status === 'done' ? 'Undo' : 'Done'}</button>
-                        <button className="px-1 py-0.5 text-[10px] rounded border border-[#1b2344]" onClick={(e) => { e.stopPropagation(); movePlusOne(t); }}>+1d</button>
                       </div>
                     </li>
                   ))}
