@@ -2,7 +2,7 @@ import { promises as fs } from 'fs';
 import path from 'path';
 import { Pool } from 'pg';
 import { randomUUID as nodeRandomUUID } from 'crypto';
-import { put, list } from '@vercel/blob';
+import { put, list, del } from '@vercel/blob';
 import { Course, NewCourseInput, NewSessionInput, NewTaskInput, StudySession, Task, UpdateCourseInput, UpdateTaskInput } from './types';
 
 function resolveDbUrl(): string | null {
@@ -167,15 +167,18 @@ async function readJson(): Promise<{ tasks: Task[]; sessions: StudySession[]; co
       throw new Error('Blob store not configured. Bind Vercel Blob or set BLOB_URL/BLOB_READ_WRITE_TOKEN.');
     }
     try {
-      // Read via Blob listing with robust selection
-      const { blobs } = await list({ prefix: 'db.json' } as any);
-      const exact = blobs.find((b: any) => b.pathname === 'db.json');
-      const endsWith = blobs.find((b: any) => (b.pathname || '').endsWith('/db.json'));
-      // Fallback to latest suffixed db.json-* if present
-      const suffixed = blobs
-        .filter((b: any) => (b.pathname || '').startsWith('db.json-'))
-        .sort((a: any, b: any) => new Date(b.uploadedAt || b.createdAt || b.lastModified || 0).getTime() - new Date(a.uploadedAt || a.createdAt || a.lastModified || 0).getTime())[0];
-      const pick = exact || endsWith || suffixed;
+      // Read via Blob listing with robust selection (no prefix filter)
+      const { blobs } = await list();
+      // Collect all plausible candidates
+      const cands = blobs.filter((b: any) => {
+        const p = (b.pathname || '');
+        return p === 'db.json' || p.endsWith('/db.json') || p.startsWith('db.json-');
+      });
+      // Choose the newest by timestamp
+      const pick = cands.sort((a: any, b: any) =>
+        new Date(b.uploadedAt || b.createdAt || b.lastModified || 0).getTime() -
+        new Date(a.uploadedAt || a.createdAt || a.lastModified || 0).getTime()
+      )[0];
       if (pick?.url) {
         const bust = `${pick.url}${pick.url.includes('?') ? '&' : '?'}_ts=${Date.now()}`;
         const res = await fetch(bust, { cache: 'no-store' });
@@ -228,6 +231,12 @@ async function writeJson(data: { tasks: Task[]; sessions: StudySession[]; course
         contentType: 'application/json',
         addRandomSuffix: false,
       } as any);
+      // Clean up any legacy suffixed blobs to avoid stale reads
+      try {
+        const { blobs } = await list();
+        const legacy = blobs.filter((b: any) => (b.pathname || '').startsWith('db.json-'));
+        if (legacy.length) await Promise.all(legacy.map((b: any) => del(b.pathname)));
+      } catch {}
       return;
     } catch (err) {
       // On Vercel, failing to write to Blob should not fall back to
