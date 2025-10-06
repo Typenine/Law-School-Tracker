@@ -32,6 +32,7 @@ export default function TimePickerField({ value, onChange, placeholder = "HH:MM"
   const [m, setM] = useState(0);
   const [am, setAm] = useState(true);
   const rootRef = useRef<HTMLDivElement>(null);
+  const [dropUp, setDropUp] = useState(false);
 
   // Sync from external value
   useEffect(() => {
@@ -47,6 +48,16 @@ export default function TimePickerField({ value, onChange, placeholder = "HH:MM"
     }
     function onEsc(e: KeyboardEvent) { if (e.key === 'Escape') setOpen(false); }
     if (open) {
+      // Decide placement (drop up if not enough space below)
+      try {
+        const rect = rootRef.current?.getBoundingClientRect();
+        if (rect) {
+          const spaceBelow = window.innerHeight - rect.bottom;
+          const spaceAbove = rect.top;
+          const estimated = 320; // px
+          setDropUp(spaceBelow < estimated && spaceAbove > spaceBelow);
+        }
+      } catch {}
       document.addEventListener('mousedown', onDocClick);
       document.addEventListener('keydown', onEsc);
       return () => { document.removeEventListener('mousedown', onDocClick); document.removeEventListener('keydown', onEsc); };
@@ -70,7 +81,10 @@ export default function TimePickerField({ value, onChange, placeholder = "HH:MM"
         {value ? value : <span className="text-slate-500">{placeholder}</span>}
       </button>
       {open && !disabled && (
-        <div className="absolute z-50 mt-1 w-64 rounded border border-[#1b2344] bg-[#0b1020] p-2 shadow-lg">
+        <div
+          className="absolute z-50 w-64 rounded border border-[#1b2344] bg-[#0b1020] p-2 shadow-lg max-h-[60vh] overflow-auto right-0"
+          style={dropUp ? { bottom: 'calc(100% + 0.25rem)' } : { top: 'calc(100% + 0.25rem)' }}
+        >
           <div className="flex items-center justify-between mb-2">
             <div className="text-xs text-slate-300/70">Pick time</div>
             <div className="inline-flex text-xs rounded overflow-hidden border border-[#1b2344]">
