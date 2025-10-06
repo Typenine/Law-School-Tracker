@@ -537,7 +537,7 @@ export default function CalendarPage() {
               {showClasses && (classesByDay[k] && classesByDay[k].length > 0) && (
                 <ul className="space-y-0.5 mb-1">
                   {classesByDay[k].map((c, idx) => (
-                    <li key={idx} className={`text-[10px] truncate flex items-center gap-1 ${c.conflict ? 'text-rose-400' : 'text-slate-300/80'}`} title={c.conflict ? 'Time conflict' : ''}>
+                    <li key={idx} className={`text-[10px] flex flex-wrap items-center gap-1 break-words ${c.conflict ? 'text-rose-400' : 'text-slate-300/80'}`} title={c.conflict ? 'Time conflict' : ''}>
                       <span className={`inline-block w-2 h-2 rounded-full ${c.color ? '' : courseColorClass(c.title, 'bg')}`} style={c.color ? { backgroundColor: c.color as any } : undefined}></span>
                       <span className="text-slate-200">{c.code || c.title}</span>
                       {c.time ? <span className="text-slate-300/60"> · {c.time}</span> : null}
@@ -554,7 +554,7 @@ export default function CalendarPage() {
                   {list.map(t => (
                     <li key={t.id} className="text-[11px] flex items-start gap-1 cursor-pointer" draggable onDragStart={(e) => onDragStart(e, t)} onClick={(e) => { e.stopPropagation(); openEdit(t); }}>
                       <div className="min-w-0">
-                        <div className="truncate flex items-center gap-2">
+                        <div className="flex flex-wrap items-center gap-2 break-words leading-tight">
                           {t.course ? (
                             <span
                               className={`inline-block w-2 h-2 rounded-full ${courseColors[(t.course || '').toLowerCase()] ? '' : courseColorClass(t.course, 'bg')}`}
