@@ -13,6 +13,8 @@ export async function PATCH(req: NextRequest, { params }: { params: { id: string
     course: z.string().trim().min(1).nullable().optional(),
     dueDate: z.string().optional(),
     status: z.enum(['todo', 'done']).optional(),
+    startTime: z.string().trim().nullable().optional().or(z.literal('')).transform(v => v === '' ? null : v),
+    endTime: z.string().trim().nullable().optional().or(z.literal('')).transform(v => v === '' ? null : v),
     estimatedMinutes: z.number().int().min(0).nullable().optional(),
     actualMinutes: z.number().int().min(0).nullable().optional(),
     priority: z.number().int().min(1).max(5).nullable().optional(),

@@ -2,6 +2,7 @@
 import { useEffect, useMemo, useState } from 'react';
 import { Task } from '@/lib/types';
 import { courseColorClass } from '@/lib/colors';
+import TimePickerField from '@/components/TimePickerField';
 
 export const dynamic = 'force-dynamic';
 
@@ -109,6 +110,8 @@ export default function CalendarPage() {
   const [addDate, setAddDate] = useState(''); // yyyy-mm-dd
   const [addEst, setAddEst] = useState('');
   const [addType, setAddType] = useState<string>('');
+  const [addStartTime, setAddStartTime] = useState<string>('');
+  const [addEndTime, setAddEndTime] = useState<string>('');
   const [showClasses, setShowClasses] = useState<boolean>(true);
 
   async function refresh() {
@@ -155,7 +158,19 @@ export default function CalendarPage() {
       const k = keyOf(new Date(t.dueDate));
       (m[k] ||= []).push(t);
     }
-    for (const k of Object.keys(m)) m[k].sort((a,b) => a.title.localeCompare(b.title));
+    const toMin = (hhmm?: string | null) => {
+      if (!hhmm || !/^[0-2]\d:[0-5]\d$/.test(hhmm)) return null;
+      const [h, mi] = hhmm.split(':').map(Number);
+      return h*60 + mi;
+    };
+    for (const k of Object.keys(m)) m[k].sort((a,b) => {
+      const am = toMin((a as any).startTime);
+      const bm = toMin((b as any).startTime);
+      if (am !== null && bm !== null && am !== bm) return am - bm;
+      if (am !== null && bm === null) return -1;
+      if (am === null && bm !== null) return 1;
+      return (a.title || '').localeCompare(b.title || '');
+    });
     return m;
   }, [tasks, courseFilter, statusFilter]);
 
@@ -254,6 +269,16 @@ export default function CalendarPage() {
     const parts = addDate.split('-').map(n => parseInt(n, 10));
     if (parts.length !== 3) return;
     const d = new Date(parts[0], parts[1]-1, parts[2], 23,59,59,999);
+    // If user set only start time, default end time to +60 minutes
+    const toEnd = (start?: string) => {
+      if (!start || !/^\d{2}:\d{2}$/.test(start)) return '';
+      const [h, m] = start.split(':').map(Number);
+      const total = h * 60 + m + 60; // +1h
+      const hh = Math.floor((total % (24*60)) / 60);
+      const mm = total % 60;
+      return `${String(hh).padStart(2,'0')}:${String(mm).padStart(2,'0')}`;
+    };
+
     const body: any = {
       title: addTitle,
       course: addCourse ? addCourse : null,
@@ -262,12 +287,15 @@ export default function CalendarPage() {
       estimatedMinutes: addEst ? parseInt(addEst, 10) : null,
       tags: addType ? [addType] : undefined,
     };
+    if (addStartTime) body.startTime = addStartTime;
+    const effectiveEnd = addEndTime || (addStartTime ? toEnd(addStartTime) : '');
+    if (effectiveEnd) body.endTime = effectiveEnd;
     const res = await fetch('/api/tasks', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
     if (res.ok) {
       if (stay) {
         setAddTitle(''); setAddEst('');
       } else {
-        setAddOpen(false); setAddTitle(''); setAddCourse(''); setAddEst(''); setAddType('');
+        setAddOpen(false); setAddTitle(''); setAddCourse(''); setAddEst(''); setAddType(''); setAddStartTime(''); setAddEndTime('');
       }
       await refresh();
     }
@@ -384,6 +412,20 @@ export default function CalendarPage() {
                 </div>
               </div>
               <div>
+                <label className="block text-xs mb-1">Time (optional)</label>
+                <div className="flex items-center gap-2 flex-wrap">
+                  <TimePickerField value={addStartTime} onChange={setAddStartTime} />
+                  <span className="text-xs">–</span>
+                  <TimePickerField value={addEndTime} onChange={setAddEndTime} />
+                  <button onClick={() => { setAddStartTime(''); setAddEndTime(''); }} className="text-xs underline">No time</button>
+                </div>
+                <div className="mt-2 flex items-center gap-1 flex-wrap text-[11px]">
+                  {[13,14,15,16,17,18,19,20].map(h => (
+                    <button key={h} onClick={() => { const s=`${String(h).padStart(2,'0')}:00`; const e=`${String((h+1)%24).padStart(2,'0')}:00`; setAddStartTime(s); setAddEndTime(e); }} className="px-2 py-1 rounded border border-[#1b2344]">{fmt12(`${String(h).padStart(2,'0')}:00`)}–{fmt12(`${String((h+1)%24).padStart(2,'0')}:00`)}</button>
+                  ))}
+                </div>
+              </div>
+              <div>
                 <label className="block text-xs mb-1">Est. minutes (optional)</label>
                 <div className="flex items-center gap-2 flex-wrap">
                   <input type="number" min={0} step={5} value={addEst} onChange={e => setAddEst(e.target.value)} className="w-28 bg-[#0b1020] border border-[#1b2344] rounded px-3 py-2" />
@@ -467,6 +509,11 @@ export default function CalendarPage() {
                             ></span>
                           ) : null}
                           <span className="text-slate-200">{t.title}</span>
+                          {((t as any).startTime || (t as any).endTime) ? (
+                            <span className="text-slate-300/60">
+                              · {((t as any).startTime ? fmt12((t as any).startTime as any) : '')}{((t as any).startTime && (t as any).endTime) ? '–' : ''}{((t as any).endTime ? fmt12((t as any).endTime as any) : '')}
+                            </span>
+                          ) : null}
                           {t.course ? <span className="text-slate-300/60"> · {t.course}</span> : null}
                           {typeof t.estimatedMinutes === 'number' ? <span className="text-slate-300/60"> · {t.estimatedMinutes}m</span> : null}
                         </div>

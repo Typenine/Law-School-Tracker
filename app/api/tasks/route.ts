@@ -19,6 +19,8 @@ export async function POST(req: NextRequest) {
     course: z.string().trim().min(1).nullable().optional(),
     dueDate: z.string().min(1), // ISO string from client
     status: z.enum(['todo', 'done']).optional(),
+    startTime: z.string().trim().nullable().optional().or(z.literal('')).transform(v => v === '' ? null : v),
+    endTime: z.string().trim().nullable().optional().or(z.literal('')).transform(v => v === '' ? null : v),
     estimatedMinutes: z.number().int().min(0).nullable().optional(),
     priority: z.number().int().min(1).max(5).nullable().optional(),
     notes: z.string().max(5000).nullable().optional(),
@@ -35,6 +37,8 @@ export async function POST(req: NextRequest) {
     dueDate: body.dueDate,
     course: body.course ?? null,
     status: body.status ?? 'todo',
+    startTime: body.startTime ?? null,
+    endTime: body.endTime ?? null,
     estimatedMinutes: body.estimatedMinutes ?? null,
     priority: body.priority ?? null,
     notes: body.notes ?? null,
