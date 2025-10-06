@@ -528,7 +528,7 @@ export default function CalendarPage() {
           const monthClass = d.getMonth() === month ? '' : 'opacity-50';
           const list = byDay[k] || [];
           return (
-            <div key={idx} className={`border border-[#1b2344] rounded p-2 min-h-[100px] ${monthClass}`} onClick={() => setSelectedDayKey(k)} onDragOver={(e) => e.preventDefault()} onDrop={(e) => onDropDay(e, d)}>
+            <div key={idx} className={`border border-[#1b2344] rounded p-3 min-h-[160px] sm:min-h-[180px] md:min-h-[220px] ${monthClass}`} onClick={() => setSelectedDayKey(k)} onDragOver={(e) => e.preventDefault()} onDrop={(e) => onDropDay(e, d)}>
               <div className="text-xs text-slate-300/70 mb-1 flex items-center justify-between">
                 <span>{d.getDate()}</span>
                 {selectedDayKey === k && <span className="text-[10px] text-slate-300/60">Agenda</span>}
