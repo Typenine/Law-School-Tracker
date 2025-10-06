@@ -47,32 +47,113 @@ function getPool(): Pool {
 
 // Courses
 export async function listCourses(): Promise<Course[]> {
-  // Skip DB entirely since you're using blob storage
-  try {
-    const json = await readJson();
-    return json.courses.sort((a, b) => (a.title || '').localeCompare(b.title || ''));
-  } catch (e) {
-    console.error('listCourses failed:', e);
-    return [];
+  if (DB_URL) {
+    try {
+      const p = getPool();
+      type Row = {
+        id: string; code: string | null; title: string; instructor: string | null; instructor_email: string | null; room: string | null; location: string | null;
+        color: string | null; meeting_days: number[] | null; meeting_start: string | null; meeting_end: string | null; meeting_blocks: any | null;
+        start_date: Date | string | null; end_date: Date | string | null; semester: string | null; year: number | null; created_at: Date | string
+      };
+      const res = await p.query(`SELECT id, code, title, instructor, instructor_email, room, location, color, meeting_days, meeting_start, meeting_end, meeting_blocks, start_date, end_date, semester, year, created_at FROM courses ORDER BY title`);
+      const rows = res.rows as Row[];
+      return rows.map(r => ({
+        id: r.id,
+        code: r.code,
+        title: r.title,
+        instructor: r.instructor,
+        instructorEmail: r.instructor_email,
+        room: r.room,
+        location: r.location,
+        color: r.color ?? null,
+        meetingDays: (r.meeting_days as any) ?? null,
+        meetingStart: r.meeting_start,
+        meetingEnd: r.meeting_end,
+        meetingBlocks: (r.meeting_blocks as any) ?? null,
+        startDate: r.start_date ? new Date(r.start_date).toISOString() : null,
+        endDate: r.end_date ? new Date(r.end_date).toISOString() : null,
+        semester: (r.semester as any) ?? null,
+        year: r.year ?? null,
+        createdAt: new Date(r.created_at as any).toISOString(),
+      }));
+    } catch (e) {
+      // DB is configured; do not fall back to JSON to avoid split brain
+      throw e;
+    }
   }
+  // No DB configured: use JSON/Blob store
+  const json = await readJson();
+  return json.courses.sort((a, b) => (a.title || '').localeCompare(b.title || ''));
 }
 
 export async function createCourse(input: NewCourseInput): Promise<Course> {
   const now = new Date().toISOString();
-  // Skip DB entirely since you're using blob storage
+  if (DB_URL) {
+    try {
+      const p = getPool();
+      const id = uuid();
+      const res = await p.query(
+        `INSERT INTO courses (id, code, title, instructor, instructor_email, room, location, color, meeting_days, meeting_start, meeting_end, meeting_blocks, start_date, end_date, semester, year, created_at)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17)
+         RETURNING id, code, title, instructor, instructor_email, room, location, color, meeting_days, meeting_start, meeting_end, meeting_blocks, start_date, end_date, semester, year, created_at`,
+        [id, input.code ?? null, input.title, input.instructor ?? null, input.instructorEmail ?? null, input.room ?? null, input.location ?? null, (input as any).color ?? null, input.meetingDays ?? null, input.meetingStart ?? null, input.meetingEnd ?? null, input.meetingBlocks ?? null, input.startDate ? new Date(input.startDate) : null, input.endDate ? new Date(input.endDate) : null, input.semester ?? null, input.year ?? null, new Date(now)]
+      );
+      const r = res.rows[0];
+      return {
+        id: r.id, code: r.code, title: r.title, instructor: r.instructor, instructorEmail: r.instructor_email, room: r.room, location: r.location, color: r.color ?? null,
+        meetingDays: r.meeting_days ?? null, meetingStart: r.meeting_start, meetingEnd: r.meeting_end, meetingBlocks: r.meeting_blocks ?? null,
+        startDate: r.start_date ? new Date(r.start_date).toISOString() : null, endDate: r.end_date ? new Date(r.end_date).toISOString() : null,
+        semester: r.semester ?? null, year: r.year ?? null, createdAt: new Date(r.created_at).toISOString()
+      };
+    } catch (e) {
+      // DB is configured; do not fall back to JSON to avoid split brain
+      throw e;
+    }
+  }
   const db = await readJson();
-  const c: Course = {
-    id: uuid(), code: input.code ?? null, title: input.title, instructor: input.instructor ?? null, instructorEmail: input.instructorEmail ?? null,
-    room: input.room ?? null, location: input.location ?? null, color: (input as any).color ?? null, meetingDays: input.meetingDays ?? null, meetingStart: input.meetingStart ?? null, meetingEnd: input.meetingEnd ?? null, meetingBlocks: input.meetingBlocks ?? null,
-    startDate: input.startDate ?? null, endDate: input.endDate ?? null, semester: input.semester ?? null, year: input.year ?? null, createdAt: now
-  };
+  const c: Course = { id: uuid(), code: input.code ?? null, title: input.title, instructor: input.instructor ?? null, instructorEmail: input.instructorEmail ?? null, room: input.room ?? null, location: input.location ?? null, color: (input as any).color ?? null, meetingDays: input.meetingDays ?? null, meetingStart: input.meetingStart ?? null, meetingEnd: input.meetingEnd ?? null, meetingBlocks: input.meetingBlocks ?? null, startDate: input.startDate ?? null, endDate: input.endDate ?? null, semester: input.semester ?? null, year: input.year ?? null, createdAt: now };
   db.courses.push(c);
   await writeJson(db);
   return c;
 }
 
 export async function updateCourse(id: string, patch: UpdateCourseInput): Promise<Course | null> {
-  // Since you're using blob storage, skip DB and go straight to JSON
+  if (DB_URL) {
+    try {
+      const p = getPool();
+      const fields: string[] = []; const values: any[] = []; let idx = 1;
+      if (patch.code !== undefined) { fields.push(`code = $${idx++}`); values.push(patch.code); }
+      if (patch.title !== undefined) { fields.push(`title = $${idx++}`); values.push(patch.title); }
+      if (patch.instructor !== undefined) { fields.push(`instructor = $${idx++}`); values.push(patch.instructor); }
+      if (patch.instructorEmail !== undefined) { fields.push(`instructor_email = $${idx++}`); values.push(patch.instructorEmail); }
+      if (patch.room !== undefined) { fields.push(`room = $${idx++}`); values.push(patch.room); }
+      if (patch.location !== undefined) { fields.push(`location = $${idx++}`); values.push(patch.location); }
+      if (patch.color !== undefined) { fields.push(`color = $${idx++}`); values.push(patch.color); }
+      if (patch.meetingDays !== undefined) { fields.push(`meeting_days = $${idx++}`); values.push(patch.meetingDays); }
+      if (patch.meetingStart !== undefined) { fields.push(`meeting_start = $${idx++}`); values.push(patch.meetingStart); }
+      if (patch.meetingEnd !== undefined) { fields.push(`meeting_end = $${idx++}`); values.push(patch.meetingEnd); }
+      if (patch.meetingBlocks !== undefined) { fields.push(`meeting_blocks = $${idx++}`); values.push(patch.meetingBlocks as any); }
+      if (patch.startDate !== undefined) { fields.push(`start_date = $${idx++}`); values.push(patch.startDate ? new Date(patch.startDate) : null); }
+      if (patch.endDate !== undefined) { fields.push(`end_date = $${idx++}`); values.push(patch.endDate ? new Date(patch.endDate) : null); }
+      if (patch.semester !== undefined) { fields.push(`semester = $${idx++}`); values.push(patch.semester); }
+      if (patch.year !== undefined) { fields.push(`year = $${idx++}`); values.push(patch.year); }
+      if (!fields.length) {
+        const cur = await p.query(`SELECT id, code, title, instructor, instructor_email, room, location, color, meeting_days, meeting_start, meeting_end, meeting_blocks, start_date, end_date, semester, year, created_at FROM courses WHERE id=$1`, [id]);
+        if (!cur.rowCount) return null;
+        const r = cur.rows[0];
+        return { id: r.id, code: r.code, title: r.title, instructor: r.instructor, instructorEmail: r.instructor_email, room: r.room, location: r.location, color: r.color ?? null, meetingDays: r.meeting_days ?? null, meetingStart: r.meeting_start, meetingEnd: r.meeting_end, meetingBlocks: r.meeting_blocks ?? null, startDate: r.start_date ? new Date(r.start_date).toISOString() : null, endDate: r.end_date ? new Date(r.end_date).toISOString() : null, semester: r.semester ?? null, year: r.year ?? null, createdAt: new Date(r.created_at).toISOString() };
+      }
+      const q = `UPDATE courses SET ${fields.join(', ')} WHERE id = $${idx} RETURNING id, code, title, instructor, instructor_email, room, location, color, meeting_days, meeting_start, meeting_end, meeting_blocks, start_date, end_date, semester, year, created_at`;
+      values.push(id);
+      const res = await p.query(q, values);
+      if (!res.rowCount) return null;
+      const r = res.rows[0];
+      return { id: r.id, code: r.code, title: r.title, instructor: r.instructor, instructorEmail: r.instructor_email, room: r.room, location: r.location, color: r.color ?? null, meetingDays: r.meeting_days ?? null, meetingStart: r.meeting_start, meetingEnd: r.meeting_end, meetingBlocks: r.meeting_blocks ?? null, startDate: r.start_date ? new Date(r.start_date).toISOString() : null, endDate: r.end_date ? new Date(r.end_date).toISOString() : null, semester: r.semester ?? null, year: r.year ?? null, createdAt: new Date(r.created_at).toISOString() };
+    } catch (e) {
+      // DB is configured; do not fall back to JSON to avoid split brain
+      throw e;
+    }
+  }
   const db = await readJson();
   const i = db.courses.findIndex(c => c.id === id);
   if (i === -1) return null;
@@ -83,12 +164,77 @@ export async function updateCourse(id: string, patch: UpdateCourseInput): Promis
 }
 
 export async function deleteCourse(id: string): Promise<boolean> {
-  // Since you're using blob storage, skip DB and go straight to JSON
+  if (DB_URL) {
+    try {
+      const p = getPool();
+      const res = await p.query(`DELETE FROM courses WHERE id=$1`, [id]);
+      return res.rowCount > 0;
+    } catch (e) {
+      // DB is configured; do not fall back to JSON to avoid split brain
+      throw e;
+    }
+  }
   const db = await readJson();
   const before = db.courses.length;
   db.courses = db.courses.filter(c => c.id !== id);
   await writeJson(db);
   return db.courses.length < before;
+}
+
+// One-time helper to migrate JSON/Blob courses into DB if DB is empty
+export async function migrateCoursesToDbIfEmpty() {
+  if (!DB_URL) return;
+  const p = getPool();
+  try {
+    const cnt = await p.query('SELECT COUNT(*)::int AS n FROM courses');
+    const n = cnt.rows?.[0]?.n ?? 0;
+    if (n > 0) return;
+  } catch (e) {
+    // If table not ready yet, ensure schema and retry count once
+    await ensureSchema().catch(() => {});
+    const cnt2 = await p.query('SELECT COUNT(*)::int AS n FROM courses');
+    const n2 = cnt2.rows?.[0]?.n ?? 0;
+    if (n2 > 0) return;
+  }
+  // Load from JSON/Blob and insert
+  const json = await readJson();
+  if (!Array.isArray(json.courses) || json.courses.length === 0) return;
+  const client = await p.connect();
+  try {
+    await client.query('BEGIN');
+    for (const c of json.courses) {
+      await client.query(
+        `INSERT INTO courses (id, code, title, instructor, instructor_email, room, location, color, meeting_days, meeting_start, meeting_end, meeting_blocks, start_date, end_date, semester, year, created_at)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17)
+         ON CONFLICT (id) DO NOTHING`,
+        [
+          c.id,
+          c.code ?? null,
+          c.title,
+          c.instructor ?? null,
+          c.instructorEmail ?? null,
+          c.room ?? null,
+          c.location ?? null,
+          (c as any).color ?? null,
+          c.meetingDays ?? null,
+          c.meetingStart ?? null,
+          c.meetingEnd ?? null,
+          c.meetingBlocks ?? null,
+          c.startDate ? new Date(c.startDate) : null,
+          c.endDate ? new Date(c.endDate) : null,
+          c.semester ?? null,
+          c.year ?? null,
+          new Date(c.createdAt || Date.now()),
+        ],
+      );
+    }
+    await client.query('COMMIT');
+  } catch (e) {
+    await client.query('ROLLBACK');
+    throw e;
+  } finally {
+    client.release();
+  }
 }
 
 export async function ensureSchema() {
@@ -167,23 +313,7 @@ async function readJson(): Promise<{ tasks: Task[]; sessions: StudySession[]; co
       throw new Error('Blob store not configured. Bind Vercel Blob or set BLOB_URL/BLOB_READ_WRITE_TOKEN.');
     }
     try {
-      // If a public base URL is provided, read directly with cache-bust
-      if (BLOB_URL) {
-        const direct = `${BLOB_URL}/db.json?_ts=${Date.now()}`;
-        const res = await fetch(direct, { cache: 'no-store' });
-        if (res.ok) {
-          const data = await res.json();
-          if (!('courses' in data)) data.courses = [];
-          if (!('tasks' in data)) data.tasks = [];
-          if (!('sessions' in data)) data.sessions = [];
-          return data;
-        }
-        if (res.status !== 404) {
-          throw new Error(`Failed to read blob via BLOB_URL: HTTP ${res.status}`);
-        }
-        // if 404, fall through to listing
-      }
-      // Read via Blob listing with robust selection (no prefix filter)
+      // Read via Blob listing with robust selection (binding only)
       const { blobs } = await list();
       // Prefer exact 'db.json'
       const exact = blobs.find((b: any) => (b.pathname || '') === 'db.json');

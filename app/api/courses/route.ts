@@ -1,5 +1,5 @@
 import { NextRequest } from 'next/server';
-import { ensureSchema, listCourses, createCourse, HAS_DB, HAS_BLOB, storageMode } from '@/lib/storage';
+import { ensureSchema, listCourses, createCourse, HAS_DB, HAS_BLOB, storageMode, migrateCoursesToDbIfEmpty } from '@/lib/storage';
 import { NewCourseInput } from '@/lib/types';
 import { z } from 'zod';
 
@@ -8,6 +8,8 @@ export const runtime = 'nodejs';
 
 export async function GET() {
   await ensureSchema();
+  // If DB is configured and empty, import any existing JSON/Blob courses once
+  try { await migrateCoursesToDbIfEmpty(); } catch {}
   const courses = await listCourses();
   const res = Response.json({ courses, mode: storageMode() });
   res.headers.set('Cache-Control', 'no-store, no-cache, must-revalidate, max-age=0');
