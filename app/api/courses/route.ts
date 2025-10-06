@@ -11,6 +11,10 @@ export async function GET() {
   const courses = await listCourses();
   const res = Response.json({ courses, mode: storageMode() });
   res.headers.set('Cache-Control', 'no-store, no-cache, must-revalidate, max-age=0');
+  res.headers.set('CDN-Cache-Control', 'no-store');
+  res.headers.set('Vercel-CDN-Cache-Control', 'no-store');
+  res.headers.set('Pragma', 'no-cache');
+  res.headers.set('Expires', '0');
   return res;
 }
 
@@ -42,5 +46,9 @@ export async function POST(req: NextRequest) {
   const c = await createCourse(body);
   const res = Response.json({ course: c }, { status: 201 });
   res.headers.set('Cache-Control', 'no-store, no-cache, must-revalidate, max-age=0');
+  res.headers.set('CDN-Cache-Control', 'no-store');
+  res.headers.set('Vercel-CDN-Cache-Control', 'no-store');
+  res.headers.set('Pragma', 'no-cache');
+  res.headers.set('Expires', '0');
   return res;
 }

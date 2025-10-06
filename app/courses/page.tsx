@@ -21,7 +21,7 @@ export default function CoursesPage() {
 
   async function refresh() {
     setLoading(true);
-    const res = await fetch('/api/courses', { cache: 'no-store' });
+    const res = await fetch(`/api/courses?_ts=${Date.now()}` , { cache: 'no-store' });
     const data = await res.json();
     setCourses((data.courses || []) as Course[]);
     setLoading(false);

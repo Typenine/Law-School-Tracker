@@ -167,22 +167,56 @@ async function readJson(): Promise<{ tasks: Task[]; sessions: StudySession[]; co
       throw new Error('Blob store not configured. Bind Vercel Blob or set BLOB_URL/BLOB_READ_WRITE_TOKEN.');
     }
     try {
+      // If a public base URL is provided, read directly with cache-bust
+      if (BLOB_URL) {
+        const direct = `${BLOB_URL}/db.json?_ts=${Date.now()}`;
+        const res = await fetch(direct, { cache: 'no-store' });
+        if (res.ok) {
+          const data = await res.json();
+          if (!('courses' in data)) data.courses = [];
+          if (!('tasks' in data)) data.tasks = [];
+          if (!('sessions' in data)) data.sessions = [];
+          return data;
+        }
+        if (res.status !== 404) {
+          throw new Error(`Failed to read blob via BLOB_URL: HTTP ${res.status}`);
+        }
+        // if 404, fall through to listing
+      }
       // Read via Blob listing with robust selection (no prefix filter)
       const { blobs } = await list();
-      // Collect all plausible candidates
-      const cands = blobs.filter((b: any) => {
-        const p = (b.pathname || '');
-        return p === 'db.json' || p.endsWith('/db.json') || p.startsWith('db.json-');
-      });
-      // Choose the newest by timestamp
-      const pick = cands.sort((a: any, b: any) =>
-        new Date(b.uploadedAt || b.createdAt || b.lastModified || 0).getTime() -
-        new Date(a.uploadedAt || a.createdAt || a.lastModified || 0).getTime()
-      )[0];
-      if (pick?.url) {
-        const bust = `${pick.url}${pick.url.includes('?') ? '&' : '?'}_ts=${Date.now()}`;
+      // Prefer exact 'db.json'
+      const exact = blobs.find((b: any) => (b.pathname || '') === 'db.json');
+      if (exact?.url) {
+        const bust = `${exact.url}${exact.url.includes('?') ? '&' : '?'}_ts=${Date.now()}`;
         const res = await fetch(bust, { cache: 'no-store' });
-        if (!res.ok) throw new Error(`Failed to read blob ${pick.pathname}: HTTP ${res.status}`);
+        if (!res.ok) throw new Error(`Failed to read blob ${exact.pathname}: HTTP ${res.status}`);
+        const data = await res.json();
+        if (!('courses' in data)) data.courses = [];
+        if (!('tasks' in data)) data.tasks = [];
+        if (!('sessions' in data)) data.sessions = [];
+        return data;
+      }
+      // Next, any path ending with '/db.json'
+      const nested = blobs.find((b: any) => (b.pathname || '').endsWith('/db.json'));
+      if (nested?.url) {
+        const bust = `${nested.url}${nested.url.includes('?') ? '&' : '?'}_ts=${Date.now()}`;
+        const res = await fetch(bust, { cache: 'no-store' });
+        if (!res.ok) throw new Error(`Failed to read blob ${nested.pathname}: HTTP ${res.status}`);
+        const data = await res.json();
+        if (!('courses' in data)) data.courses = [];
+        if (!('tasks' in data)) data.tasks = [];
+        if (!('sessions' in data)) data.sessions = [];
+        return data;
+      }
+      // Finally, newest 'db.json-*' if present
+      const suffixed = blobs
+        .filter((b: any) => (b.pathname || '').startsWith('db.json-'))
+        .sort((a: any, b: any) => new Date(b.uploadedAt || b.createdAt || b.lastModified || 0).getTime() - new Date(a.uploadedAt || a.createdAt || a.lastModified || 0).getTime())[0];
+      if (suffixed?.url) {
+        const bust = `${suffixed.url}${suffixed.url.includes('?') ? '&' : '?'}_ts=${Date.now()}`;
+        const res = await fetch(bust, { cache: 'no-store' });
+        if (!res.ok) throw new Error(`Failed to read blob ${suffixed.pathname}: HTTP ${res.status}`);
         const data = await res.json();
         if (!('courses' in data)) data.courses = [];
         if (!('tasks' in data)) data.tasks = [];
@@ -230,6 +264,7 @@ async function writeJson(data: { tasks: Task[]; sessions: StudySession[]; course
         access: 'public',
         contentType: 'application/json',
         addRandomSuffix: false,
+        cacheControlMaxAge: 0,
       } as any);
       // Clean up any legacy suffixed blobs to avoid stale reads
       try {
