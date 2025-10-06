@@ -114,6 +114,17 @@ export default function CalendarPage() {
   const [addEndTime, setAddEndTime] = useState<string>('');
   const [showClasses, setShowClasses] = useState<boolean>(true);
 
+  // Edit modal state
+  const [editOpen, setEditOpen] = useState(false);
+  const [editTask, setEditTask] = useState<Task | null>(null);
+  const [editTitle, setEditTitle] = useState('');
+  const [editCourse, setEditCourse] = useState('');
+  const [editDate, setEditDate] = useState('');
+  const [editEst, setEditEst] = useState('');
+  const [editType, setEditType] = useState('');
+  const [editStartTime, setEditStartTime] = useState('');
+  const [editEndTime, setEditEndTime] = useState('');
+
   async function refresh() {
     setLoading(true);
     const res = await fetch('/api/tasks', { cache: 'no-store' });
@@ -331,6 +342,48 @@ export default function CalendarPage() {
     await refresh();
   }
 
+  function openEdit(t: Task) {
+    setEditTask(t);
+    setEditTitle(t.title || '');
+    setEditCourse(t.course || '');
+    const d = new Date(t.dueDate);
+    setEditDate(fmtYmd(d));
+    setEditEst(typeof t.estimatedMinutes === 'number' ? String(t.estimatedMinutes) : '');
+    setEditType((t.tags && t.tags.length) ? (t.tags[0] as any) : '');
+    setEditStartTime((t as any).startTime || '');
+    setEditEndTime((t as any).endTime || '');
+    setEditOpen(true);
+  }
+
+  async function saveEdit() {
+    if (!editTask) return;
+    const body: any = {
+      title: editTitle,
+      course: editCourse || null,
+      estimatedMinutes: editEst ? parseInt(editEst, 10) : null,
+      tags: editType ? [editType] : null,
+      startTime: editStartTime || null,
+      endTime: editEndTime || null,
+    };
+    if (editDate) {
+      const parts = editDate.split('-').map(n => parseInt(n, 10));
+      if (parts.length === 3) {
+        const nd = new Date(parts[0], parts[1]-1, parts[2], 23,59,59,999);
+        body.dueDate = nd.toISOString();
+      }
+    }
+    await fetch(`/api/tasks/${editTask.id}`, { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
+    setEditOpen(false); setEditTask(null);
+    await refresh();
+  }
+
+  async function deleteEdit() {
+    if (!editTask) return;
+    await fetch(`/api/tasks/${editTask.id}`, { method: 'DELETE' });
+    setEditOpen(false); setEditTask(null);
+    await refresh();
+  }
+
   return (
     <main className="space-y-4">
       <div className="flex items-center justify-between">
@@ -499,7 +552,7 @@ export default function CalendarPage() {
               ) : (
                 <ul className="space-y-1">
                   {list.map(t => (
-                    <li key={t.id} className="text-[11px] flex items-center justify-between gap-1" draggable onDragStart={(e) => onDragStart(e, t)}>
+                    <li key={t.id} className="text-[11px] flex items-center justify-between gap-1 cursor-pointer" draggable onDragStart={(e) => onDragStart(e, t)} onClick={(e) => { e.stopPropagation(); openEdit(t); }}>
                       <div className="min-w-0">
                         <div className="truncate flex items-center gap-2">
                           {t.course ? (
@@ -537,6 +590,66 @@ export default function CalendarPage() {
           );
         })}
       </div>
+      {editOpen && (
+        <div className="fixed inset-0 z-50 bg-black/50 flex items-center justify-center p-4" onClick={() => setEditOpen(false)}>
+          <div className="w-full max-w-lg rounded border border-[#1b2344] bg-[#0b1020] p-4" onClick={e => e.stopPropagation()}>
+            <div className="flex items-center justify-between mb-3">
+              <div className="text-sm font-medium">Edit event</div>
+              <button onClick={() => setEditOpen(false)} className="text-xs underline">Close</button>
+            </div>
+            <div className="space-y-3">
+              <div>
+                <label className="block text-xs mb-1">Title</label>
+                <input value={editTitle} onChange={e => setEditTitle(e.target.value)} className="w-full bg-[#0b1020] border border-[#1b2344] rounded px-3 py-2" />
+              </div>
+              <div>
+                <label className="block text-xs mb-1">Date</label>
+                <input type="date" value={editDate} onChange={e => setEditDate(e.target.value)} className="bg-[#0b1020] border border-[#1b2344] rounded px-3 py-2" />
+              </div>
+              <div>
+                <label className="block text-xs mb-1">Course (optional)</label>
+                <div className="flex items-center gap-2 overflow-x-auto pb-1">
+                  {(courses || []).map((c: any) => {
+                    const label = c.title || c.code || '';
+                    const selected = editCourse === label;
+                    return (
+                      <button key={c.id} onClick={() => setEditCourse(selected ? '' : label)} className={`px-2 py-1 rounded border text-xs whitespace-nowrap ${selected ? 'border-blue-500 bg-[#1a2243]' : 'border-[#1b2344]'}`}>
+                        <span className={`inline-block w-2 h-2 rounded-full mr-1 ${c.color ? '' : courseColorClass(label, 'bg')}`} style={c.color ? { backgroundColor: (c.color as any) } : undefined}></span>
+                        {label || '—'}
+                      </button>
+                    );
+                  })}
+                </div>
+              </div>
+              <div>
+                <label className="block text-xs mb-1">Type</label>
+                <div className="flex items-center gap-2 flex-wrap text-[11px]">
+                  {['reading','review','outline','practice','other'].map(t => (
+                    <button key={t} onClick={() => setEditType(editType===t ? '' : t)} className={`px-2 py-1 rounded border ${editType===t ? 'border-blue-500 bg-[#1a2243]' : 'border-[#1b2344]'}`}>{t}</button>
+                  ))}
+                </div>
+              </div>
+              <div>
+                <label className="block text-xs mb-1">Time (optional)</label>
+                <div className="flex items-center gap-2 flex-wrap">
+                  <TimePickerField value={editStartTime} onChange={setEditStartTime} />
+                  <span className="text-xs">–</span>
+                  <TimePickerField value={editEndTime} onChange={setEditEndTime} />
+                  <button onClick={() => { setEditStartTime(''); setEditEndTime(''); }} className="text-xs underline">No time</button>
+                </div>
+              </div>
+              <div>
+                <label className="block text-xs mb-1">Est. minutes (optional)</label>
+                <input type="number" min={0} step={5} value={editEst} onChange={e => setEditEst(e.target.value)} className="w-28 bg-[#0b1020] border border-[#1b2344] rounded px-3 py-2" />
+              </div>
+              <div className="flex items-center gap-2">
+                <button onClick={saveEdit} className="px-3 py-2 rounded bg-blue-600 hover:bg-blue-500">Save</button>
+                <button onClick={deleteEdit} className="px-3 py-2 rounded border border-rose-600 text-rose-400">Delete</button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
     </main>
   );
 }
