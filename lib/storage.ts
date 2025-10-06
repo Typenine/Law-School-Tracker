@@ -199,41 +199,32 @@ export async function migrateCoursesToDbIfEmpty() {
   // Load from JSON/Blob and insert
   const json = await readJson();
   if (!Array.isArray(json.courses) || json.courses.length === 0) return;
-  const client = await p.connect();
-  try {
-    await client.query('BEGIN');
-    for (const c of json.courses) {
-      await client.query(
-        `INSERT INTO courses (id, code, title, instructor, instructor_email, room, location, color, meeting_days, meeting_start, meeting_end, meeting_blocks, start_date, end_date, semester, year, created_at)
-         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17)
-         ON CONFLICT (id) DO NOTHING`,
-        [
-          c.id,
-          c.code ?? null,
-          c.title,
-          c.instructor ?? null,
-          c.instructorEmail ?? null,
-          c.room ?? null,
-          c.location ?? null,
-          (c as any).color ?? null,
-          c.meetingDays ?? null,
-          c.meetingStart ?? null,
-          c.meetingEnd ?? null,
-          c.meetingBlocks ?? null,
-          c.startDate ? new Date(c.startDate) : null,
-          c.endDate ? new Date(c.endDate) : null,
-          c.semester ?? null,
-          c.year ?? null,
-          new Date(c.createdAt || Date.now()),
-        ],
-      );
-    }
-    await client.query('COMMIT');
-  } catch (e) {
-    await client.query('ROLLBACK');
-    throw e;
-  } finally {
-    client.release();
+  // Insert rows individually without an explicit transaction to avoid Pool.connect typings
+  for (const c of json.courses) {
+    await p.query(
+      `INSERT INTO courses (id, code, title, instructor, instructor_email, room, location, color, meeting_days, meeting_start, meeting_end, meeting_blocks, start_date, end_date, semester, year, created_at)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17)
+       ON CONFLICT (id) DO NOTHING`,
+      [
+        c.id,
+        c.code ?? null,
+        c.title,
+        c.instructor ?? null,
+        c.instructorEmail ?? null,
+        c.room ?? null,
+        c.location ?? null,
+        (c as any).color ?? null,
+        c.meetingDays ?? null,
+        c.meetingStart ?? null,
+        c.meetingEnd ?? null,
+        c.meetingBlocks ?? null,
+        c.startDate ? new Date(c.startDate) : null,
+        c.endDate ? new Date(c.endDate) : null,
+        c.semester ?? null,
+        c.year ?? null,
+        new Date(c.createdAt || Date.now()),
+      ],
+    );
   }
 }
 
