@@ -45,6 +45,31 @@ export default function AddCourseWizard({ onCourseAdded, onClose }: AddCourseWiz
     setStep(step + 1);
   };
 
+  const splitSelectedDaysIntoBlocks = () => {
+    const days = (course.meetingDays || []) as number[];
+    const blocks = days.map(d => ({ days: [d], start: course.meetingStart || '', end: course.meetingEnd || '', location: (course as any).room || (course as any).location || '' }));
+    if (blocks.length === 0) {
+      setMode('blocks');
+      setCourse(prev => ({ ...prev, meetingBlocks: [{ days: [], start: course.meetingStart || '', end: course.meetingEnd || '', location: '' }] }));
+    } else {
+      setCourse(prev => ({ ...prev, meetingBlocks: blocks }));
+      setMode('blocks');
+    }
+  };
+
+  // Quick helper: turn simple schedule into blocks and add a second block
+  const addAnotherDayTime = () => {
+    const first = {
+      days: (course.meetingDays || []) as number[],
+      start: course.meetingStart || '',
+      end: course.meetingEnd || '',
+      location: (course as any).room || (course as any).location || ''
+    } as any;
+    const second = { days: [], start: course.meetingStart || '', end: course.meetingEnd || '', location: '' } as any;
+    setCourse(prev => ({ ...prev, meetingBlocks: [first, second] }));
+    setMode('blocks');
+  };
+
   const handleBack = () => {
     setError('');
     setStep(step - 1);
@@ -287,11 +312,19 @@ export default function AddCourseWizard({ onCourseAdded, onClose }: AddCourseWiz
                       <div key={i} className="border border-[#1b2344] rounded p-2">
                         <div className="flex items-center justify-between mb-2">
                           <div className="text-xs text-slate-300/70">Block {i+1}</div>
-                          <button onClick={() => {
-                            const list = [ ...((course.meetingBlocks as any[]) || []) ];
-                            list.splice(i, 1);
-                            setCourse(prev => ({ ...prev, meetingBlocks: list }));
-                          }} className="text-xs underline">Remove</button>
+                          <div className="flex items-center gap-2">
+                            <button onClick={() => {
+                              const list = [ ...((course.meetingBlocks as any[]) || []) ];
+                              const cur = list[i] || { days: [], start: '', end: '', location: '' } as any;
+                              list.splice(i+1, 0, { days: [...(cur.days||[])], start: cur.start, end: cur.end, location: cur.location });
+                              setCourse(prev => ({ ...prev, meetingBlocks: list }));
+                            }} className="text-xs underline">Duplicate</button>
+                            <button onClick={() => {
+                              const list = [ ...((course.meetingBlocks as any[]) || []) ];
+                              list.splice(i, 1);
+                              setCourse(prev => ({ ...prev, meetingBlocks: list }));
+                            }} className="text-xs underline">Remove</button>
+                          </div>
                         </div>
                         <div className="flex items-center gap-2 flex-wrap mb-2">
                           {DAYS.map((d: string, idx: number) => (

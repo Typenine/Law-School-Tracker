@@ -99,6 +99,26 @@ export default function EditCourseModal({ course, onSaved, onClose }: Props) {
     setMode('blocks');
   }
 
+  function addAnotherDayTime() {
+    // Convert to blocks (if not already) and add a second, blank block with same times
+    const first: CourseMeetingBlock = {
+      days: (draft.meetingDays || []) as number[],
+      start: draft.meetingStart || '',
+      end: draft.meetingEnd || '',
+      location: draft.room || draft.location || ''
+    };
+    const second: CourseMeetingBlock = { days: [], start: draft.meetingStart || '', end: draft.meetingEnd || '', location: '' };
+    setDraft(d => ({ ...d, meetingBlocks: [first, second] }));
+    setMode('blocks');
+  }
+
+  function splitSelectedDaysIntoBlocks() {
+    const days = ((draft.meetingDays || []) as number[]) || [];
+    const blocks = days.map(d => ({ days: [d], start: draft.meetingStart || '', end: draft.meetingEnd || '', location: draft.room || draft.location || '' } as CourseMeetingBlock));
+    setDraft(prev => ({ ...prev, meetingBlocks: blocks.length ? blocks : [{ days: [], start: draft.meetingStart || '', end: draft.meetingEnd || '', location: '' }] }));
+    setMode('blocks');
+  }
+
   return (
     <div className="fixed inset-0 bg-black/60 flex items-center justify-center z-50">
       <div className="w-full max-w-3xl rounded border border-[#1b2344] bg-[#0b1020] p-4">
@@ -168,7 +188,13 @@ export default function EditCourseModal({ course, onSaved, onClose }: Props) {
                 <span className="text-xs">–</span>
                 <TimePickerField value={draft.meetingEnd || ''} onChange={(v) => setDraft(d => ({ ...d, meetingEnd: v }))} />
               </div>
-              <button onClick={convertSimpleToBlocks} className="text-xs underline">Convert to different times per day</button>
+              <div className="flex items-center gap-3 text-xs">
+                <button onClick={convertSimpleToBlocks} className="underline">Convert to different times per day</button>
+                <span className="text-slate-500">·</span>
+                <button onClick={addAnotherDayTime} className="underline">Add another day/time</button>
+                <span className="text-slate-500">·</span>
+                <button onClick={splitSelectedDaysIntoBlocks} className="underline">Different time per selected day</button>
+              </div>
             </div>
           ) : (
             <div className="space-y-3">
@@ -176,7 +202,15 @@ export default function EditCourseModal({ course, onSaved, onClose }: Props) {
                 <div key={i} className="border border-[#1b2344] rounded p-2">
                   <div className="flex items-center justify-between mb-2">
                     <div className="text-xs text-slate-300/70">Block {i+1}</div>
-                    <button onClick={() => removeBlock(i)} className="text-xs underline">Remove</button>
+                    <div className="flex items-center gap-2">
+                      <button onClick={() => {
+                        const list = [...blocks];
+                        const cur = list[i] || { days: [], start: '', end: '', location: '' } as CourseMeetingBlock;
+                        const dup: CourseMeetingBlock = { days: [...(cur.days||[])], start: cur.start, end: cur.end, location: cur.location };
+                        setDraft(d => ({ ...d, meetingBlocks: [...list.slice(0, i+1), dup, ...list.slice(i+1)] }));
+                      }} className="text-xs underline">Duplicate</button>
+                      <button onClick={() => removeBlock(i)} className="text-xs underline">Remove</button>
+                    </div>
                   </div>
                   <div className="flex items-center gap-2 flex-wrap mb-2">
                     {DAYS.map((d, idx) => (
