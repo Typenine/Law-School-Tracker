@@ -461,8 +461,8 @@ async function writeJson(data: { tasks: Task[]; sessions: StudySession[]; course
 export async function listTasks(): Promise<Task[]> {
   if (DB_URL) {
     const p = getPool();
-    type TaskRow = { id: string; title: string; course: string | null; due_date: Date | string; status: 'todo' | 'done'; created_at: Date | string; estimated_minutes: number | null; actual_minutes: number | null; priority: number | null; notes: string | null; attachments: string[] | null; depends_on: string[] | null; tags: string[] | null; term: string | null; completed_at: Date | string | null; focus: number | null; pages_read: number | null; activity: string | null };
-    const res = await p.query(`SELECT id, title, course, due_date, status, created_at, estimated_minutes, actual_minutes, priority, notes, attachments, depends_on, tags, term, completed_at, focus, pages_read, activity FROM tasks ORDER BY due_date ASC`);
+    type TaskRow = { id: string; title: string; course: string | null; due_date: Date | string; status: 'todo' | 'done'; created_at: Date | string; estimated_minutes: number | null; actual_minutes: number | null; priority: number | null; notes: string | null; attachments: string[] | null; depends_on: string[] | null; tags: string[] | null; term: string | null; completed_at: Date | string | null; focus: number | null; pages_read: number | null; activity: string | null; start_time: string | null; end_time: string | null };
+    const res = await p.query(`SELECT id, title, course, due_date, status, created_at, estimated_minutes, actual_minutes, priority, notes, attachments, depends_on, tags, term, completed_at, focus, pages_read, activity, start_time, end_time FROM tasks ORDER BY due_date ASC, COALESCE(start_time,'99:99') ASC`);
     const rows = res.rows as unknown as TaskRow[];
     return rows.map(r => ({
       id: r.id,
@@ -471,6 +471,8 @@ export async function listTasks(): Promise<Task[]> {
       dueDate: new Date(r.due_date).toISOString(),
       status: r.status,
       createdAt: new Date(r.created_at).toISOString(),
+      startTime: r.start_time ?? null,
+      endTime: r.end_time ?? null,
       estimatedMinutes: r.estimated_minutes ?? null,
       actualMinutes: r.actual_minutes ?? null,
       priority: r.priority ?? null,
@@ -531,17 +533,17 @@ export async function updateTask(id: string, patch: UpdateTaskInput): Promise<Ta
     if ((patch as any).startTime !== undefined) { fields.push(`start_time = $${idx++}`); values.push((patch as any).startTime); }
     if ((patch as any).endTime !== undefined) { fields.push(`end_time = $${idx++}`); values.push((patch as any).endTime); }
     if (!fields.length) {
-      const cur = await p.query(`SELECT id, title, course, due_date, status, created_at, estimated_minutes, priority, notes, attachments, depends_on, tags, term FROM tasks WHERE id=$1`, [id]);
+      const cur = await p.query(`SELECT id, title, course, due_date, status, created_at, estimated_minutes, priority, notes, attachments, depends_on, tags, term, start_time, end_time FROM tasks WHERE id=$1`, [id]);
       if (!cur.rowCount) return null;
       const r = cur.rows[0];
-      return { id: r.id, title: r.title, course: r.course, dueDate: new Date(r.due_date).toISOString(), status: r.status, createdAt: new Date(r.created_at).toISOString(), estimatedMinutes: r.estimated_minutes ?? null, priority: r.priority ?? null, notes: r.notes ?? null, attachments: r.attachments ?? null, dependsOn: r.depends_on ?? null, tags: r.tags ?? null, term: r.term ?? null };
+      return { id: r.id, title: r.title, course: r.course, dueDate: new Date(r.due_date).toISOString(), status: r.status, createdAt: new Date(r.created_at).toISOString(), startTime: r.start_time ?? null, endTime: r.end_time ?? null, estimatedMinutes: r.estimated_minutes ?? null, priority: r.priority ?? null, notes: r.notes ?? null, attachments: r.attachments ?? null, dependsOn: r.depends_on ?? null, tags: r.tags ?? null, term: r.term ?? null };
     }
     const q = `UPDATE tasks SET ${fields.join(', ')} WHERE id = $${idx} RETURNING id, title, course, due_date, status, created_at, estimated_minutes, priority, notes, attachments, depends_on, tags, term, start_time, end_time`;
     values.push(id);
     const res = await p.query(q, values);
     if (!res.rowCount) return null;
     const r = res.rows[0];
-    return { id: r.id, title: r.title, course: r.course, dueDate: new Date(r.due_date).toISOString(), status: r.status, createdAt: new Date(r.created_at).toISOString(), estimatedMinutes: r.estimated_minutes ?? null, priority: r.priority ?? null, notes: r.notes ?? null, attachments: r.attachments ?? null, dependsOn: r.depends_on ?? null, tags: r.tags ?? null, term: r.term ?? null };
+    return { id: r.id, title: r.title, course: r.course, dueDate: new Date(r.due_date).toISOString(), status: r.status, createdAt: new Date(r.created_at).toISOString(), startTime: r.start_time ?? null, endTime: r.end_time ?? null, estimatedMinutes: r.estimated_minutes ?? null, priority: r.priority ?? null, notes: r.notes ?? null, attachments: r.attachments ?? null, dependsOn: r.depends_on ?? null, tags: r.tags ?? null, term: r.term ?? null };
   }
   const db = await readJson();
   const i = db.tasks.findIndex(t => t.id === id);
