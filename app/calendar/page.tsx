@@ -398,9 +398,8 @@ export default function CalendarPage() {
                   {classesByDay[k].map((c, idx) => (
                     <li key={idx} className={`text-[10px] truncate flex items-center gap-1 ${c.conflict ? 'text-rose-400' : 'text-slate-300/80'}`} title={c.conflict ? 'Time conflict' : ''}>
                       <span className={`inline-block w-2 h-2 rounded-full ${c.color ? '' : courseColorClass(c.title, 'bg')}`} style={c.color ? { backgroundColor: c.color as any } : undefined}></span>
-                      <span className="text-slate-300/60">Class:</span> {c.code ? `${c.code} ` : ''}{c.title}
+                      <span className="text-slate-200">{c.code || c.title}</span>
                       {c.time ? <span className="text-slate-300/60"> · {c.time}</span> : null}
-                      {c.room ? <span className="text-slate-300/60"> · {c.room}</span> : null}
                       {c.conflict ? <span className="ml-1 text-[9px] px-1 rounded border border-rose-500 text-rose-400">conflict</span> : null}
                     </li>
                   ))}
