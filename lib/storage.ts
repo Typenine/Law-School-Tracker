@@ -93,10 +93,35 @@ export async function createCourse(input: NewCourseInput): Promise<Course> {
       const p = getPool();
       const id = uuid();
       const res = await p.query(
-        `INSERT INTO courses (id, code, title, instructor, instructor_email, room, location, color, meeting_days, meeting_start, meeting_end, meeting_blocks, start_date, end_date, semester, year, created_at)
-         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17)
+        `INSERT INTO courses (
+           id, code, title, instructor, instructor_email, room, location, color,
+           meeting_days, meeting_start, meeting_end, meeting_blocks,
+           start_date, end_date, semester, year, created_at
+         ) VALUES (
+           $1, $2, $3, $4, $5, $6, $7, $8,
+           $9::int[], $10, $11, $12::jsonb,
+           $13::date, $14::date, $15, $16::int, $17
+         )
          RETURNING id, code, title, instructor, instructor_email, room, location, color, meeting_days, meeting_start, meeting_end, meeting_blocks, start_date, end_date, semester, year, created_at`,
-        [id, input.code ?? null, input.title, input.instructor ?? null, input.instructorEmail ?? null, input.room ?? null, input.location ?? null, (input as any).color ?? null, input.meetingDays ?? null, input.meetingStart ?? null, input.meetingEnd ?? null, input.meetingBlocks ?? null, input.startDate ? new Date(input.startDate) : null, input.endDate ? new Date(input.endDate) : null, input.semester ?? null, input.year ?? null, new Date(now)]
+        [
+          id,
+          input.code ?? null,
+          input.title,
+          input.instructor ?? null,
+          input.instructorEmail ?? null,
+          input.room ?? null,
+          input.location ?? null,
+          (input as any).color ?? null,
+          (input.meetingDays && input.meetingDays.length ? input.meetingDays : null),
+          input.meetingStart ?? null,
+          input.meetingEnd ?? null,
+          (input.meetingBlocks && (input.meetingBlocks as any[]).length ? JSON.stringify(input.meetingBlocks) : null),
+          input.startDate ? new Date(input.startDate) : null,
+          input.endDate ? new Date(input.endDate) : null,
+          input.semester ?? null,
+          (typeof input.year === 'number' ? input.year : (input.year as any) ?? null),
+          new Date(now)
+        ]
       );
       const r = res.rows[0];
       return {
@@ -122,21 +147,25 @@ export async function updateCourse(id: string, patch: UpdateCourseInput): Promis
     try {
       const p = getPool();
       const fields: string[] = []; const values: any[] = []; let idx = 1;
-      if (patch.code !== undefined) { fields.push(`code = $${idx++}`); values.push(patch.code); }
-      if (patch.title !== undefined) { fields.push(`title = $${idx++}`); values.push(patch.title); }
-      if (patch.instructor !== undefined) { fields.push(`instructor = $${idx++}`); values.push(patch.instructor); }
-      if (patch.instructorEmail !== undefined) { fields.push(`instructor_email = $${idx++}`); values.push(patch.instructorEmail); }
-      if (patch.room !== undefined) { fields.push(`room = $${idx++}`); values.push(patch.room); }
-      if (patch.location !== undefined) { fields.push(`location = $${idx++}`); values.push(patch.location); }
-      if (patch.color !== undefined) { fields.push(`color = $${idx++}`); values.push(patch.color); }
-      if (patch.meetingDays !== undefined) { fields.push(`meeting_days = $${idx++}`); values.push(patch.meetingDays); }
-      if (patch.meetingStart !== undefined) { fields.push(`meeting_start = $${idx++}`); values.push(patch.meetingStart); }
-      if (patch.meetingEnd !== undefined) { fields.push(`meeting_end = $${idx++}`); values.push(patch.meetingEnd); }
-      if (patch.meetingBlocks !== undefined) { fields.push(`meeting_blocks = $${idx++}`); values.push(patch.meetingBlocks as any); }
-      if (patch.startDate !== undefined) { fields.push(`start_date = $${idx++}`); values.push(patch.startDate ? new Date(patch.startDate) : null); }
-      if (patch.endDate !== undefined) { fields.push(`end_date = $${idx++}`); values.push(patch.endDate ? new Date(patch.endDate) : null); }
-      if (patch.semester !== undefined) { fields.push(`semester = $${idx++}`); values.push(patch.semester); }
-      if (patch.year !== undefined) { fields.push(`year = $${idx++}`); values.push(patch.year); }
+      const push = (col: string, val: any, cast?: string) => {
+        fields.push(`${col} = $${idx}${cast ? `::${cast}` : ''}`);
+        values.push(val); idx++;
+      };
+      if (patch.code !== undefined) push('code', patch.code);
+      if (patch.title !== undefined) push('title', patch.title);
+      if (patch.instructor !== undefined) push('instructor', patch.instructor);
+      if (patch.instructorEmail !== undefined) push('instructor_email', patch.instructorEmail);
+      if (patch.room !== undefined) push('room', patch.room);
+      if (patch.location !== undefined) push('location', patch.location);
+      if (patch.color !== undefined) push('color', patch.color);
+      if (patch.meetingDays !== undefined) push('meeting_days', (patch.meetingDays && patch.meetingDays.length ? patch.meetingDays : null), 'int[]');
+      if (patch.meetingStart !== undefined) push('meeting_start', patch.meetingStart);
+      if (patch.meetingEnd !== undefined) push('meeting_end', patch.meetingEnd);
+      if (patch.meetingBlocks !== undefined) push('meeting_blocks', (patch.meetingBlocks && (patch.meetingBlocks as any[]).length ? JSON.stringify(patch.meetingBlocks) : null), 'jsonb');
+      if (patch.startDate !== undefined) push('start_date', patch.startDate ? new Date(patch.startDate) : null, 'date');
+      if (patch.endDate !== undefined) push('end_date', patch.endDate ? new Date(patch.endDate) : null, 'date');
+      if (patch.semester !== undefined) push('semester', patch.semester);
+      if (patch.year !== undefined) push('year', (typeof patch.year === 'number' ? patch.year : (patch.year as any) ?? null), 'int');
       if (!fields.length) {
         const cur = await p.query(`SELECT id, code, title, instructor, instructor_email, room, location, color, meeting_days, meeting_start, meeting_end, meeting_blocks, start_date, end_date, semester, year, created_at FROM courses WHERE id=$1`, [id]);
         if (!cur.rowCount) return null;
