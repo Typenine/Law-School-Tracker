@@ -30,11 +30,15 @@ export async function PATCH(req: NextRequest, { params }: { params: { id: string
   const body = parsed.data as UpdateCourseInput;
   const updated = await updateCourse(params.id, body);
   if (!updated) return new Response('Not found', { status: 404 });
-  return Response.json({ course: updated });
+  const res = Response.json({ course: updated });
+  res.headers.set('Cache-Control', 'no-store, no-cache, must-revalidate, max-age=0');
+  return res;
 }
 
 export async function DELETE(_req: NextRequest, { params }: { params: { id: string } }) {
   await ensureSchema();
   const ok = await deleteCourse(params.id);
-  return new Response(ok ? 'ok' : 'not found', { status: ok ? 200 : 404 });
+  const res = new Response(ok ? 'ok' : 'not found', { status: ok ? 200 : 404 });
+  res.headers.set('Cache-Control', 'no-store, no-cache, must-revalidate, max-age=0');
+  return res;
 }

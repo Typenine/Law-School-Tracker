@@ -177,7 +177,8 @@ async function readJson(): Promise<{ tasks: Task[]; sessions: StudySession[]; co
         .sort((a: any, b: any) => new Date(b.uploadedAt || b.createdAt || b.lastModified || 0).getTime() - new Date(a.uploadedAt || a.createdAt || a.lastModified || 0).getTime())[0];
       const pick = exact || endsWith || suffixed;
       if (pick?.url) {
-        const res = await fetch(pick.url, { cache: 'no-store' });
+        const bust = `${pick.url}${pick.url.includes('?') ? '&' : '?'}_ts=${Date.now()}`;
+        const res = await fetch(bust, { cache: 'no-store' });
         if (!res.ok) throw new Error(`Failed to read blob ${pick.pathname}: HTTP ${res.status}`);
         const data = await res.json();
         if (!('courses' in data)) data.courses = [];

@@ -9,7 +9,9 @@ export const runtime = 'nodejs';
 export async function GET() {
   await ensureSchema();
   const courses = await listCourses();
-  return Response.json({ courses, mode: storageMode() });
+  const res = Response.json({ courses, mode: storageMode() });
+  res.headers.set('Cache-Control', 'no-store, no-cache, must-revalidate, max-age=0');
+  return res;
 }
 
 export async function POST(req: NextRequest) {
@@ -38,5 +40,7 @@ export async function POST(req: NextRequest) {
   }
   const body = parsed.data as NewCourseInput;
   const c = await createCourse(body);
-  return Response.json({ course: c }, { status: 201 });
+  const res = Response.json({ course: c }, { status: 201 });
+  res.headers.set('Cache-Control', 'no-store, no-cache, must-revalidate, max-age=0');
+  return res;
 }
