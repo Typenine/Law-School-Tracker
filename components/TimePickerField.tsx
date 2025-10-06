@@ -53,7 +53,8 @@ export default function TimePickerField({ value, onChange, placeholder = "HH:MM"
     }
   }, [open]);
 
-  const minutes = useMemo(() => [0, 15, 30, 45], []);
+  // Allow 5-minute increments (e.g., 8:40)
+  const minutes = useMemo(() => Array.from({ length: 12 }, (_, i) => i * 5), []);
   const hours = useMemo(() => [1,2,3,4,5,6,7,8,9,10,11,12], []);
 
   function apply() {
