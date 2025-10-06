@@ -260,7 +260,9 @@ async function writeJson(data: { tasks: Task[]; sessions: StudySession[]; course
       throw new Error('Blob store not configured. Bind Vercel Blob or set BLOB_URL/BLOB_READ_WRITE_TOKEN.');
     }
     try {
-      await put('db.json', JSON.stringify(data, null, 2), {
+      const rev = Date.now();
+      const payload = { ...data, __rev: rev } as any;
+      await put('db.json', JSON.stringify(payload, null, 2), {
         access: 'public',
         contentType: 'application/json',
         addRandomSuffix: false,
@@ -272,6 +274,24 @@ async function writeJson(data: { tasks: Task[]; sessions: StudySession[]; course
         const legacy = blobs.filter((b: any) => (b.pathname || '').startsWith('db.json-'));
         if (legacy.length) await Promise.all(legacy.map((b: any) => del(b.pathname)));
       } catch {}
+      // Read-after-write verification: ensure CDN serves the new rev
+      try {
+        const url = BLOB_URL ? `${BLOB_URL}/db.json` : (await (async () => {
+          const { blobs } = await list();
+          const exact = blobs.find((b: any) => (b.pathname || '') === 'db.json');
+          return exact?.url || '';
+        })());
+        if (url) {
+          for (let i = 0; i < 10; i++) {
+            const res = await fetch(`${url}?_ts=${Date.now()}`, { cache: 'no-store' });
+            if (res.ok) {
+              const d = await res.json().catch(() => null as any);
+              if (d && typeof d.__rev === 'number' && d.__rev === rev) break;
+            }
+            await new Promise(r => setTimeout(r, 100));
+          }
+        }
+      } catch {}
       return;
     } catch (err) {
       // On Vercel, failing to write to Blob should not fall back to
@@ -281,7 +301,8 @@ async function writeJson(data: { tasks: Task[]; sessions: StudySession[]; course
   }
   // Local file storage (development or fallback)
   await fs.mkdir(path.dirname(DATA_FILE), { recursive: true });
-  await fs.writeFile(DATA_FILE, JSON.stringify(data, null, 2), 'utf8');
+  const payload = { ...data, __rev: Date.now() } as any;
+  await fs.writeFile(DATA_FILE, JSON.stringify(payload, null, 2), 'utf8');
 }
 
 // Tasks
