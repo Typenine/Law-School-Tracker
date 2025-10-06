@@ -9,7 +9,7 @@ interface AddCourseWizardProps {
 }
 
 const SEMESTERS: Semester[] = ['Spring', 'Summer', 'Fall'];
-const DAYS = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
+const DAYS: string[] = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
 const COLORS = [
   '#7c3aed', '#2563eb', '#dc2626', '#ea580c', '#ca8a04', 
   '#16a34a', '#0891b2', '#c2410c', '#9333ea', '#0d9488'
@@ -21,6 +21,7 @@ export default function AddCourseWizard({ onCourseAdded, onClose }: AddCourseWiz
     title: '',
     code: '',
     instructor: '',
+    meetingBlocks: [],
     color: COLORS[0],
     meetingDays: [],
     meetingStart: '',
@@ -30,6 +31,7 @@ export default function AddCourseWizard({ onCourseAdded, onClose }: AddCourseWiz
   });
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
+  const [mode, setMode] = useState<'simple' | 'blocks'>('simple');
 
   const titleRef = useRef<HTMLInputElement>(null);
 
@@ -58,14 +60,24 @@ export default function AddCourseWizard({ onCourseAdded, onClose }: AddCourseWiz
     setError('');
 
     try {
+      // Clean blocks if in blocks mode
+      const cleanBlocks = (mode === 'blocks')
+        ? ((course.meetingBlocks || []) as any[]).filter(b =>
+            Array.isArray(b?.days) && b.days.length > 0 &&
+            !!(b?.start && String(b.start).trim()) &&
+            !!(b?.end && String(b.end).trim())
+          )
+        : [];
+
       const payload = {
         title: course.title.trim(),
         code: course.code?.trim() || null,
         instructor: course.instructor?.trim() || null,
         color: course.color || COLORS[0],
-        meetingDays: course.meetingDays?.length ? course.meetingDays : null,
-        meetingStart: course.meetingStart?.trim() || null,
-        meetingEnd: course.meetingEnd?.trim() || null,
+        meetingDays: mode === 'simple' ? (course.meetingDays?.length ? course.meetingDays : null) : null,
+        meetingStart: mode === 'simple' ? (course.meetingStart?.trim() || null) : null,
+        meetingEnd: mode === 'simple' ? (course.meetingEnd?.trim() || null) : null,
+        meetingBlocks: mode === 'blocks' ? (cleanBlocks.length ? cleanBlocks : null) : null,
         semester: course.semester || null,
         year: course.year || null,
       };
@@ -211,50 +223,118 @@ export default function AddCourseWizard({ onCourseAdded, onClose }: AddCourseWiz
           {step === 2 && (
             <div className="space-y-4">
               <h3 className="text-lg font-medium mb-4">Class Schedule</h3>
-              
-              <div>
-                <label className="block text-sm font-medium mb-2">Meeting Days</label>
-                <div className="flex gap-2 flex-wrap">
-                  {DAYS.map((day, index) => (
-                    <button
-                      key={day}
-                      type="button"
-                      onClick={() => toggleDay(index)}
-                      className={`px-3 py-2 rounded text-sm font-medium ${
-                        course.meetingDays?.includes(index)
-                          ? 'bg-blue-600 text-white'
-                          : 'bg-[#1b2344] text-slate-300 hover:bg-[#2a3454]'
-                      }`}
-                    >
-                      {day}
-                    </button>
-                  ))}
+
+              {/* Mode toggle */}
+              <div className="flex items-center justify-between mb-2">
+                <div className="text-sm text-slate-300/80">Schedule Mode</div>
+                <div className="inline-flex rounded border border-[#1b2344] overflow-hidden text-xs">
+                  <button className={`px-2 py-1 ${mode==='simple' ? 'bg-[#1a2243]' : ''}`} onClick={() => setMode('simple')}>Simple</button>
+                  <button className={`px-2 py-1 ${mode==='blocks' ? 'bg-[#1a2243]' : ''}`} onClick={() => setMode('blocks')}>Different per day</button>
                 </div>
               </div>
 
-              <div className="grid grid-cols-2 gap-4">
-                <div>
-                  <label className="block text-sm font-medium mb-2">Start Time</label>
-                  <TimePickerField
-                    value={course.meetingStart || ''}
-                    onChange={(v) => setCourse(prev => ({ ...prev, meetingStart: v }))}
-                  />
-                </div>
-                <div>
-                  <label className="block text-sm font-medium mb-2">End Time</label>
-                  <TimePickerField
-                    value={course.meetingEnd || ''}
-                    onChange={(v) => setCourse(prev => ({ ...prev, meetingEnd: v }))}
-                  />
-                </div>
-              </div>
-
-              {course.meetingDays?.length && course.meetingStart && course.meetingEnd && (
-                <div className="p-3 bg-[#1b2344]/30 rounded">
-                  <div className="text-sm text-slate-300">
-                    <strong>Preview:</strong> {course.meetingDays.map(d => DAYS[d]).join(', ')} • {fmt12(course.meetingStart)} – {fmt12(course.meetingEnd)}
+              {mode === 'simple' ? (
+                <>
+                  <div>
+                    <label className="block text-sm font-medium mb-2">Meeting Days</label>
+                    <div className="flex gap-2 flex-wrap">
+                      {DAYS.map((day: string, index: number) => (
+                        <button
+                          key={day}
+                          type="button"
+                          onClick={() => toggleDay(index)}
+                          className={`px-3 py-2 rounded text-sm font-medium ${
+                            course.meetingDays?.includes(index)
+                              ? 'bg-blue-600 text-white'
+                              : 'bg-[#1b2344] text-slate-300 hover:bg-[#2a3454]'
+                          }`}
+                        >
+                          {day}
+                        </button>
+                      ))}
+                    </div>
                   </div>
-                </div>
+
+                  <div className="grid grid-cols-2 gap-4">
+                    <div>
+                      <label className="block text-sm font-medium mb-2">Start Time</label>
+                      <TimePickerField
+                        value={course.meetingStart || ''}
+                        onChange={(v) => setCourse(prev => ({ ...prev, meetingStart: v }))}
+                      />
+                    </div>
+                    <div>
+                      <label className="block text-sm font-medium mb-2">End Time</label>
+                      <TimePickerField
+                        value={course.meetingEnd || ''}
+                        onChange={(v) => setCourse(prev => ({ ...prev, meetingEnd: v }))}
+                      />
+                    </div>
+                  </div>
+
+                  {course.meetingDays?.length && course.meetingStart && course.meetingEnd && (
+                    <div className="p-3 bg-[#1b2344]/30 rounded">
+                      <div className="text-sm text-slate-300">
+                        <strong>Preview:</strong> {course.meetingDays.map(d => DAYS[d]).join(', ')} • {fmt12(course.meetingStart)} – {fmt12(course.meetingEnd)}
+                      </div>
+                    </div>
+                  )}
+                </>
+              ) : (
+                <>
+                  <div className="space-y-3">
+                    {((course.meetingBlocks as any[]) || []).map((b, i) => (
+                      <div key={i} className="border border-[#1b2344] rounded p-2">
+                        <div className="flex items-center justify-between mb-2">
+                          <div className="text-xs text-slate-300/70">Block {i+1}</div>
+                          <button onClick={() => {
+                            const list = [ ...((course.meetingBlocks as any[]) || []) ];
+                            list.splice(i, 1);
+                            setCourse(prev => ({ ...prev, meetingBlocks: list }));
+                          }} className="text-xs underline">Remove</button>
+                        </div>
+                        <div className="flex items-center gap-2 flex-wrap mb-2">
+                          {DAYS.map((d: string, idx: number) => (
+                            <label key={d} className="inline-flex items-center gap-1 text-xs">
+                              <input type="checkbox" checked={Array.isArray(b?.days) ? b.days.includes(idx) : false} onChange={() => {
+                                const list = [ ...((course.meetingBlocks as any[]) || []) ];
+                                const cur = { days: Array.isArray(b?.days) ? [...b.days] : [], start: b?.start || '', end: b?.end || '', location: b?.location || '' } as any;
+                                const set = new Set<number>(cur.days);
+                                if (set.has(idx)) set.delete(idx); else set.add(idx);
+                                cur.days = Array.from(set).sort((a,b)=>a-b);
+                                list[i] = cur;
+                                setCourse(prev => ({ ...prev, meetingBlocks: list }));
+                              }} />{d}
+                            </label>
+                          ))}
+                        </div>
+                        <div className="flex items-center gap-2 flex-wrap">
+                          <TimePickerField value={b?.start || ''} onChange={(v) => {
+                            const list = [ ...((course.meetingBlocks as any[]) || []) ];
+                            const cur = { days: Array.isArray(b?.days) ? b.days : [], start: v, end: b?.end || '', location: b?.location || '' } as any;
+                            list[i] = cur; setCourse(prev => ({ ...prev, meetingBlocks: list }));
+                          }} />
+                          <span className="text-xs">–</span>
+                          <TimePickerField value={b?.end || ''} onChange={(v) => {
+                            const list = [ ...((course.meetingBlocks as any[]) || []) ];
+                            const cur = { days: Array.isArray(b?.days) ? b.days : [], start: b?.start || '', end: v, location: b?.location || '' } as any;
+                            list[i] = cur; setCourse(prev => ({ ...prev, meetingBlocks: list }));
+                          }} />
+                          <input placeholder="Location (optional)" value={b?.location || ''} onChange={e => {
+                            const list = [ ...((course.meetingBlocks as any[]) || []) ];
+                            const cur = { days: Array.isArray(b?.days) ? b.days : [], start: b?.start || '', end: b?.end || '', location: e.target.value } as any;
+                            list[i] = cur; setCourse(prev => ({ ...prev, meetingBlocks: list }));
+                          }} className="bg-[#0b1020] border border-[#1b2344] rounded px-2 py-1" />
+                        </div>
+                      </div>
+                    ))}
+                    <button onClick={() => {
+                      const list = [ ...((course.meetingBlocks as any[]) || []) ];
+                      list.push({ days: (course.meetingDays || []) as number[], start: course.meetingStart || '', end: course.meetingEnd || '', location: course.room || course.location || '' });
+                      setCourse(prev => ({ ...prev, meetingBlocks: list }));
+                    }} className="text-xs px-2 py-1 rounded border border-[#1b2344]">Add time block</button>
+                  </div>
+                </>
               )}
             </div>
           )}
