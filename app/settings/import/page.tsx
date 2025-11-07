@@ -143,6 +143,11 @@ export default function ImportCsvPage() {
   const [dedup, setDedup] = useState<Set<string>>(new Set());
   const [status, setStatus] = useState<string>("");
   const [summary, setSummary] = useState<{ imported: number; duplicates: number; invalid: number } | null>(null);
+  const [units, setUnits] = useState<'hours'|'minutes'>(() => (typeof window!=='undefined' ? ((window.localStorage.getItem('importUnits') as any)||'hours') : 'hours'));
+  const [hoursIncludeIntern, setHoursIncludeIntern] = useState<boolean>(() => (typeof window!=='undefined' ? ((window.localStorage.getItem('importHoursIncludeIntern')||'true')==='true') : true));
+
+  useEffect(() => { if (typeof window!=='undefined') window.localStorage.setItem('importUnits', units); }, [units]);
+  useEffect(() => { if (typeof window!=='undefined') window.localStorage.setItem('importHoursIncludeIntern', hoursIncludeIntern?'true':'false'); }, [hoursIncludeIntern]);
 
   useEffect(() => {
     async function seed() {
@@ -163,8 +168,8 @@ export default function ImportCsvPage() {
           const date = new Date(s.when);
           const ymd = `${date.getFullYear()}-${String(date.getMonth()+1).padStart(2,'0')}-${String(date.getDate()).padStart(2,'0')}`;
           const seedCourse = extractCourseFromNotes(s.notes);
-          const seedNotes = s.notes ? s.notes.replace(/^\s*\[[^\]]+\]\s*/, '') : '';
-          const key = `${ymd}|${seedCourse}|${s.minutes || 0}|${s.focus ?? ''}|${seedNotes}|${s.pagesRead || 0}|${s.outlinePages || 0}|${s.practiceQs || 0}|${taskType}`;
+          // Dedup key (ignore notes). Use rounded minutes so minor decimals don't fork keys.
+          const key = `${ymd}|${seedCourse}|${Math.round(Number(s.minutes)||0)}|${s.focus ?? ''}|${s.pagesRead || 0}|${s.outlinePages || 0}|${s.practiceQs || 0}|${taskType}`;
           set.add(await sha1Hex(key));
         }
         const stored = (typeof window !== 'undefined') ? (window.localStorage.getItem('sessionDedupSet') || '') : '';
@@ -206,7 +211,7 @@ export default function ImportCsvPage() {
     buildPreview(rows, m, 25);
   }
 
-  function coerceParsed(vals: string[], m: Record<number, MapKey>): Parsed | { error: string } {
+  function coerceParsed(vals: string[], m: Record<number, MapKey>, units: 'hours'|'minutes'): Parsed | { error: string } {
     const get = (k: MapKey): string => {
       for (const [iStr, v] of Object.entries(m)) if (v === k) return vals[parseInt(iStr, 10)] || '';
       return '';
@@ -228,7 +233,7 @@ export default function ImportCsvPage() {
 
     const minutes = (() => {
       const n = parseFloat(hoursStr || '0');
-      if (!isNaN(n) && n > 0) return Math.round(n * 60);
+      if (!isNaN(n) && n > 0) return Math.round(units === 'hours' ? n * 60 : n);
       return 0;
     })();
 
@@ -245,7 +250,7 @@ export default function ImportCsvPage() {
 
     const internshipMinutes = (() => {
       const n = parseFloat(internStr || '0');
-      if (!isNaN(n) && n > 0) return Math.round(n * 60);
+      if (!isNaN(n) && n > 0) return Math.round(units === 'hours' ? n * 60 : n);
       return 0;
     })();
 
@@ -273,11 +278,11 @@ export default function ImportCsvPage() {
     const first = allRows.slice(0, cap);
     for (let i = 0; i < first.length; i++) {
       const vals = first[i];
-      const p = coerceParsed(vals, m);
+      const p = coerceParsed(vals, m, units);
       if ('error' in p) {
         out.push({ idx: i, values: vals, invalidReason: p.error });
       } else {
-        const taskKey = `${p.whenISO.slice(0,10)}|${p.course}|${p.minutes}|${p.focus ?? ''}|${p.notes || ''}|${p.pagesRead}|${p.outlinePages}|${p.practiceQs}|${p.taskType}`;
+        const taskKey = `${p.whenISO.slice(0,10)}|${p.course}|${p.minutes}|${p.focus ?? ''}|${p.pagesRead}|${p.outlinePages}|${p.practiceQs}|${p.taskType}`;
         const h = await sha1Hex(taskKey);
         out.push({ idx: i, values: vals, parsed: p, duplicate: dedup.has(h) });
       }
@@ -298,29 +303,34 @@ export default function ImportCsvPage() {
       }
       for (let i = 0; i < rows.length; i++) {
         const vals = rows[i];
-        const res = coerceParsed(vals, mapping);
+        const res = coerceParsed(vals, mapping, units);
         if ('error' in res) { invalid++; continue; }
         const p = res as Parsed;
-        const entries: Array<Parsed> = [p];
+        // Subtract internship minutes from main entry to avoid double-counting
+        const mainMinutes = Math.max(0, (p.minutes || 0) - (hoursIncludeIntern ? (p.internshipMinutes || 0) : 0));
+        const entries: Array<Parsed & { _minutes: number; _course: string; _taskType: string } > = [
+          { ...p, _minutes: mainMinutes, _course: p.course, _taskType: p.taskType },
+        ];
         if (p.internshipMinutes > 0) {
-          entries.push({ ...p, course: 'Internship', taskType: 'Internship', minutes: p.internshipMinutes });
+          entries.push({ ...p, _minutes: p.internshipMinutes, _course: 'Internship', _taskType: 'Internship' });
         }
         for (const e of entries) {
-          const key = `${e.whenISO.slice(0,10)}|${e.course}|${e.minutes}|${e.focus ?? ''}|${e.notes || ''}|${e.pagesRead}|${e.outlinePages}|${e.practiceQs}|${e.taskType}`;
+          // Dedup key ignores notes; minutes rounded
+          const key = `${e.whenISO.slice(0,10)}|${e._course}|${Math.round(e._minutes)}|${e.focus ?? ''}|${e.pagesRead}|${e.outlinePages}|${e.practiceQs}|${e._taskType}`;
           const h = await sha1Hex(key);
           if (dedup.has(h)) { duplicates++; continue; }
           const body: any = {
             when: e.whenISO,
-            minutes: e.minutes,
+            minutes: e._minutes,
             focus: e.focus ?? null,
             notes: e.notes ?? null,
             pagesRead: e.pagesRead || null,
             outlinePages: e.outlinePages || null,
             practiceQs: e.practiceQs || null,
-            activity: toActivity(e.taskType),
+            activity: toActivity(e._taskType),
           };
-          if (e.course) {
-            body.notes = body.notes ? `[${e.course}] ${body.notes}` : `[${e.course}]`;
+          if (e._course) {
+            body.notes = body.notes ? `[${e._course}] ${body.notes}` : `[${e._course}]`;
           }
           const resp = await fetch('/api/sessions', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
           if (resp.ok) {
@@ -434,9 +444,17 @@ export default function ImportCsvPage() {
   return (
     <main className="space-y-6">
       <section className="card p-5 space-y-3">
-        <div className="flex items-center justify-between">
+        <div className="flex items-center justify-between gap-3 flex-wrap">
           <h2 className="text-lg font-medium">Import Data (CSV)</h2>
-          <div className="flex items-center gap-2">
+          <div className="flex items-center gap-3">
+            <div className="flex items-center gap-2 text-xs">
+              <span className="text-slate-300/70">Units</span>
+              <label className="inline-flex items-center gap-1"><input type="radio" name="imp-units" checked={units==='hours'} onChange={()=>setUnits('hours')} /> Hours</label>
+              <label className="inline-flex items-center gap-1"><input type="radio" name="imp-units" checked={units==='minutes'} onChange={()=>setUnits('minutes')} /> Minutes</label>
+            </div>
+            <label className="inline-flex items-center gap-2 text-xs">
+              <input type="checkbox" checked={hoursIncludeIntern} onChange={e=>setHoursIncludeIntern(e.target.checked)} /> Hours include Internship Time
+            </label>
             <input type="file" accept=".csv,text/csv" onChange={onFile} className="text-sm" />
             <button onClick={exportCsv} className="px-3 py-2 rounded border border-[#1b2344] text-sm">Export Sessions (.csv)</button>
           </div>
