@@ -19,6 +19,7 @@ type StudySession = {
   minutes: number;
   focus?: number | null;
   notes?: string | null;
+  activity?: string | null;
 };
 
 type PlannedBlock = {
@@ -88,6 +89,19 @@ export default function ReviewPage() {
     const p = chicagoParts(d);
     return ymdFromParts(p.y, p.m, p.d);
   }
+  function chicagoHour(d: Date) {
+    const parts = new Intl.DateTimeFormat('en-US', { timeZone: 'America/Chicago', hour: '2-digit', hour12: false }).formatToParts(d);
+    const h = parseInt(parts.find(p => p.type === 'hour')?.value || '0', 10);
+    return isNaN(h) ? 0 : h;
+  }
+  function fmtHourRange2(startHour: number) {
+    const end = (startHour + 2) % 24;
+    const to12 = (h: number) => { const ap = h >= 12 ? 'pm' : 'am'; const h12 = ((h + 11) % 12) + 1; return { h12, ap }; };
+    const a = to12(startHour), b = to12(end);
+    // If both AM or both PM and end != 0 equivalence, keep ap once
+    if (a.ap === b.ap) return `${a.h12}–${b.h12}${a.ap}`;
+    return `${a.h12}${a.ap}–${b.h12}${b.ap}`;
+  }
   function addDays(y: number, m: number, d: number, delta: number) {
     const dt = new Date(y, m - 1, d);
     dt.setDate(dt.getDate() + delta);
@@ -108,6 +122,15 @@ export default function ReviewPage() {
   // Helper to compare YMD range inclusive
   function inYmdRange(ymd: string, start: string, end: string) {
     return ymd >= start && ymd <= end;
+  }
+
+  function fmtHM(min: number): string {
+    const n = Math.max(0, Math.round(Number(min) || 0));
+    const h = Math.floor(n / 60);
+    const m = n % 60;
+    if (h > 0 && m > 0) return `${h}h ${m}m`;
+    if (h > 0) return `${h}h`;
+    return `${m}m`;
   }
 
   // Extract course from notes like "[Course] ..."
@@ -183,6 +206,84 @@ export default function ReviewPage() {
     return { rows };
   }, [tasks, sessions]);
 
+  function activityLabel(a?: string | null): string {
+    const x = (a || '').toLowerCase();
+    if (x === 'reading') return 'Reading';
+    if (x === 'review') return 'Review';
+    if (x === 'outline') return 'Outline';
+    if (x === 'practice') return 'Practice';
+    if (x === 'internship') return 'Internship';
+    if (!x) return 'Other';
+    return x[0].toUpperCase() + x.slice(1);
+  }
+
+  // 30-day window aggregations
+  const { startYMD30 } = useMemo(() => {
+    // Last 30 days inclusive ending today in Chicago
+    const today = new Date();
+    const ymdToday = chicagoYMD(today);
+    const parts = ymdToday.split('-').map(v => parseInt(v, 10));
+    const d0 = new Date(parts[0], parts[1] - 1, parts[2]);
+    const start = new Date(d0);
+    start.setDate(start.getDate() - 29); // 30-day span
+    return { startYMD30: chicagoYMD(start) };
+  }, []);
+
+  type CourseAggRow = { course: string; minutes: number; sessions: number; avgFocus: number };
+  const courseAgg30 = useMemo(() => {
+    const map = new Map<string, { minutes: number; sessions: number; focusSum: number; focusCount: number }>();
+    for (const s of sessions) {
+      const ymd = chicagoYMD(new Date(s.when));
+      if (ymd < startYMD30) continue;
+      const task = s.taskId ? tasksById.get(s.taskId) : undefined;
+      const course = (task?.course || extractCourseFromNotes(s.notes) || 'Unassigned') as string;
+      const entry = map.get(course) || { minutes: 0, sessions: 0, focusSum: 0, focusCount: 0 };
+      entry.minutes += Math.max(0, Number(s.minutes) || 0);
+      entry.sessions += 1;
+      if (typeof s.focus === 'number') { entry.focusSum += s.focus; entry.focusCount += 1; }
+      map.set(course, entry);
+    }
+    const rows: CourseAggRow[] = Array.from(map.entries()).map(([course, v]) => ({
+      course,
+      minutes: v.minutes,
+      sessions: v.sessions,
+      avgFocus: v.focusCount > 0 ? v.focusSum / v.focusCount : 0,
+    })).sort((a, b) => (a.course || '').localeCompare(b.course || ''));
+    const totalMinutes = rows.reduce((s, r) => s + r.minutes, 0);
+    const totalSessions = rows.reduce((s, r) => s + r.sessions, 0);
+    const focusSum = rows.reduce((s, r) => s + (r.avgFocus * r.sessions), 0);
+    const focusCount = totalSessions;
+    const weightedAvgFocus = focusCount > 0 ? (focusSum / focusCount) : 0;
+    return { rows, totalMinutes, totalSessions, weightedAvgFocus };
+  }, [sessions, tasksById, startYMD30]);
+
+  type ActivityAggRow = { activity: string; minutes: number; sessions: number; avgFocus: number };
+  const activityAgg30 = useMemo(() => {
+    const map = new Map<string, { minutes: number; sessions: number; focusSum: number; focusCount: number }>();
+    for (const s of sessions) {
+      const ymd = chicagoYMD(new Date(s.when));
+      if (ymd < startYMD30) continue;
+      const label = activityLabel(s.activity);
+      const entry = map.get(label) || { minutes: 0, sessions: 0, focusSum: 0, focusCount: 0 };
+      entry.minutes += Math.max(0, Number(s.minutes) || 0);
+      entry.sessions += 1;
+      if (typeof s.focus === 'number') { entry.focusSum += s.focus; entry.focusCount += 1; }
+      map.set(label, entry);
+    }
+    const rows: ActivityAggRow[] = Array.from(map.entries()).map(([activity, v]) => ({
+      activity,
+      minutes: v.minutes,
+      sessions: v.sessions,
+      avgFocus: v.focusCount > 0 ? v.focusSum / v.focusCount : 0,
+    })).sort((a, b) => (a.activity || '').localeCompare(b.activity || ''));
+    const totalMinutes = rows.reduce((s, r) => s + r.minutes, 0);
+    const totalSessions = rows.reduce((s, r) => s + r.sessions, 0);
+    const focusSum = rows.reduce((s, r) => s + (r.avgFocus * r.sessions), 0);
+    const focusCount = totalSessions;
+    const weightedAvgFocus = focusCount > 0 ? (focusSum / focusCount) : 0;
+    return { rows, totalMinutes, totalSessions, weightedAvgFocus };
+  }, [sessions, startYMD30]);
+
   // Focus Averages: 7/14/30-day (sessions with non-null focus)
   function avgFocusSince(days: number) {
     const cutoff = Date.now() - days * 24 * 60 * 60 * 1000;
@@ -198,6 +299,122 @@ export default function ReviewPage() {
   const focus7 = useMemo(() => avgFocusSince(7), [sessions]);
   const focus14 = useMemo(() => avgFocusSince(14), [sessions]);
   const focus30 = useMemo(() => avgFocusSince(30), [sessions]);
+
+  // Best time-of-day window (last 30 days), 2-hour block, >= 3 sessions
+  const bestWindow = useMemo(() => {
+    const hour = Array.from({ length: 24 }, () => ({ sum: 0, count: 0 }));
+    for (const s of sessions) {
+      if (s.focus == null) continue;
+      const ymd = chicagoYMD(new Date(s.when));
+      if (ymd < startYMD30) continue;
+      const h = chicagoHour(new Date(s.when));
+      hour[h].sum += s.focus;
+      hour[h].count += 1;
+    }
+    let best: { start: number; avg: number; n: number } | null = null;
+    for (let h = 0; h < 24; h++) {
+      const h2 = (h + 1) % 24;
+      const sum = hour[h].sum + hour[h2].sum;
+      const n = hour[h].count + hour[h2].count;
+      if (n >= 3) {
+        const avg = sum / Math.max(n, 1);
+        if (!best || avg > best.avg) best = { start: h, avg, n };
+      }
+    }
+    return best; // null if not enough data
+  }, [sessions, startYMD30]);
+
+  // Slump detector: 14d < 30d - 1.0 and >= 10 sessions last 30 days
+  const slump = useMemo(() => {
+    let n30 = 0;
+    for (const s of sessions) {
+      if (s.focus == null) continue;
+      const ymd = chicagoYMD(new Date(s.when));
+      if (ymd >= startYMD30) n30 += 1;
+    }
+    const falling = focus14 < (focus30 - 1.0);
+    return { isSlump: falling && n30 >= 10, n30 };
+  }, [sessions, focus14, focus30, startYMD30]);
+
+  // Weekly Burndown selectors
+  const LS_AVAIL = 'availabilityTemplateV1';
+  const LS_GOALS = 'weeklyGoalsV1';
+  function loadGoals(): Array<{ id: string; scope: 'global'|'course'; weeklyMinutes: number; course?: string|null }>{
+    if (typeof window === 'undefined') return [];
+    try { const raw = window.localStorage.getItem(LS_GOALS) || '[]'; const arr = JSON.parse(raw); return Array.isArray(arr) ? arr : []; } catch { return []; }
+  }
+  const weeklyGoalMinutes = useMemo(() => {
+    const list = loadGoals();
+    const g = list.find(x => x && x.scope === 'global');
+    return Math.max(0, Number(g?.weeklyMinutes) || 0);
+  }, []);
+  const availabilityByDow = useMemo(() => {
+    if (typeof window === 'undefined') return {} as Record<number, number>;
+    try { const raw = window.localStorage.getItem(LS_AVAIL) || '{}'; const obj = JSON.parse(raw) || {}; return obj as Record<number, number>; } catch { return {} as Record<number, number>; }
+  }, []);
+  const weekDays = useMemo(() => {
+    const [y, m, d] = startYMD.split('-').map(v => parseInt(v, 10));
+    const base = new Date(y, (m as number) - 1, d);
+    const arr: string[] = [];
+    for (let i = 0; i < 7; i++) { const dt = new Date(base); dt.setDate(dt.getDate() + i); arr.push(chicagoYMD(dt)); }
+    return arr;
+  }, [startYMD]);
+  const plannedByDayY = useMemo(() => {
+    const map = new Map<string, number>();
+    for (const day of weekDays) map.set(day, 0);
+    for (const b of plannedBlocks) {
+      if (!b?.day) continue;
+      if (!inYmdRange(b.day, startYMD, endYMD)) continue;
+      map.set(b.day, (map.get(b.day) || 0) + Math.max(0, Number(b.plannedMinutes) || 0));
+    }
+    return map;
+  }, [plannedBlocks, weekDays, startYMD, endYMD]);
+  const actualByDayY = useMemo(() => {
+    const map = new Map<string, number>();
+    for (const day of weekDays) map.set(day, 0);
+    for (const s of sessions) {
+      const k = chicagoYMD(new Date(s.when));
+      if (!inYmdRange(k, startYMD, endYMD)) continue;
+      map.set(k, (map.get(k) || 0) + Math.max(0, Number(s.minutes) || 0));
+    }
+    return map;
+  }, [sessions, weekDays, startYMD, endYMD]);
+  const burndownRows = useMemo(() => {
+    let cumActual = 0;
+    return weekDays.map((day) => {
+      const planned = Math.round(plannedByDayY.get(day) || 0);
+      const actual = Math.round(actualByDayY.get(day) || 0);
+      cumActual += actual;
+      const remainingGoal = Math.max(0, Math.round(weeklyGoalMinutes - cumActual));
+      const dow = new Date(day).toLocaleDateString(undefined, { weekday: 'short' });
+      return { day, dow, planned, actual, remainingGoal };
+    });
+  }, [weekDays, plannedByDayY, actualByDayY, weeklyGoalMinutes]);
+  const burndownSummary = useMemo(() => {
+    if (weeklyGoalMinutes <= 0) return { text: 'No weekly goal set.', delta: 0 } as const;
+    const todayY = chicagoYMD(new Date());
+    const todayIdx = weekDays.findIndex(d => d === todayY);
+    const idx = todayIdx === -1 ? Math.min(6, weekDays.length - 1) : todayIdx;
+    const workdays = weekDays.filter(d => (availabilityByDow[new Date(d).getDay()] || 0) > 0);
+    const totalWork = workdays.length || 7;
+    const completedWork = workdays.filter(d => d <= weekDays[idx]).length;
+    const cumActualToDate = burndownRows.filter(r => r.day <= weekDays[idx]).reduce((s, r) => s + r.actual, 0);
+    const expectedByNow = Math.round(weeklyGoalMinutes * (completedWork / Math.max(totalWork, 1)));
+    const delta = cumActualToDate - expectedByNow; // >0 ahead
+    const aheadBehind = delta >= 0 ? 'ahead' : 'behind';
+    // Finish day at current pace
+    const avgPerWorkday = completedWork > 0 ? cumActualToDate / completedWork : 0;
+    let finishDay = '—';
+    if (avgPerWorkday > 0) {
+      const remain = Math.max(0, weeklyGoalMinutes - cumActualToDate);
+      const needDays = Math.ceil(remain / avgPerWorkday);
+      const futureWork = workdays.filter(d => d >= weekDays[idx]);
+      const pick = futureWork[Math.min(Math.max(needDays - 1, 0), futureWork.length - 1)] || workdays[workdays.length - 1];
+      if (pick) finishDay = new Date(pick).toLocaleDateString(undefined, { weekday: 'long' });
+    }
+    const text = `You are ${aheadBehind} by ${Math.abs(delta)} min vs pace; at this pace you finish by ${finishDay}.`;
+    return { text, delta } as const;
+  }, [weeklyGoalMinutes, weekDays, availabilityByDow, burndownRows]);
 
   // Summary (2–3 bullets)
   const summaryBullets = useMemo(() => {
@@ -228,6 +445,28 @@ export default function ReviewPage() {
 
   return (
     <main className="space-y-6">
+      {/* Focus Insights */}
+      <section className="card p-5 space-y-2">
+        <h3 className="text-lg font-medium">Focus Insights</h3>
+        <div className="text-sm text-slate-300/80">Averages: 7d <span className="text-slate-100 font-medium">{(focus7||0).toFixed(1)}</span> · 14d <span className="text-slate-100 font-medium">{(focus14||0).toFixed(1)}</span> · 30d <span className="text-slate-100 font-medium">{(focus30||0).toFixed(1)}</span></div>
+        {bestWindow ? (
+          <div className="text-sm text-slate-300/80">Best window: <span className="text-slate-100 font-medium">{fmtHourRange2(bestWindow.start)}</span> (avg {(bestWindow.avg||0).toFixed(1)} over {bestWindow.n} sessions)</div>
+        ) : (
+          <div className="text-sm text-slate-300/60">Best window: —</div>
+        )}
+        <div className="text-sm text-slate-300/80">
+          {slump.isSlump ? (
+            <span className="text-amber-400">Slump detected.</span>
+          ) : (
+            <span className="text-slate-300/60">Slump: —</span>
+          )}
+        </div>
+        <div className="text-xs text-slate-300/70">
+          {bestWindow && <div>Suggestion: schedule 45–60m blocks in your best window.</div>}
+          {slump.isSlump && <div>Suggestion: shorten sessions (30–45m), add breaks, and prioritize high-focus work in best window.</div>}
+          {!bestWindow && !slump.isSlump && <div>Suggestion: keep logging focus; we’ll surface patterns as you accumulate sessions.</div>}
+        </div>
+      </section>
       <section className="card p-5">
         <h2 className="text-xl font-semibold mb-2">Review</h2>
         <ul className="list-disc list-inside text-sm text-slate-300/90">
@@ -239,6 +478,38 @@ export default function ReviewPage() {
         </ul>
       </section>
 
+      {/* Weekly Burndown */}
+      <section className="card p-5 space-y-3">
+        <h3 className="text-lg font-medium">Weekly Burndown</h3>
+        <div className="text-sm text-slate-300/80">{burndownSummary.text}</div>
+        <div className="overflow-x-auto">
+          <table className="w-full text-sm">
+            <thead className="text-left text-slate-300/60">
+              <tr>
+                <th className="py-1 pr-2">Day</th>
+                <th className="py-1 pr-2">Planned</th>
+                <th className="py-1 pr-2">Actual</th>
+                <th className="py-1 pr-2">Remaining Goal</th>
+              </tr>
+            </thead>
+            <tbody>
+              {burndownRows.length === 0 ? (
+                <tr className="border-t border-[#1b2344]"><td className="py-1 pr-2">—</td><td className="py-1 pr-2">0m</td><td className="py-1 pr-2">0m</td><td className="py-1 pr-2">0m</td></tr>
+              ) : (
+                burndownRows.map(r => (
+                  <tr key={r.day} className="border-t border-[#1b2344]">
+                    <td className="py-1 pr-2">{r.dow}</td>
+                    <td className="py-1 pr-2">{r.planned}m</td>
+                    <td className="py-1 pr-2">{r.actual}m</td>
+                    <td className="py-1 pr-2">{r.remainingGoal}m</td>
+                  </tr>
+                ))
+              )}
+            </tbody>
+          </table>
+        </div>
+      </section>
+
       {/* 1) Planned vs Actual (current week) */}
       <section className="card p-5 space-y-3">
         <h3 className="text-lg font-medium">Planned vs Actual (This Week)</h3>
@@ -248,29 +519,29 @@ export default function ReviewPage() {
             <thead className="text-left text-slate-300/60">
               <tr>
                 <th className="py-1 pr-2">Course</th>
-                <th className="py-1 pr-2">Planned Minutes</th>
-                <th className="py-1 pr-2">Actual Minutes</th>
+                <th className="py-1 pr-2">Planned</th>
+                <th className="py-1 pr-2">Actual</th>
                 <th className="py-1 pr-2">Delta</th>
               </tr>
             </thead>
             <tbody>
               {plannedVsActual.rows.length === 0 ? (
-                <tr className="border-t border-[#1b2344]"><td className="py-1 pr-2">—</td><td className="py-1 pr-2">0</td><td className="py-1 pr-2">0</td><td className="py-1 pr-2">0</td></tr>
+                <tr className="border-t border-[#1b2344]"><td className="py-1 pr-2">—</td><td className="py-1 pr-2">0m</td><td className="py-1 pr-2">0m</td><td className="py-1 pr-2">0m</td></tr>
               ) : (
                 plannedVsActual.rows.map((r) => (
                   <tr key={r.course} className="border-t border-[#1b2344]">
                     <td className="py-1 pr-2">{r.course || 'Unassigned'}</td>
-                    <td className="py-1 pr-2">{Math.round(r.planned)}</td>
-                    <td className="py-1 pr-2">{Math.round(r.actual)}</td>
-                    <td className="py-1 pr-2">{Math.round(r.delta)}</td>
+                    <td className="py-1 pr-2">{fmtHM(r.planned)}</td>
+                    <td className="py-1 pr-2">{fmtHM(r.actual)}</td>
+                    <td className="py-1 pr-2">{fmtHM(r.delta)}</td>
                   </tr>
                 ))
               )}
               <tr className="border-t border-[#1b2344] font-medium">
                 <td className="py-1 pr-2">Total</td>
-                <td className="py-1 pr-2">{Math.round(plannedVsActual.totals.planned)}</td>
-                <td className="py-1 pr-2">{Math.round(plannedVsActual.totals.actual)}</td>
-                <td className="py-1 pr-2">{Math.round(plannedVsActual.totals.delta)}</td>
+                <td className="py-1 pr-2">{fmtHM(plannedVsActual.totals.planned)}</td>
+                <td className="py-1 pr-2">{fmtHM(plannedVsActual.totals.actual)}</td>
+                <td className="py-1 pr-2">{fmtHM(plannedVsActual.totals.delta)}</td>
               </tr>
             </tbody>
           </table>
@@ -302,6 +573,80 @@ export default function ReviewPage() {
                   </tr>
                 ))
               )}
+            </tbody>
+          </table>
+        </div>
+      </section>
+
+      {/* 2b) Totals by Course (Last 30 days) */}
+      <section className="card p-5 space-y-3">
+        <h3 className="text-lg font-medium">Totals by Course (Last 30 days)</h3>
+        <div className="overflow-x-auto">
+          <table className="w-full text-sm">
+            <thead className="text-left text-slate-300/60">
+              <tr>
+                <th className="py-1 pr-2">Course</th>
+                <th className="py-1 pr-2">Time</th>
+                <th className="py-1 pr-2">Sessions</th>
+                <th className="py-1 pr-2">Avg Focus</th>
+              </tr>
+            </thead>
+            <tbody>
+              {courseAgg30.rows.length === 0 ? (
+                <tr className="border-t border-[#1b2344]"><td className="py-1 pr-2">—</td><td className="py-1 pr-2">0m</td><td className="py-1 pr-2">0</td><td className="py-1 pr-2">0.0</td></tr>
+              ) : (
+                courseAgg30.rows.map((r: CourseAggRow) => (
+                  <tr key={r.course} className="border-t border-[#1b2344]">
+                    <td className="py-1 pr-2">{r.course || 'Unassigned'}</td>
+                    <td className="py-1 pr-2">{fmtHM(r.minutes)}</td>
+                    <td className="py-1 pr-2">{r.sessions}</td>
+                    <td className="py-1 pr-2">{r.avgFocus > 0 ? r.avgFocus.toFixed(1) : '—'}</td>
+                  </tr>
+                ))
+              )}
+              <tr className="border-t border-[#1b2344] font-medium">
+                <td className="py-1 pr-2">Total</td>
+                <td className="py-1 pr-2">{fmtHM(courseAgg30.totalMinutes)}</td>
+                <td className="py-1 pr-2">{courseAgg30.totalSessions}</td>
+                <td className="py-1 pr-2">{courseAgg30.weightedAvgFocus > 0 ? courseAgg30.weightedAvgFocus.toFixed(1) : '—'}</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+      </section>
+
+      {/* 4) Totals by Activity Type (Last 30 days) */}
+      <section className="card p-5 space-y-3">
+        <h3 className="text-lg font-medium">Totals by Activity (Last 30 days)</h3>
+        <div className="overflow-x-auto">
+          <table className="w-full text-sm">
+            <thead className="text-left text-slate-300/60">
+              <tr>
+                <th className="py-1 pr-2">Activity</th>
+                <th className="py-1 pr-2">Time</th>
+                <th className="py-1 pr-2">Sessions</th>
+                <th className="py-1 pr-2">Avg Focus</th>
+              </tr>
+            </thead>
+            <tbody>
+              {activityAgg30.rows.length === 0 ? (
+                <tr className="border-t border-[#1b2344]"><td className="py-1 pr-2">—</td><td className="py-1 pr-2">0m</td><td className="py-1 pr-2">0</td><td className="py-1 pr-2">0.0</td></tr>
+              ) : (
+                activityAgg30.rows.map((r: ActivityAggRow) => (
+                  <tr key={r.activity} className="border-t border-[#1b2344]">
+                    <td className="py-1 pr-2">{r.activity}</td>
+                    <td className="py-1 pr-2">{fmtHM(r.minutes)}</td>
+                    <td className="py-1 pr-2">{r.sessions}</td>
+                    <td className="py-1 pr-2">{r.avgFocus > 0 ? r.avgFocus.toFixed(1) : '—'}</td>
+                  </tr>
+                ))
+              )}
+              <tr className="border-t border-[#1b2344] font-medium">
+                <td className="py-1 pr-2">Total</td>
+                <td className="py-1 pr-2">{fmtHM(activityAgg30.totalMinutes)}</td>
+                <td className="py-1 pr-2">{activityAgg30.totalSessions}</td>
+                <td className="py-1 pr-2">{activityAgg30.weightedAvgFocus > 0 ? activityAgg30.weightedAvgFocus.toFixed(1) : '—'}</td>
+              </tr>
             </tbody>
           </table>
         </div>

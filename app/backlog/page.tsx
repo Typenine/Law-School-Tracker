@@ -1,4 +1,4 @@
-﻿"use client";
+"use client";
 import { useEffect, useMemo, useState } from "react";
 
 type BacklogItem = {
@@ -24,6 +24,30 @@ function minutesPerPage(): number {
   const s = window.localStorage.getItem("minutesPerPage");
   const n = s ? parseFloat(s) : NaN;
   return !isNaN(n) && n > 0 ? n : 3;
+}
+
+type CourseMppEntry = { mpp: number; sample?: number | null; updatedAt?: string | null; overrideEnabled?: boolean | null; overrideMpp?: number | null };
+function clamp(n: number, lo: number, hi: number) { return Math.max(lo, Math.min(hi, n)); }
+function effectiveMppForCourse(course: string): number {
+  try {
+    const raw = typeof window !== 'undefined' ? window.localStorage.getItem('courseMppMap') : null;
+    if (raw) {
+      const obj = JSON.parse(raw) as Record<string, CourseMppEntry>;
+      const key = (course || '').trim().toLowerCase();
+      const v = obj[key];
+      if (v && typeof v.mpp === 'number' && v.mpp > 0) return clamp(v.mpp, 0.5, 6.0);
+    }
+  } catch {}
+  return minutesPerPage();
+}
+
+function fmtHM(min: number | null | undefined): string {
+  const n = Math.max(0, Math.round(Number(min) || 0));
+  const h = Math.floor(n / 60);
+  const m = n % 60;
+  if (h > 0 && m > 0) return `${h}h ${m}m`;
+  if (h > 0) return `${h}h`;
+  return `${m}m`;
 }
 
 function chicagoYmd(d: Date): string {
@@ -109,13 +133,16 @@ function parseQuickAdd(input: string): Omit<BacklogItem, "id"> | null {
     const n = parseInt(pM[1], 10);
     if (!isNaN(n)) pages = n;
   }
-  const estimatedMinutes = pages && pages > 0 ? Math.round(pages * minutesPerPage()) : null;
+  const estimatedMinutes = pages && pages > 0 ? Math.round(pages * effectiveMppForCourse(course) + 10) : null;
   const title = rest.trim();
   if (!title) return null;
   return { title, course, dueDate, pages: pages ?? null, estimatedMinutes, priority: null, tags: null };
 }
 
 export default function BacklogPage() {
+  useEffect(() => {
+    try { if (typeof window !== 'undefined') window.location.replace('/tasks?tag=inbox'); } catch {}
+  }, []);
   const [items, setItems] = useState<BacklogItem[]>([]);
   const [filter, setFilter] = useState<string>("All");
   const [qaInput, setQaInput] = useState("");
@@ -130,6 +157,100 @@ export default function BacklogPage() {
     priority: "",
     tags: "",
   });
+
+  const [sessions, setSessions] = useState<any[]>([]);
+  const [tasks, setTasks] = useState<any[]>([]);
+  const tasksById = useMemo(() => {
+    const m = new Map<string, any>();
+    for (const t of tasks) if (t && t.id) m.set(t.id, t);
+    return m;
+  }, [tasks]);
+
+  useEffect(() => {
+    async function refresh() {
+      try {
+        const [sRes, tRes] = await Promise.all([
+          fetch('/api/sessions', { cache: 'no-store' }),
+          fetch('/api/tasks', { cache: 'no-store' })
+        ]);
+        const sj = await sRes.json().catch(()=>({ sessions: [] }));
+        const tj = await tRes.json().catch(()=>({ tasks: [] }));
+        setSessions(Array.isArray(sj?.sessions) ? sj.sessions : []);
+        setTasks(Array.isArray(tj?.tasks) ? tj.tasks : []);
+      } catch {}
+    }
+    refresh();
+  }, []);
+
+  function extractCourseFromNotes(notes?: string | null): string {
+    if (!notes) return '';
+    const m = notes.match(/^\s*\[([^\]]+)\]/);
+    return m ? m[1].trim() : '';
+  }
+
+  function normActivity(a?: string | null): string {
+    const x = (a || '').toLowerCase();
+    if (x === 'reading') return 'reading';
+    if (x === 'review') return 'review';
+    if (x === 'outline') return 'outline';
+    if (x === 'practice') return 'practice';
+    if (x === 'internship') return 'internship';
+    return 'other';
+  }
+
+  const pace = useMemo(() => {
+    const sumsPages: Record<string, { minutes: number; pages: number }> = {};
+    let globalPages = { minutes: 0, pages: 0 };
+    const sumsAct: Record<string, { minutes: number; count: number }> = {};
+    const globalAct: Record<string, { minutes: number; count: number }> = {};
+    for (const s of sessions) {
+      const t = s.taskId ? tasksById.get(s.taskId) : null;
+      let course = (t?.course || ((s.activity||'').toLowerCase()==='internship' ? 'Internship' : extractCourseFromNotes(s.notes)) || '').toString().trim().toLowerCase();
+      if (!course) course = 'unassigned';
+      const minutes = Math.max(0, Number(s.minutes) || 0);
+      const pages = Math.max(0, Number(s.pagesRead) || 0);
+      const act = normActivity(s.activity);
+      if (pages > 0 && minutes > 0) {
+        const rec = (sumsPages[course] ||= { minutes: 0, pages: 0 });
+        rec.minutes += minutes; rec.pages += pages;
+        globalPages.minutes += minutes; globalPages.pages += pages;
+      }
+      const key = `${course}::${act}`;
+      const ra = (sumsAct[key] ||= { minutes: 0, count: 0 });
+      ra.minutes += minutes; ra.count += 1;
+      const ga = (globalAct[act] ||= { minutes: 0, count: 0 });
+      ga.minutes += minutes; ga.count += 1;
+    }
+    const mppByCourse: Record<string, number> = {};
+    for (const [c, v] of Object.entries(sumsPages)) if (v.pages > 0) mppByCourse[c] = v.minutes / v.pages;
+    const globalMPP = globalPages.pages > 0 ? (globalPages.minutes / globalPages.pages) : null;
+    const avgByCourseActivity: Record<string, number> = {};
+    for (const [k, v] of Object.entries(sumsAct)) if (v.count > 0) avgByCourseActivity[k] = v.minutes / v.count;
+    const globalAvgByActivity: Record<string, number> = {};
+    for (const [k, v] of Object.entries(globalAct)) if (v.count > 0) globalAvgByActivity[k] = v.minutes / v.count;
+    return { mppByCourse, globalMPP, avgByCourseActivity, globalAvgByActivity };
+  }, [sessions, tasksById]);
+
+  function detectActivityFromTitle(title: string): string {
+    const l = (title || '').toLowerCase();
+    if (/(\bread\b|\bpp\.|pages?|\bch(\.|apter)?\b)/.test(l)) return 'reading';
+    if (/outline/.test(l)) return 'outline';
+    if (/(practice|problems?|hypos?|questions?)/.test(l)) return 'practice';
+    if (/(review)/.test(l)) return 'review';
+    return 'other';
+  }
+
+  function estimateFromHistory(course: string, title: string, pages: number | null | undefined, fallbackMpp?: number): number | null {
+    const c = (course || '').trim().toLowerCase() || 'unassigned';
+    const act = detectActivityFromTitle(title);
+    if (pages && pages > 0) {
+      const mpp = (pace.mppByCourse[c] ?? pace.globalMPP ?? fallbackMpp ?? minutesPerPage());
+      return Math.round(pages * mpp);
+    }
+    const key = `${c}::${act}`;
+    const avg = pace.avgByCourseActivity[key] ?? pace.globalAvgByActivity[act] ?? null;
+    return avg ? Math.round(avg) : null;
+  }
 
   useEffect(() => { setItems(loadBacklog()); }, []);
   useEffect(() => { saveBacklog(items); }, [items]);
@@ -157,7 +278,9 @@ export default function BacklogPage() {
     setQaError("");
     const parsed = parseQuickAdd(qaInput);
     if (!parsed) { setQaError("Could not parse. Use: COURSE: Title (24p) – due Fri"); return; }
-    const it: BacklogItem = { id: uid(), ...parsed };
+    let est = estimateFromHistory(parsed.course, parsed.title, parsed.pages ?? null, minutesPerPage());
+    if (!est && parsed.estimatedMinutes) est = parsed.estimatedMinutes;
+    const it: BacklogItem = { id: uid(), ...parsed, estimatedMinutes: est ?? parsed.estimatedMinutes ?? null };
     setItems((prev) => [it, ...prev]);
     setQaInput("");
   }
@@ -169,9 +292,13 @@ export default function BacklogPage() {
     if (!title || !course) return;
     const pages = form.pages ? Math.max(0, parseInt(form.pages, 10) || 0) : null;
     let est = form.estimatedMinutes ? Math.max(0, parseInt(form.estimatedMinutes, 10) || 0) : null;
-    if ((!est || est === 0) && pages && pages > 0) est = Math.round(pages * minutesPerPage());
+    if (!est) {
+      const hist = estimateFromHistory(course, title, pages, minutesPerPage());
+      if (hist) est = hist;
+      else if (pages && pages > 0) est = Math.round(pages * effectiveMppForCourse(course) + 10);
+    }
     const pri = form.priority ? Math.max(1, Math.min(5, parseInt(form.priority, 10) || 0)) : null;
-    const tags = form.tags.trim() ? form.tags.split(/[,\s]+/).map((t) => t.trim()).filter(Boolean) : null;
+    const tags = form.tags.trim() ? form.tags.split(/[\,\s]+/).map((t) => t.trim()).filter(Boolean) : null;
     const dueDate = form.dueDate ? form.dueDate : null;
     const it: BacklogItem = { id: uid(), title, course, dueDate, pages, estimatedMinutes: est, priority: pri, tags };
     setItems((prev) => [it, ...prev]);
@@ -275,7 +402,7 @@ export default function BacklogPage() {
                     <div className="text-xs text-slate-300/70">
                       {it.dueDate ? `Due ${new Date(it.dueDate).toLocaleDateString(undefined,{ weekday:'short', month:'short', day:'numeric' })}` : 'No due date'}
                       {typeof it.pages === 'number' && it.pages>0 ? ` · ${it.pages}p` : ''}
-                      {typeof it.estimatedMinutes === 'number' && it.estimatedMinutes>0 ? ` · ~${it.estimatedMinutes}m` : ''}
+                      {typeof it.estimatedMinutes === 'number' && it.estimatedMinutes>0 ? ` · ~${fmtHM(it.estimatedMinutes)}` : ''}
                       {typeof it.priority === 'number' ? ` · P${it.priority}` : ''}
                       {Array.isArray(it.tags) && it.tags.length ? ` · ${it.tags.join(', ')}` : ''}
                     </div>

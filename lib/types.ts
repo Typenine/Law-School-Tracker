@@ -43,6 +43,13 @@ export interface Course {
   semester?: Semester | null;
   year?: number | null;
   createdAt: string; // ISO
+  // Learned reading pace (minutes/page) derived from sessions (EMA)
+  learnedMpp?: number | null;
+  learnedSample?: number | null; // number of samples incorporated
+  learnedUpdatedAt?: string | null; // ISO timestamp
+  // Manual override
+  overrideEnabled?: boolean | null;
+  overrideMpp?: number | null;
 }
 
 export interface NewCourseInput {
@@ -79,6 +86,8 @@ export interface UpdateCourseInput {
   endDate?: string | null;
   semester?: Semester | null;
   year?: number | null;
+  overrideEnabled?: boolean | null;
+  overrideMpp?: number | null;
 }
 
 export interface CourseMeetingBlock {

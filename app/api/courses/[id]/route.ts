@@ -24,6 +24,8 @@ export async function PATCH(req: NextRequest, { params }: { params: { id: string
     endDate: z.string().trim().nullable().optional().transform(v => v === '' ? null : v),
     semester: z.enum(['Spring','Summer','Fall','Winter']).nullable().optional(),
     year: z.number().int().min(2000).max(2100).nullable().optional(),
+    overrideEnabled: z.boolean().nullable().optional(),
+    overrideMpp: z.number().nullable().optional(),
   });
   const parsed = schema.safeParse(await req.json());
   if (!parsed.success) return new Response('Invalid course patch', { status: 400 });

@@ -9,20 +9,22 @@ export default function HelpPage() {
       </section>
 
       <section className="card p-5 space-y-3">
-        <h3 className="text-lg font-medium">Backlog & CSV Import</h3>
+        <h3 className="text-lg font-medium">Inbox (Tasks) & CSV Import</h3>
         <ul className="list-disc list-inside space-y-1 text-sm">
-          <li><b>Backlog Quick Add</b>: Capture tasks fast with title, optional course, due date, and estimated minutes.</li>
+          <li><b>Inbox Quick Add</b>: On the <b>Tasks</b> page, use <b>Quick Add (Inbox)</b> to capture items in one line. Example: <i>T&amp;E: Read 599–622 (24p) – due Fri</i>. Estimation uses your historical pace with a fallback minutes/page from Settings.</li>
+          <li><b>Import Backlog</b>: If you used the legacy Backlog intake, click <b>Import Backlog</b> on the Tasks toolbar to migrate local items into Tasks (tagged <code>inbox</code>).</li>
           <li><b>CSV Import (sessions)</b>: Open <b>Settings → Import Data (CSV)</b> to import study sessions with mapping, preview, deduplication, and replace/append modes.</li>
         </ul>
-        <p className="text-xs text-slate-300/70">Tip: Minutes/page and per-course defaults can be set in Settings.</p>
+        <p className="text-xs text-slate-300/70">Tip: Minutes/page (fallback) and default focus can be set in Settings.</p>
       </section>
 
       <section className="card p-5 space-y-3">
         <h3 className="text-lg font-medium">Manage tasks</h3>
         <ul className="list-disc list-inside space-y-1 text-sm">
-          <li><b>Quick add</b>: Title, Course (optional), Due, and Est. minutes; press <b>Add Task</b>.</li>
+          <li><b>Quick Add (Inbox)</b>: Type <i>Course: Title (24p) – due Fri</i> and press <b>Add</b>. Due dates are date-only; time is normalized to end-of-day.</li>
           <li><b>Inline edit</b>: Click <b>Edit</b> to change title/course/due/estimate; <b>Save</b> when done.</li>
-          <li><b>Filters</b>: Filter by status and course substring.</li>
+          <li><b>Filters</b>: Filter by status, course substring, and tag. Use the <b>Inbox</b> button to toggle <code>tag=inbox</code>.</li>
+          <li><b>Bulk actions</b>: Select rows to reveal bulk actions (Mark done/todo, Delete, set Due date, set Course, Add/Remove tag, Change Priority, Clear Inbox tag).</li>
           <li><b>Mark done</b> or <b>Delete</b> from the Actions column.</li>
         </ul>
       </section>

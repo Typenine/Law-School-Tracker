@@ -2,6 +2,15 @@
 import { useEffect, useState } from 'react';
 import { StudySession, Task } from '@/lib/types';
 
+function fmtHM(min: number): string {
+  const n = Math.max(0, Math.round(Number(min) || 0));
+  const h = Math.floor(n / 60);
+  const m = n % 60;
+  if (h > 0 && m > 0) return `${h}h ${m}m`;
+  if (h > 0) return `${h}h`;
+  return `${m}m`;
+}
+
 export default function SessionLogger() {
   const [tasks, setTasks] = useState<Task[]>([]);
   const [minutes, setMinutes] = useState<number>(60);
@@ -82,7 +91,7 @@ export default function SessionLogger() {
         {sessions.slice(0, 5).map(s => (
           <div key={s.id} className="text-sm border-t border-[#1b2344] py-2">
             <div className="flex items-center justify-between">
-              <div>{new Date(s.when).toLocaleString()} • {s.minutes}m • Focus {s.focus ?? '-'}{s.taskId ? '' : ''}</div>
+              <div>{new Date(s.when).toLocaleString()} • {fmtHM(s.minutes)} • Focus {s.focus ?? '-'}{s.taskId ? '' : ''}</div>
               <div className="text-slate-300/70">{s.notes}</div>
             </div>
           </div>

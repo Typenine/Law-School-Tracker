@@ -10,6 +10,14 @@ function chicagoYmd(d: Date): string {
   const da = parts.find(p=>p.type==='day')?.value || '01';
   return `${y}-${m}-${da}`;
 }
+function fmtHM(min: number): string {
+  const n = Math.max(0, Math.round(Number(min) || 0));
+  const h = Math.floor(n / 60);
+  const m = n % 60;
+  if (h > 0 && m > 0) return `${h}h ${m}m`;
+  if (h > 0) return `${h}h`;
+  return `${m}m`;
+}
 function extractCourseFromNotes(notes?: string | null): string {
   if (!notes) return '';
   const m = notes.match(/^\s*\[([^\]]+)\]/);
@@ -37,6 +45,7 @@ export default function LogPage() {
   const [courseContains, setCourseContains] = useState<string>("");
   const [activity, setActivity] = useState<string>("all");
   const [minFocus, setMinFocus] = useState<string>("");
+  const [sortBy, setSortBy] = useState<string>("date_desc");
 
   async function refresh() {
     setLoading(true);
@@ -89,7 +98,7 @@ export default function LogPage() {
 
   const filtered = useMemo(() => {
     const minF = minFocus ? Math.max(1, Math.min(10, parseInt(minFocus, 10)||0)) : null;
-    return rows.filter(r => {
+    const arr = rows.filter(r => {
       if (from && r.ymd < from) return false;
       if (to && r.ymd > to) return false;
       if (courseContains && !(r.course||'').toLowerCase().includes(courseContains.toLowerCase())) return false;
@@ -97,7 +106,16 @@ export default function LogPage() {
       if (minF && (r.focus ?? 0) < minF) return false;
       return true;
     });
-  }, [rows, from, to, courseContains, activity, minFocus]);
+    const s = sortBy;
+    arr.sort((a, b) => {
+      if (s === 'date_asc') return a.when.localeCompare(b.when);
+      if (s === 'course_asc') return (a.course || '').localeCompare(b.course || '') || b.when.localeCompare(a.when);
+      if (s === 'course_desc') return (b.course || '').localeCompare(a.course || '') || b.when.localeCompare(a.when);
+      // default date_desc
+      return b.when.localeCompare(a.when);
+    });
+    return arr;
+  }, [rows, from, to, courseContains, activity, minFocus, sortBy]);
 
   const totalMinutes = useMemo(() => filtered.reduce((s,r)=>s+(r.minutes||0), 0), [filtered]);
 
@@ -159,7 +177,7 @@ export default function LogPage() {
           </div>
         </div>
 
-        <div className="grid grid-cols-1 md:grid-cols-5 gap-2">
+        <div className="grid grid-cols-1 md:grid-cols-6 gap-2">
           <div>
             <label className="block text-xs text-slate-300/70" htmlFor="f-from">From</label>
             <input id="f-from" type="date" value={from} onChange={e=>setFrom(e.target.value)} className="w-full bg-[#0b1020] border border-[#1b2344] rounded px-3 py-2 text-sm" />
@@ -188,10 +206,19 @@ export default function LogPage() {
             <label className="block text-xs text-slate-300/70" htmlFor="f-minfocus">Min Focus</label>
             <input id="f-minfocus" type="number" min={1} max={10} value={minFocus} onChange={e=>setMinFocus(e.target.value)} className="w-full bg-[#0b1020] border border-[#1b2344] rounded px-3 py-2 text-sm" />
           </div>
+          <div>
+            <label className="block text-xs text-slate-300/70" htmlFor="f-sort">Sort by</label>
+            <select id="f-sort" value={sortBy} onChange={e=>setSortBy(e.target.value)} className="w-full bg-[#0b1020] border border-[#1b2344] rounded px-3 py-2 text-sm">
+              <option value="date_desc">Date (newest)</option>
+              <option value="date_asc">Date (oldest)</option>
+              <option value="course_asc">Course (A→Z)</option>
+              <option value="course_desc">Course (Z→A)</option>
+            </select>
+          </div>
         </div>
 
         <div className="flex items-center justify-between">
-          <div className="text-xs text-slate-300/70">{filtered.length} sessions · {Math.round(totalMinutes/60)}h {totalMinutes%60 ? `${totalMinutes%60}m` : ''}</div>
+          <div className="text-xs text-slate-300/70">{filtered.length} sessions · {fmtHM(totalMinutes)}</div>
         </div>
 
         <div className="overflow-x-auto">
@@ -201,7 +228,7 @@ export default function LogPage() {
                 <th className="py-1 pr-2">When</th>
                 <th className="py-1 pr-2">Course</th>
                 <th className="py-1 pr-2">Activity</th>
-                <th className="py-1 pr-2">Minutes</th>
+                <th className="py-1 pr-2">Duration</th>
                 <th className="py-1 pr-2">Focus</th>
                 <th className="py-1 pr-2">Notes</th>
               </tr>
@@ -217,7 +244,7 @@ export default function LogPage() {
                     <td className="py-1 pr-2 whitespace-nowrap">{new Date(r.when).toLocaleString()}</td>
                     <td className="py-1 pr-2">{r.course || '—'}</td>
                     <td className="py-1 pr-2">{r.activity}</td>
-                    <td className="py-1 pr-2">{r.minutes}</td>
+                    <td className="py-1 pr-2">{fmtHM(r.minutes)}</td>
                     <td className="py-1 pr-2">{r.focus ?? '—'}</td>
                     <td className="py-1 pr-2 max-w-[360px]"><span className="truncate inline-block max-w-[340px] align-bottom">{r.notes || '—'}</span></td>
                   </tr>

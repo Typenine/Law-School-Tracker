@@ -53,9 +53,10 @@ export async function listCourses(): Promise<Course[]> {
       type Row = {
         id: string; code: string | null; title: string; instructor: string | null; instructor_email: string | null; room: string | null; location: string | null;
         color: string | null; meeting_days: number[] | null; meeting_start: string | null; meeting_end: string | null; meeting_blocks: any | null;
-        start_date: Date | string | null; end_date: Date | string | null; semester: string | null; year: number | null; created_at: Date | string
+        start_date: Date | string | null; end_date: Date | string | null; semester: string | null; year: number | null; created_at: Date | string;
+        learned_mpp: number | null; learned_sample: number | null; learned_updated_at: Date | string | null; override_enabled: boolean | null; override_mpp: number | null
       };
-      const res = await p.query(`SELECT id, code, title, instructor, instructor_email, room, location, color, meeting_days, meeting_start, meeting_end, meeting_blocks, start_date, end_date, semester, year, created_at FROM courses ORDER BY title`);
+      const res = await p.query(`SELECT id, code, title, instructor, instructor_email, room, location, color, meeting_days, meeting_start, meeting_end, meeting_blocks, start_date, end_date, semester, year, created_at, learned_mpp, learned_sample, learned_updated_at, override_enabled, override_mpp FROM courses ORDER BY title`);
       const rows = res.rows as Row[];
       return rows.map(r => ({
         id: r.id,
@@ -75,6 +76,11 @@ export async function listCourses(): Promise<Course[]> {
         semester: (r.semester as any) ?? null,
         year: r.year ?? null,
         createdAt: new Date(r.created_at as any).toISOString(),
+        learnedMpp: r.learned_mpp ?? null,
+        learnedSample: r.learned_sample ?? null,
+        learnedUpdatedAt: r.learned_updated_at ? new Date(r.learned_updated_at as any).toISOString() : null,
+        overrideEnabled: (r.override_enabled as any) ?? null,
+        overrideMpp: r.override_mpp ?? null,
       }));
     } catch (e) {
       // DB is configured; do not fall back to JSON to avoid split brain
@@ -166,18 +172,20 @@ export async function updateCourse(id: string, patch: UpdateCourseInput): Promis
       if (patch.endDate !== undefined) push('end_date', patch.endDate ? new Date(patch.endDate) : null, 'date');
       if (patch.semester !== undefined) push('semester', patch.semester);
       if (patch.year !== undefined) push('year', (typeof patch.year === 'number' ? patch.year : (patch.year as any) ?? null), 'int');
+      if ((patch as any).overrideEnabled !== undefined) push('override_enabled', (patch as any).overrideEnabled);
+      if ((patch as any).overrideMpp !== undefined) push('override_mpp', (patch as any).overrideMpp);
       if (!fields.length) {
-        const cur = await p.query(`SELECT id, code, title, instructor, instructor_email, room, location, color, meeting_days, meeting_start, meeting_end, meeting_blocks, start_date, end_date, semester, year, created_at FROM courses WHERE id=$1`, [id]);
+        const cur = await p.query(`SELECT id, code, title, instructor, instructor_email, room, location, color, meeting_days, meeting_start, meeting_end, meeting_blocks, start_date, end_date, semester, year, created_at, learned_mpp, learned_sample, learned_updated_at, override_enabled, override_mpp FROM courses WHERE id=$1`, [id]);
         if (!cur.rowCount) return null;
         const r = cur.rows[0];
-        return { id: r.id, code: r.code, title: r.title, instructor: r.instructor, instructorEmail: r.instructor_email, room: r.room, location: r.location, color: r.color ?? null, meetingDays: r.meeting_days ?? null, meetingStart: r.meeting_start, meetingEnd: r.meeting_end, meetingBlocks: r.meeting_blocks ?? null, startDate: r.start_date ? new Date(r.start_date).toISOString() : null, endDate: r.end_date ? new Date(r.end_date).toISOString() : null, semester: r.semester ?? null, year: r.year ?? null, createdAt: new Date(r.created_at).toISOString() };
+        return { id: r.id, code: r.code, title: r.title, instructor: r.instructor, instructorEmail: r.instructor_email, room: r.room, location: r.location, color: r.color ?? null, meetingDays: r.meeting_days ?? null, meetingStart: r.meeting_start, meetingEnd: r.meeting_end, meetingBlocks: r.meeting_blocks ?? null, startDate: r.start_date ? new Date(r.start_date).toISOString() : null, endDate: r.end_date ? new Date(r.end_date).toISOString() : null, semester: r.semester ?? null, year: r.year ?? null, createdAt: new Date(r.created_at).toISOString(), learnedMpp: r.learned_mpp ?? null, learnedSample: r.learned_sample ?? null, learnedUpdatedAt: r.learned_updated_at ? new Date(r.learned_updated_at).toISOString() : null, overrideEnabled: r.override_enabled ?? null, overrideMpp: r.override_mpp ?? null };
       }
-      const q = `UPDATE courses SET ${fields.join(', ')} WHERE id = $${idx} RETURNING id, code, title, instructor, instructor_email, room, location, color, meeting_days, meeting_start, meeting_end, meeting_blocks, start_date, end_date, semester, year, created_at`;
+      const q = `UPDATE courses SET ${fields.join(', ')} WHERE id = $${idx} RETURNING id, code, title, instructor, instructor_email, room, location, color, meeting_days, meeting_start, meeting_end, meeting_blocks, start_date, end_date, semester, year, created_at, learned_mpp, learned_sample, learned_updated_at, override_enabled, override_mpp`;
       values.push(id);
       const res = await p.query(q, values);
       if (!res.rowCount) return null;
       const r = res.rows[0];
-      return { id: r.id, code: r.code, title: r.title, instructor: r.instructor, instructorEmail: r.instructor_email, room: r.room, location: r.location, color: r.color ?? null, meetingDays: r.meeting_days ?? null, meetingStart: r.meeting_start, meetingEnd: r.meeting_end, meetingBlocks: r.meeting_blocks ?? null, startDate: r.start_date ? new Date(r.start_date).toISOString() : null, endDate: r.end_date ? new Date(r.end_date).toISOString() : null, semester: r.semester ?? null, year: r.year ?? null, createdAt: new Date(r.created_at).toISOString() };
+      return { id: r.id, code: r.code, title: r.title, instructor: r.instructor, instructorEmail: r.instructor_email, room: r.room, location: r.location, color: r.color ?? null, meetingDays: r.meeting_days ?? null, meetingStart: r.meeting_start, meetingEnd: r.meeting_end, meetingBlocks: r.meeting_blocks ?? null, startDate: r.start_date ? new Date(r.start_date).toISOString() : null, endDate: r.end_date ? new Date(r.end_date).toISOString() : null, semester: r.semester ?? null, year: r.year ?? null, createdAt: new Date(r.created_at).toISOString(), learnedMpp: r.learned_mpp ?? null, learnedSample: r.learned_sample ?? null, learnedUpdatedAt: r.learned_updated_at ? new Date(r.learned_updated_at).toISOString() : null, overrideEnabled: r.override_enabled ?? null, overrideMpp: r.override_mpp ?? null };
     } catch (e) {
       // DB is configured; do not fall back to JSON to avoid split brain
       throw e;
@@ -257,6 +265,75 @@ export async function migrateCoursesToDbIfEmpty() {
   }
 }
 
+function clamp(n: number, lo: number, hi: number) { return Math.max(lo, Math.min(hi, n)); }
+function baselineMpp(): number { return 2.0; }
+function zscoreTrim(values: number[]): number[] {
+  if (values.length === 0) return values;
+  const mean = values.reduce((a,b)=>a+b,0)/values.length;
+  const variance = values.reduce((a,b)=>a + Math.pow(b-mean,2),0) / values.length;
+  const sd = Math.sqrt(variance);
+  if (!isFinite(sd) || sd === 0) return values;
+  return values.filter(v => Math.abs(v - mean) <= 2 * sd);
+}
+
+async function recomputeLearnedMppForCourse(courseTitle: string): Promise<void> {
+  if (!courseTitle) return;
+  const alpha = 0.3;
+  if (DB_URL) {
+    const p = getPool();
+    // Gather session mpp for this course
+    const q = `
+      SELECT s.minutes, s.pages_read, s.when_ts
+      FROM sessions s
+      JOIN tasks t ON t.id = s.task_id
+      WHERE t.course = $1 AND s.pages_read IS NOT NULL AND s.minutes IS NOT NULL
+      ORDER BY s.when_ts ASC
+    `;
+    const res = await p.query(q, [courseTitle]);
+    const raw: Array<{minutes: number|null; pages_read: number|null; when_ts: Date|string}> = res.rows as any;
+    let mpps = raw
+      .filter(r => typeof r.minutes === 'number' && typeof r.pages_read === 'number')
+      .map(r => ({ mpp: (r.minutes as number) / Math.max(1, r.pages_read as number), minutes: r.minutes as number, pages: r.pages_read as number }))
+      .filter(x => x.minutes >= 5 && x.minutes <= 240 && x.pages >= 2 && x.pages <= 150)
+      .map(x => x.mpp);
+    mpps = zscoreTrim(mpps);
+    const sample = mpps.length;
+    let learned: number | null = null;
+    if (sample > 0) {
+      let ema = baselineMpp();
+      for (const v of mpps) ema = alpha * v + (1 - alpha) * ema;
+      learned = clamp(ema, 0.5, 6.0);
+    }
+    await p.query(`UPDATE courses SET learned_mpp = $1, learned_sample = $2, learned_updated_at = now() WHERE title = $3`, [learned, sample || null, courseTitle]);
+    return;
+  }
+  // JSON/Blob mode
+  const db = await readJson();
+  const tasks = db.tasks.filter(t => (t.course || '') === courseTitle);
+  const taskIds = new Set(tasks.map(t => t.id));
+  let mpps = db.sessions
+    .filter(s => s.taskId && taskIds.has(s.taskId) && typeof s.minutes === 'number' && typeof s.pagesRead === 'number')
+    .sort((a,b) => a.when.localeCompare(b.when))
+    .map(s => ({ mpp: (s.minutes as number) / Math.max(1, s.pagesRead as number), minutes: s.minutes as number, pages: s.pagesRead as number }))
+    .filter(x => x.minutes >= 5 && x.minutes <= 240 && x.pages >= 2 && x.pages <= 150)
+    .map(x => x.mpp);
+  mpps = zscoreTrim(mpps);
+  const sample = mpps.length;
+  let learned: number | null = null;
+  if (sample > 0) {
+    let ema = baselineMpp();
+    for (const v of mpps) ema = alpha * v + (1 - alpha) * ema;
+    learned = clamp(ema, 0.5, 6.0);
+  }
+  const i = db.courses.findIndex(c => (c.title || '') === courseTitle);
+  if (i !== -1) {
+    (db.courses[i] as any).learnedMpp = learned;
+    (db.courses[i] as any).learnedSample = sample || null;
+    (db.courses[i] as any).learnedUpdatedAt = new Date().toISOString();
+    await writeJson(db);
+  }
+}
+
 export async function ensureSchema() {
   if (!DB_URL) return; // JSON mode doesn't need schema
   try {
@@ -305,6 +382,11 @@ export async function ensureSchema() {
       );
       ALTER TABLE courses ADD COLUMN IF NOT EXISTS meeting_blocks jsonb;
       ALTER TABLE courses ADD COLUMN IF NOT EXISTS color text;
+      ALTER TABLE courses ADD COLUMN IF NOT EXISTS learned_mpp double precision;
+      ALTER TABLE courses ADD COLUMN IF NOT EXISTS learned_sample integer;
+      ALTER TABLE courses ADD COLUMN IF NOT EXISTS learned_updated_at timestamptz;
+      ALTER TABLE courses ADD COLUMN IF NOT EXISTS override_enabled boolean;
+      ALTER TABLE courses ADD COLUMN IF NOT EXISTS override_mpp double precision;
       CREATE TABLE IF NOT EXISTS sessions (
         id uuid PRIMARY KEY,
         task_id uuid REFERENCES tasks(id) ON DELETE SET NULL,
@@ -593,11 +675,49 @@ export async function createSession(input: NewSessionInput): Promise<StudySessio
       [id, input.taskId ?? null, new Date(whenISO), input.minutes, input.focus ?? null, input.notes ?? null, input.pagesRead ?? null, input.outlinePages ?? null, input.practiceQs ?? null, input.activity ?? null, new Date(now)]
     );
     const r = res.rows[0];
-    return { id: r.id, taskId: r.task_id, when: new Date(r.when_ts).toISOString(), minutes: r.minutes, focus: r.focus, notes: r.notes, pagesRead: r.pages_read, outlinePages: r.outline_pages, practiceQs: r.practice_qs, activity: r.activity, createdAt: new Date(r.created_at).toISOString() };
+    const created: StudySession = { id: r.id, taskId: r.task_id, when: new Date(r.when_ts).toISOString(), minutes: r.minutes, focus: r.focus, notes: r.notes, pagesRead: r.pages_read, outlinePages: r.outline_pages, practiceQs: r.practice_qs, activity: r.activity, createdAt: new Date(r.created_at).toISOString() };
+    try {
+      if (input.taskId) {
+        const tc = await p.query(`SELECT course FROM tasks WHERE id=$1`, [input.taskId]);
+        const courseTitle = tc.rows?.[0]?.course as string | null;
+        if (courseTitle) await recomputeLearnedMppForCourse(courseTitle);
+      }
+    } catch {}
+    return created;
   }
   const db = await readJson();
   const s: StudySession = { id: uuid(), taskId: input.taskId ?? null, when: whenISO, minutes: input.minutes, focus: input.focus ?? null, notes: input.notes ?? null, pagesRead: input.pagesRead ?? null, outlinePages: input.outlinePages ?? null, practiceQs: input.practiceQs ?? null, activity: input.activity ?? null, createdAt: now };
   db.sessions.unshift(s);
+  // Recompute learned MPP for the affected course (if any)
+  try {
+    const courseTitle = s.taskId ? (db.tasks.find(t => t.id === s.taskId)?.course || null) : null;
+    if (courseTitle) {
+      // Update on the in-memory db and persist
+      const tasks = db.tasks.filter(t => (t.course || '') === courseTitle);
+      const taskIds = new Set(tasks.map(t => t.id));
+      let mpps = db.sessions
+        .filter(ss => ss.taskId && taskIds.has(ss.taskId) && typeof ss.minutes === 'number' && typeof ss.pagesRead === 'number')
+        .sort((a,b) => a.when.localeCompare(b.when))
+        .map(ss => ({ mpp: (ss.minutes as number) / Math.max(1, ss.pagesRead as number), minutes: ss.minutes as number, pages: ss.pagesRead as number }))
+        .filter(x => x.minutes >= 5 && x.minutes <= 240 && x.pages >= 2 && x.pages <= 150)
+        .map(x => x.mpp);
+      mpps = zscoreTrim(mpps);
+      const sample = mpps.length;
+      let learned: number | null = null;
+      if (sample > 0) {
+        const alpha = 0.3;
+        let ema = baselineMpp();
+        for (const v of mpps) ema = alpha * v + (1 - alpha) * ema;
+        learned = clamp(ema, 0.5, 6.0);
+      }
+      const i = db.courses.findIndex(c => (c.title || '') === courseTitle);
+      if (i !== -1) {
+        (db.courses[i] as any).learnedMpp = learned;
+        (db.courses[i] as any).learnedSample = sample || null;
+        (db.courses[i] as any).learnedUpdatedAt = new Date().toISOString();
+      }
+    }
+  } catch {}
   await writeJson(db);
   return s;
 }

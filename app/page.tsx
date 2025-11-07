@@ -1,4 +1,4 @@
-﻿"use client";
+"use client";
 import { useEffect, useMemo, useRef, useState } from "react";
 
 type BacklogItem = {
@@ -36,6 +36,12 @@ const LS_TODAY = "todayPlanV1";
 const LS_GOALS = "weeklyGoalsV1";
 
 function minutesPerPage(): number { if (typeof window==='undefined') return 3; const s=window.localStorage.getItem('minutesPerPage'); const n=s?parseFloat(s):NaN; return !isNaN(n)&&n>0?n:3; }
+
+function ymdAddDays(ymd: string, delta: number): string {
+  const [y,m,d] = ymd.split('-').map(x=>parseInt(x,10));
+  const dt = new Date(y,(m as number)-1,d); dt.setDate(dt.getDate()+delta);
+  return `${dt.getFullYear()}-${String(dt.getMonth()+1).padStart(2,'0')}-${String(dt.getDate()).padStart(2,'0')}`;
+}
 function estimateMinutes(it: BacklogItem): { minutes: number; guessed: boolean } {
   if (typeof it.estimatedMinutes==='number' && it.estimatedMinutes>0) return { minutes: it.estimatedMinutes, guessed:false };
   if (typeof it.pages==='number' && it.pages>0) return { minutes: Math.round(it.pages * minutesPerPage()), guessed:false };
@@ -53,6 +59,19 @@ function chicagoYmd(d: Date): string {
 function mondayOfChicago(d: Date): Date { const ymd = chicagoYmd(d); const [yy,mm,dd]=ymd.split('-').map(x=>parseInt(x,10)); const local = new Date(yy,(mm as number)-1,dd); const dow = local.getDay(); const delta = (dow + 6) % 7; local.setDate(local.getDate()-delta); return local; }
 function weekKeysChicago(d: Date): string[] { const monday = mondayOfChicago(d); return Array.from({length:7},(_,i)=>{const x=new Date(monday); x.setDate(x.getDate()+i); return chicagoYmd(x);}); }
 function minutesStr(mins: number): string { const h=Math.floor(mins/60), m=mins%60; return `${h>0?`${h}h `:''}${m}m`.trim(); }
+
+function chicagoHour(d: Date) {
+  const parts = new Intl.DateTimeFormat('en-US', { timeZone: 'America/Chicago', hour: '2-digit', hour12: false }).formatToParts(d);
+  const h = parseInt(parts.find(p => p.type === 'hour')?.value || '0', 10);
+  return isNaN(h) ? 0 : h;
+}
+function fmtHourRange2(startHour: number) {
+  const end = (startHour + 2) % 24;
+  const to12 = (h: number) => { const ap = h >= 12 ? 'pm' : 'am'; const h12 = ((h + 11) % 12) + 1; return { h12, ap }; };
+  const a = to12(startHour), b = to12(end);
+  if (a.ap === b.ap) return `${a.h12}–${b.h12}${a.ap}`;
+  return `${a.h12}${a.ap}–${b.h12}${b.ap}`;
+}
 
 function loadGoals(): WeeklyGoal[] { if (typeof window==='undefined') return []; try { const raw=window.localStorage.getItem(LS_GOALS); const arr=raw?JSON.parse(raw):[]; return Array.isArray(arr)?arr:[]; } catch { return []; } }
 function saveGoals(goals: WeeklyGoal[]) { if (typeof window!=='undefined') window.localStorage.setItem(LS_GOALS, JSON.stringify(goals)); }
@@ -189,21 +208,30 @@ export default function TodayPage() {
     return { label: delta>=0? 'On pace' : 'Behind', delta } as const;
   }, [sessions, schedule, weekKeys]);
 
+  // Availability & capacity
+  const availabilityByDow = useMemo(() => (typeof window!=='undefined' ? (JSON.parse(window.localStorage.getItem(LS_AVAIL)||'{}')||{}) : {}) as Record<number,number>, [plan.items]);
+  const todayDow = useMemo(() => { const [y,m,da] = dateKey.split('-').map(x=>parseInt(x,10)); return new Date(y,(m as number)-1,da).getDay(); }, [dateKey]);
+  const todayCapacity = useMemo(() => Math.max(0, Number(availabilityByDow[todayDow]||0)), [availabilityByDow, todayDow]);
+  const remainingTodayCapacity = useMemo(() => Math.max(0, todayCapacity - plannedToday), [todayCapacity, plannedToday]);
+
   const workdaysLeft = useMemo(() => {
-    const avail = (typeof window!=='undefined' ? (JSON.parse(window.localStorage.getItem(LS_AVAIL)||'{}')||{}) : {}) as Record<number,number>;
+    // Include today only if remaining capacity > 0; future days if availability > 0
     const keys = weekKeys;
     const todayIdx = keys.indexOf(dateKey);
-    const left = keys.slice(Math.max(0,todayIdx+1)).filter(k => {
-      const [y,m,da] = k.split('-').map(x=>parseInt(x,10)); const d = new Date(y,(m as number)-1,da); return (avail[d.getDay()]||0) > 0;
+    const future = keys.slice(Math.max(0,todayIdx+1)).filter(k => {
+      const [y,m,da] = k.split('-').map(x=>parseInt(x,10)); const d = new Date(y,(m as number)-1,da); return (availabilityByDow[d.getDay()]||0) > 0;
     }).length;
-    return left;
-  }, [dateKey, weekKeys]);
+    const includeToday = remainingTodayCapacity > 0 ? 1 : 0;
+    return includeToday + future;
+  }, [dateKey, weekKeys, availabilityByDow, remainingTodayCapacity]);
 
   const globalGoalMinutes = useMemo(() => (goals.find(g => g.scope==='global')?.weeklyMinutes || 0), [goals]);
   const loggedToDate = useMemo(() => {
     const todayIdx = weekKeys.indexOf(dateKey);
     return (sessions||[]).filter((s:any) => { const k = chicagoYmd(new Date(s.when)); const i = weekKeys.indexOf(k); return i !== -1 && i <= todayIdx; }).reduce((sum:number, s:any)=>sum+(s.minutes||0),0);
   }, [sessions, weekKeys, dateKey]);
+  const weeklyNeeded = useMemo(() => Math.max(0, globalGoalMinutes - loggedToDate), [globalGoalMinutes, loggedToDate]);
+  const dailyQuota = useMemo(() => Math.ceil(weeklyNeeded / Math.max(workdaysLeft, 1)), [weeklyNeeded, workdaysLeft]);
   const hoursPerDayNeeded = useMemo(() => {
     if (globalGoalMinutes <= 0) return 0;
     const remaining = Math.max(0, globalGoalMinutes - loggedToDate);
@@ -214,6 +242,144 @@ export default function TodayPage() {
     if (globalGoalMinutes <= 0) return 0;
     return Math.min(1, loggedWeek / globalGoalMinutes);
   }, [loggedWeek, globalGoalMinutes]);
+
+  // Focus Insights (rolling averages and best window)
+  const startYMD30 = useMemo(() => {
+    const today = new Date();
+    const ymdToday = chicagoYmd(today);
+    const parts = ymdToday.split('-').map(v => parseInt(v, 10));
+    const d0 = new Date(parts[0], (parts[1] as number)-1, parts[2]);
+    const start = new Date(d0); start.setDate(start.getDate() - 29);
+    return chicagoYmd(start);
+  }, []);
+  function avgFocusSince(days: number) {
+    const cutoff = Date.now() - days * 24 * 60 * 60 * 1000;
+    const vals: number[] = [];
+    for (const s of (sessions||[])) {
+      if (s?.focus == null) continue;
+      const ts = new Date(s.when).getTime();
+      if (ts >= cutoff) vals.push(s.focus);
+    }
+    if (vals.length === 0) return 0;
+    return vals.reduce((a, b) => a + b, 0) / vals.length;
+  }
+  const focus7 = useMemo(() => avgFocusSince(7), [sessions]);
+  const focus14 = useMemo(() => avgFocusSince(14), [sessions]);
+  const focus30 = useMemo(() => avgFocusSince(30), [sessions]);
+  const bestWindow = useMemo(() => {
+    const hour = Array.from({ length: 24 }, () => ({ sum: 0, count: 0 }));
+    for (const s of (sessions||[])) {
+      if (s?.focus == null) continue;
+      const ymd = chicagoYmd(new Date(s.when));
+      if (ymd < startYMD30) continue;
+      const h = chicagoHour(new Date(s.when));
+      hour[h].sum += s.focus;
+      hour[h].count += 1;
+    }
+    let best: { start: number; avg: number; n: number } | null = null;
+    for (let h = 0; h < 24; h++) {
+      const h2 = (h + 1) % 24;
+      const sum = hour[h].sum + hour[h2].sum;
+      const n = hour[h].count + hour[h2].count;
+      if (n >= 3) {
+        const avg = sum / Math.max(n, 1);
+        if (!best || avg > best.avg) best = { start: h, avg, n };
+      }
+    }
+    return best;
+  }, [sessions, startYMD30]);
+  const slump = useMemo(() => {
+    let n30 = 0;
+    for (const s of (sessions||[])) {
+      if (s?.focus == null) continue;
+      const ymd = chicagoYmd(new Date(s.when));
+      if (ymd >= startYMD30) n30 += 1;
+    }
+    const falling = focus14 < (focus30 - 1.0);
+    return { isSlump: falling && n30 >= 10, n30 };
+  }, [sessions, focus14, focus30, startYMD30]);
+
+  // Streaks (Chicago local dates)
+  const activeDaysSet = useMemo(() => {
+    const set = new Set<string>();
+    for (const s of (sessions||[])) {
+      const ymd = chicagoYmd(new Date(s.when));
+      const mins = Math.max(0, Number(s.minutes)||0);
+      if (mins > 0) set.add(ymd);
+    }
+    return set;
+  }, [sessions]);
+  const streakDays = useMemo(() => {
+    const today = chicagoYmd(new Date());
+    let cnt = 0; let cur = today;
+    while (activeDaysSet.has(cur)) { cnt += 1; cur = ymdAddDays(cur, -1); }
+    return cnt;
+  }, [activeDaysSet]);
+  const longestStreak = useMemo(() => {
+    // Sort unique active days and scan
+    const days = Array.from(activeDaysSet).sort();
+    if (days.length === 0) return 0;
+    let best = 1, cur = 1;
+    for (let i=1;i<days.length;i++) {
+      const prev = days[i-1]; const next = days[i];
+      const adj = ymdAddDays(prev, 1);
+      if (adj === next) { cur += 1; } else { best = Math.max(best, cur); cur = 1; }
+    }
+    best = Math.max(best, cur);
+    return best;
+  }, [activeDaysSet]);
+
+  // Gentle Nudges (in-app banner only)
+  const [showNudge, setShowNudge] = useState(false);
+  useEffect(() => {
+    const t = setInterval(() => {
+      try {
+        if (typeof window === 'undefined') return;
+        const enabled = (window.localStorage.getItem('nudgesEnabled')||'false')==='true';
+        if (!enabled) { setShowNudge(false); return; }
+        const reminder = window.localStorage.getItem('nudgesReminderTime') || '20:00';
+        const quietS = window.localStorage.getItem('nudgesQuietStart') || '22:00';
+        const quietE = window.localStorage.getItem('nudgesQuietEnd') || '07:00';
+        const maxPerWeek = Math.max(0, parseInt(window.localStorage.getItem('nudgesMaxPerWeek')||'3',10)||3);
+        // Chicago now
+        const now = new Date();
+        const hhParts = new Intl.DateTimeFormat('en-US', { timeZone:'America/Chicago', hour:'2-digit', minute:'2-digit', hour12:false }).formatToParts(now);
+        const HH = parseInt(hhParts.find(p=>p.type==='hour')?.value||'0',10);
+        const MM = parseInt(hhParts.find(p=>p.type==='minute')?.value||'0',10);
+        const hhmm = `${String(HH).padStart(2,'0')}:${String(MM).padStart(2,'0')}`;
+        const todayY = chicagoYmd(now);
+        // today's minutes
+        const minsToday = (sessions||[]).filter(s=>chicagoYmd(new Date(s.when))===todayY).reduce((s,a)=>s+(a.minutes||0),0);
+        if (minsToday > 0) { setShowNudge(false); return; }
+        // not in quiet hours
+        function toMin(s:string){ const [h,m]=s.split(':').map(x=>parseInt(x,10)); return (h*60 + m + 1440) % 1440; }
+        const curMin = toMin(hhmm), qs = toMin(quietS), qe = toMin(quietE);
+        const inQuiet = qs <= qe ? (curMin>=qs && curMin<qe) : (curMin>=qs || curMin<qe);
+        if (inQuiet) { setShowNudge(false); return; }
+        // after reminder time
+        const remMin = toMin(reminder);
+        if (curMin < remMin) { setShowNudge(false); return; }
+        // limit per week
+        const monday = mondayOfChicago(now); const wk = chicagoYmd(monday);
+        const storedWk = window.localStorage.getItem('nudgesWeekKey') || '';
+        let cnt = parseInt(window.localStorage.getItem('nudgesWeekCount')||'0',10)||0;
+        if (storedWk !== wk) { cnt = 0; window.localStorage.setItem('nudgesWeekKey', wk); window.localStorage.setItem('nudgesWeekCount','0'); }
+        if (cnt >= maxPerWeek) { setShowNudge(false); return; }
+        // once per day
+        const lastY = window.localStorage.getItem('nudgesLastShownYMD') || '';
+        const dismissedY = window.localStorage.getItem('nudgesDismissedYMD') || '';
+        if (lastY === todayY || dismissedY === todayY) { setShowNudge(false); return; }
+        // show
+        setShowNudge(true);
+        window.localStorage.setItem('nudgesLastShownYMD', todayY);
+        window.localStorage.setItem('nudgesWeekKey', wk);
+        window.localStorage.setItem('nudgesWeekCount', String(cnt+1));
+      } catch {}
+    }, 30000);
+    // run once quickly
+    setTimeout(() => { try { /* call same logic */ } catch {} }, 0);
+    return () => clearInterval(t);
+  }, [sessions]);
 
   function setGlobalGoalHours(h: number) {
     const mins = Math.max(0, Math.round(h * 60));
@@ -268,9 +434,9 @@ export default function TodayPage() {
                     </ul>
                   )}
                 </div>
-                {/* Suggestions from backlog */}
+                {/* Suggestions from inbox */}
                 <div>
-                  <div className="text-xs text-slate-300/70 mb-1">Add 1–2 from Backlog</div>
+                  <div className="text-xs text-slate-300/70 mb-1">Add 1–2 from Inbox</div>
                   <ul className="text-sm space-y-1">
                     {backlogSorted.slice(0,5).map(it => (
                       <li key={it.id} className="flex items-center justify-between">
@@ -355,7 +521,7 @@ export default function TodayPage() {
           <div className="rounded border border-[#1b2344] p-4 min-h-[140px]">
             <h3 className="text-sm font-medium mb-2">Today’s Plan</h3>
             {plan.items.length===0 ? (
-              <div className="text-xs text-slate-300/80">No items in plan yet. Press <button onClick={()=>setStep(1)} className="underline focus-visible:outline focus-visible:outline-2 focus-visible:outline-blue-500">Plan Today</button> or add tasks in <a href="/backlog" className="underline focus-visible:outline focus-visible:outline-2 focus-visible:outline-blue-500">Backlog</a>.</div>
+              <div className="text-xs text-slate-300/80">No items in plan yet. Press <button onClick={()=>setStep(1)} className="underline focus-visible:outline focus-visible:outline-2 focus-visible:outline-blue-500">Plan Today</button> or add tasks in <a href="/tasks?tag=inbox" className="underline focus-visible:outline focus-visible:outline-2 focus-visible:outline-blue-500">Inbox</a>.</div>
             ) : (
               <ul className="space-y-1 text-sm">
                 {plan.items.map((it, i) => (
@@ -394,8 +560,34 @@ export default function TodayPage() {
             <div className="text-2xl font-semibold text-slate-100 mt-2">{weekOnPace.label}{weekOnPace.delta!==0 ? ` ${weekOnPace.delta>0?'+':''}${minutesStr(Math.abs(weekOnPace.delta))}`:''}</div>
           </div>
           <div className="rounded border border-[#1b2344] p-4">
-            <div className="text-xs uppercase tracking-wide text-slate-300/60">Workdays Left</div>
-            <div className="text-2xl font-semibold text-slate-100 mt-2">{workdaysLeft}</div>
+            <div className="text-xs uppercase tracking-wide text-slate-300/60">Weekly Quota</div>
+            <div className="text-sm text-slate-300/80 mt-2">Workdays Left: <span className="text-slate-100 font-semibold">{workdaysLeft}</span></div>
+            <div className="text-sm text-slate-300/80">Daily Quota: <span className="text-slate-100 font-semibold">{dailyQuota}m</span></div>
+            {dailyQuota > remainingTodayCapacity && (
+              <div className="mt-2 text-xs text-amber-400">Warning: quota exceeds today’s remaining capacity ({remainingTodayCapacity}m). <a href="/week-plan?action=catchup" className="underline">Catch-Up</a></div>
+            )}
+          </div>
+        </div>
+        {/* Focus Insights */}
+        <div className="rounded border border-[#1b2344] p-4">
+          <div className="text-xs uppercase tracking-wide text-slate-300/60 mb-1">Focus Insights</div>
+          <div className="text-sm text-slate-300/80">Averages: 7d <span className="text-slate-100 font-medium">{(focus7||0).toFixed(1)}</span> · 14d <span className="text-slate-100 font-medium">{(focus14||0).toFixed(1)}</span> · 30d <span className="text-slate-100 font-medium">{(focus30||0).toFixed(1)}</span></div>
+          {bestWindow ? (
+            <div className="text-sm text-slate-300/80">Best window: <span className="text-slate-100 font-medium">{fmtHourRange2(bestWindow.start)}</span> (avg {(bestWindow.avg||0).toFixed(1)} over {bestWindow.n} sessions)</div>
+          ) : (
+            <div className="text-sm text-slate-300/60">Best window: —</div>
+          )}
+          <div className="text-sm text-slate-300/80 mt-1">
+            {slump.isSlump ? (
+              <span className="text-amber-400">Slump detected.</span>
+            ) : (
+              <span className="text-slate-300/60">Slump: —</span>
+            )}
+          </div>
+          <div className="text-xs text-slate-300/70 mt-1">
+            {bestWindow && <div>Suggestion: schedule 45–60m blocks in your best window.</div>}
+            {slump.isSlump && <div>Suggestion: shorten sessions (30–45m), add breaks, and prioritize high-focus work in best window.</div>}
+            {!bestWindow && !slump.isSlump && <div>Suggestion: keep logging focus; we’ll surface patterns as you accumulate sessions.</div>}
           </div>
         </div>
       </section>

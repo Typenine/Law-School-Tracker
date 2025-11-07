@@ -1,4 +1,4 @@
-﻿"use client";
+"use client";
 import { useEffect, useMemo, useState } from 'react';
 import type { Course, Semester } from '@/lib/types';
 import { courseColorClass } from '@/lib/colors';
@@ -43,6 +43,27 @@ export default function CoursesPage() {
   const [sessions, setSessions] = useState<any[]>([]);
   const [tasks, setTasks] = useState<any[]>([]);
 
+  type CourseMppEntry = { mpp: number; sample?: number | null; updatedAt?: string | null; overrideEnabled?: boolean | null; overrideMpp?: number | null };
+  function clamp(n: number, lo: number, hi: number) { return Math.max(lo, Math.min(hi, n)); }
+  function baseMpp(): number { if (typeof window==='undefined') return 2; const s = window.localStorage.getItem('minutesPerPage'); const n = s ? parseFloat(s) : NaN; return (!isNaN(n) && n>0) ? n : 2; }
+  function saveCourseMppMap(cs: Course[]) {
+    if (typeof window === 'undefined') return;
+    const map: Record<string, CourseMppEntry> = {};
+    for (const c of cs) {
+      const key = (c.title || '').trim().toLowerCase(); if (!key) continue;
+      const learned = (c as any).learnedMpp as number | null | undefined;
+      const sample = (c as any).learnedSample as number | null | undefined;
+      const updatedAt = (c as any).learnedUpdatedAt as string | null | undefined;
+      const overrideEnabled = (c as any).overrideEnabled as boolean | null | undefined;
+      const overrideMpp = (c as any).overrideMpp as number | null | undefined;
+      const m = overrideEnabled && typeof overrideMpp === 'number' && overrideMpp>0
+        ? clamp(overrideMpp, 0.5, 6.0)
+        : (typeof learned === 'number' ? clamp(learned, 0.5, 6.0) : baseMpp());
+      map[key] = { mpp: m, sample: sample ?? null, updatedAt: updatedAt ?? null, overrideEnabled: !!overrideEnabled, overrideMpp: overrideMpp ?? null };
+    }
+    try { window.localStorage.setItem('courseMppMap', JSON.stringify(map)); } catch {}
+  }
+
   async function refresh() {
     setLoading(true);
     const res = await fetch(`/api/courses?_ts=${Date.now()}` , { cache: 'no-store' });
@@ -53,6 +74,7 @@ export default function CoursesPage() {
 
   useEffect(() => { refresh(); setGoals(loadGoals()); }, []);
   useEffect(() => { saveGoals(goals); }, [goals]);
+  useEffect(() => { if (Array.isArray(courses) && courses.length) saveCourseMppMap(courses); }, [courses]);
 
   // Load sessions and tasks (for per-course logged minutes)
   useEffect(() => {
@@ -114,6 +136,33 @@ export default function CoursesPage() {
     return m;
   }, [sessions, tasks, weekKeys]);
 
+  function zscoreTrim(values: number[]): number[] {
+    if (values.length === 0) return values;
+    const mean = values.reduce((a,b)=>a+b,0)/values.length;
+    const variance = values.reduce((a,b)=>a + Math.pow(b-mean,2),0) / values.length;
+    const sd = Math.sqrt(variance);
+    if (!isFinite(sd) || sd === 0) return values;
+    return values.filter(v => Math.abs(v - mean) <= 2 * sd);
+  }
+  function last10AvgMppForCourse(title: string): { avg: number | null; n: number } {
+    const tById = new Map<string, any>();
+    for (const t of (tasks||[])) if (t && t.id) tById.set(t.id, t);
+    const all = (sessions||[]).map(s => {
+      const task = s.taskId ? tById.get(s.taskId) : null;
+      let course = task?.course || extractCourseFromNotes(s.notes) || '';
+      if (String(course).trim().toLowerCase() !== String(title||'').trim().toLowerCase()) return null;
+      const minutes = Number(s.minutes)||0; const pages = Number(s.pagesRead)||0;
+      if (minutes < 5 || minutes > 240 || pages < 2 || pages > 150) return null;
+      return { when: new Date(s.when).getTime(), mpp: minutes/Math.max(1,pages) };
+    }).filter(Boolean) as { when:number; mpp:number }[];
+    all.sort((a,b)=>b.when-a.when);
+    const mpps = all.slice(0,10).map(x=>x.mpp);
+    const trimmed = zscoreTrim(mpps);
+    if (!trimmed.length) return { avg: null, n: 0 };
+    const avg = trimmed.reduce((a,b)=>a+b,0)/trimmed.length;
+    return { avg, n: trimmed.length };
+  }
+
   function setCourseGoalHours(courseTitle: string, hours: number) {
     const mins = Math.max(0, Math.round(hours * 60));
     setGoals(prev => {
@@ -171,6 +220,7 @@ export default function CoursesPage() {
                 <th className="py-2 pr-4">Meeting</th>
                 <th className="py-2 pr-4">Dates</th>
                 <th className="py-2 pr-4">Term</th>
+                <th className="py-2 pr-4">Reading Pace</th>
                 <th className="py-2 pr-4">Weekly Goal</th>
                 <th className="py-2 pr-4">Actions</th>
               </tr>
@@ -222,6 +272,56 @@ export default function CoursesPage() {
                     </td>
                     <td className="py-2 pr-4 whitespace-nowrap">
                       {c.semester && c.year ? `${c.semester} ${c.year}` : '—'}
+                    </td>
+                    <td className="py-2 pr-4 whitespace-nowrap align-top">
+                      {(() => {
+                        const learned = (c as any).learnedMpp as number | null | undefined;
+                        const sample = (c as any).learnedSample as number | null | undefined;
+                        const updated = (c as any).learnedUpdatedAt as string | null | undefined;
+                        const overEn = (c as any).overrideEnabled as boolean | null | undefined;
+                        const overVal = (c as any).overrideMpp as number | null | undefined;
+                        const last10 = last10AvgMppForCourse(c.title);
+                        const eff = (overEn && typeof overVal==='number' && overVal>0) ? clamp(overVal,0.5,6.0) : (typeof learned==='number'?clamp(learned,0.5,6.0):null);
+                        const fmt = (n: number|null|undefined) => (typeof n==='number' ? (Math.round(n*100)/100).toFixed(2) : '—');
+                        return (
+                          <div className="space-y-1 text-xs">
+                            <div>Learned mpp: <span className="text-slate-200">{fmt(learned)}</span>{typeof sample==='number'?` (n=${sample})`:''}</div>
+                            <div>Last-10 avg: <span className="text-slate-200">{fmt(last10.avg)}</span>{last10.n?` (n=${last10.n})`:''}</div>
+                            <div>Effective: <span className="text-slate-200">{fmt(eff)}</span>{updated?` · updated ${new Date(updated).toLocaleDateString()}`:''}</div>
+                            <div className="flex items-center gap-2 mt-1">
+                              <label className="inline-flex items-center gap-1">
+                                <input type="checkbox" checked={!!overEn} onChange={async (e) => {
+                                  const body = { overrideEnabled: e.target.checked } as any;
+                                  const res = await fetch(`/api/courses/${c.id}`, { method:'PATCH', headers:{'Content-Type':'application/json'}, body: JSON.stringify(body) });
+                                  if (res.ok) {
+                                    const { course } = await res.json();
+                                    setCourses(prev => {
+                                      const next = prev.map(x => x.id===c.id ? course : x);
+                                      saveCourseMppMap(next);
+                                      return next;
+                                    });
+                                  }
+                                }} />
+                                <span>Manual override</span>
+                              </label>
+                              <input type="number" step={0.1} min={0.5} max={6.0} defaultValue={typeof overVal==='number' ? overVal : ''} placeholder="mpp" className="w-20 bg-[#0b1020] border border-[#1b2344] rounded px-1 py-0.5"
+                                onBlur={async (e) => {
+                                  const v = e.currentTarget.value ? parseFloat(e.currentTarget.value) : null;
+                                  const body = { overrideMpp: (v && isFinite(v)) ? clamp(v,0.5,6.0) : null } as any;
+                                  const res = await fetch(`/api/courses/${c.id}`, { method:'PATCH', headers:{'Content-Type':'application/json'}, body: JSON.stringify(body) });
+                                  if (res.ok) {
+                                    const { course } = await res.json();
+                                    setCourses(prev => {
+                                      const next = prev.map(x => x.id===c.id ? course : x);
+                                      saveCourseMppMap(next);
+                                      return next;
+                                    });
+                                  }
+                                }} />
+                            </div>
+                          </div>
+                        );
+                      })()}
                     </td>
                     <td className="py-2 pr-4">
                       <div className="flex items-center gap-2 mb-2">

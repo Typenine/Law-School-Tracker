@@ -1,0 +1,1279 @@
+"use client";
+import { useEffect, useMemo, useState } from "react";
+
+type BacklogItem = {
+  id: string;
+  title: string;
+  course: string;
+  dueDate?: string | null; // YYYY-MM-DD
+  pages?: number | null;
+  estimatedMinutes?: number | null;
+  priority?: number | null; // 1-5
+  tags?: string[] | null;
+};
+
+type AvailabilityTemplate = Record<number, number>; // 0..6 => minutes
+
+type ScheduledBlock = {
+  id: string;
+  taskId: string; // BacklogItem.id or Task.id
+  day: string; // YYYY-MM-DD
+  plannedMinutes: number;
+  guessed?: boolean;
+  title: string;
+  course: string;
+  pages?: number | null;
+  priority?: number | null;
+  catchup?: boolean;
+};
+
+// Minimal Task shape for catch-up
+type Task = {
+  id: string;
+  title: string;
+  course?: string | null;
+  dueDate: string; // ISO
+  status: "todo" | "done";
+  estimatedMinutes?: number | null;
+  priority?: number | null;
+};
+
+const LS_BACKLOG = "backlogItemsV1";
+const LS_AVAIL = "availabilityTemplateV1";
+const LS_SCHEDULE = "weekScheduleV1";
+
+function uid(): string { return Math.random().toString(36).slice(2) + Date.now().toString(36); }
+function startOfDay(d: Date) { const x = new Date(d); x.setHours(0,0,0,0); return x; }
+function mondayOf(d: Date) { const x = startOfDay(d); const dow = x.getDay(); const delta = (dow + 6) % 7; x.setDate(x.getDate() - delta); return x; }
+function ymd(d: Date) { return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`; }
+function dayLabel(d: Date) { return d.toLocaleDateString(undefined, { weekday: 'short', month: 'short', day: 'numeric' }); }
+function endOfDayIso(ymdStr: string) { const [y,m,da]=ymdStr.split('-').map(n=>parseInt(n,10)); const x=new Date(y,(m as number)-1,da,23,59,59,999); return x.toISOString(); }
+function minutesPerPage(): number { if (typeof window==='undefined') return 3; const s=window.localStorage.getItem('minutesPerPage'); const n=s?parseFloat(s):NaN; return !isNaN(n)&&n>0?n:3; }
+
+function loadBacklog(): BacklogItem[] {
+  if (typeof window === 'undefined') return [];
+  try { const raw = window.localStorage.getItem(LS_BACKLOG); const arr = raw ? JSON.parse(raw) : []; return Array.isArray(arr) ? arr : []; } catch { return []; }
+}
+function loadAvailability(): AvailabilityTemplate {
+  if (typeof window === 'undefined') return { 0:120,1:240,2:240,3:240,4:240,5:240,6:120 } as any;
+  try { const raw = window.localStorage.getItem(LS_AVAIL); if (raw) return JSON.parse(raw); } catch {}
+  return { 0:120,1:240,2:240,3:240,4:240,5:240,6:120 };
+}
+function saveAvailability(t: AvailabilityTemplate) { if (typeof window!=='undefined') window.localStorage.setItem(LS_AVAIL, JSON.stringify(t)); }
+function loadSchedule(): ScheduledBlock[] { if (typeof window==='undefined') return []; try { const raw=window.localStorage.getItem(LS_SCHEDULE); const arr=raw?JSON.parse(raw):[]; return Array.isArray(arr)?arr:[]; } catch { return []; } }
+function saveSchedule(blocks: ScheduledBlock[]) { if (typeof window!=='undefined') window.localStorage.setItem(LS_SCHEDULE, JSON.stringify(blocks)); }
+
+function estimateMinutesFor(item: BacklogItem): { minutes: number; guessed: boolean } {
+  if (typeof item.estimatedMinutes === 'number' && item.estimatedMinutes > 0) return { minutes: item.estimatedMinutes, guessed: false };
+  if (typeof item.pages === 'number' && item.pages > 0) return { minutes: Math.round(item.pages * minutesPerPage()), guessed: false };
+  return { minutes: 30, guessed: true };
+}
+
+export default function WeekPlanPage() {
+  const [weekStart, setWeekStart] = useState<Date>(() => mondayOf(new Date()));
+  const [availability, setAvailability] = useState<AvailabilityTemplate>({ 0:120,1:240,2:240,3:240,4:240,5:240,6:120 });
+  const [blocks, setBlocks] = useState<ScheduledBlock[]>([]);
+  const [backlog, setBacklog] = useState<BacklogItem[]>([]);
+  const [tasks, setTasks] = useState<Task[]>([]);
+  const [undoSnapshot, setUndoSnapshot] = useState<ScheduledBlock[] | null>(null);
+  const [showCatchup, setShowCatchup] = useState(false);
+  const [catchupPreview, setCatchupPreview] = useState<{
+    days: Array<{ day: string; total: number; usedBefore: number; usedAfter: number; items: Array<{ taskId: string; title: string; course: string; minutes: number; guessed: boolean }> }>;
+    unschedulable: Array<{ taskId: string; title: string; remaining: number; dueYmd: string }>;
+  } | null>(null);
+
+  useEffect(() => { setAvailability(loadAvailability()); setBlocks(loadSchedule()); setBacklog(loadBacklog()); }, []);
+  useEffect(() => { saveAvailability(availability); }, [availability]);
+  useEffect(() => { saveSchedule(blocks); }, [blocks]);
+
+  // Fetch tasks for Catch-Up
+  useEffect(() => {
+    (async () => {
+      try { const r = await fetch('/api/tasks', { cache: 'no-store' }); const d = await r.json(); setTasks((d.tasks || []) as Task[]); } catch {}
+    })();
+  }, []);
+
+  const days = useMemo(() => Array.from({ length: 7 }, (_, i) => { const d = new Date(weekStart); d.setDate(d.getDate()+i); return d; }), [weekStart]);
+
+  const plannedByDay = useMemo(() => {
+    const m: Record<string, number> = {}; for (const d of days) m[ymd(d)] = 0;
+    for (const b of blocks) if (m[b.day] !== undefined) m[b.day] += b.plannedMinutes;
+    return m;
+  }, [blocks, days]);
+
+  // Catch-Up helpers
+  function ymdFromISO(iso: string): string { const dt = new Date(iso); return ymd(dt); }
+  function addDaysYmd(ymdStr: string, delta: number): string { const [y,m,da]=ymdStr.split('-').map(n=>parseInt(n,10)); const d=new Date(y,(m as number)-1,da); d.setDate(d.getDate()+delta); return ymd(d); }
+
+  function computeCatchUpPreview() {
+    try {
+      const today = ymd(new Date());
+      const horizonEnd = addDaysYmd(today, 13); // 14 days
+      const horizonDays: string[] = []; for (let i=0;i<14;i++) horizonDays.push(addDaysYmd(today, i));
+      // Capacity per horizon day
+      const totalCap: Record<string, number> = {};
+      for (const dk of horizonDays) { const [Y,M,D]=dk.split('-').map(x=>parseInt(x,10)); const dt=new Date(Y,(M as number)-1,D); totalCap[dk] = availability[dt.getDay()] ?? 0; }
+      // Used before and remaining capacity
+      const usedBefore: Record<string, number> = {}; horizonDays.forEach(dk => usedBefore[dk]=0);
+      for (const b of blocks) if (usedBefore[b.day] !== undefined) usedBefore[b.day] += b.plannedMinutes;
+      const capLeft: Record<string, number> = {}; horizonDays.forEach(dk => { capLeft[dk] = Math.max(0, (totalCap[dk]||0) - (usedBefore[dk]||0)); });
+      // Already scheduled minutes per task
+      const scheduledByTask = new Map<string, number>();
+      for (const b of blocks) scheduledByTask.set(b.taskId, (scheduledByTask.get(b.taskId)||0) + b.plannedMinutes);
+      // Spillover tasks (todo, overdue or due within horizon)
+      const spill = (tasks||[]).filter(t => t && t.status==='todo').filter(t => { const dueY = ymdFromISO(t.dueDate); return (dueY < today || dueY <= horizonEnd); });
+      const withRemaining = spill.map(t => {
+        const est = Math.max(0, Math.round(Number(t.estimatedMinutes)||0));
+        const estOrGuess = est > 0 ? est : 30;
+        const already = scheduledByTask.get(t.id) || 0;
+        const rem = Math.max(0, estOrGuess - already);
+        return { task: t, remaining: rem, guessed: est === 0 };
+      }).filter(x => x.remaining > 0);
+      // Order: due asc -> priority desc -> remaining desc
+      withRemaining.sort((a,b) => {
+        const ad = ymdFromISO(a.task.dueDate), bd = ymdFromISO(b.task.dueDate);
+        if (ad !== bd) return ad.localeCompare(bd);
+        const ap = a.task.priority ?? 0, bp = b.task.priority ?? 0; if (ap !== bp) return bp - ap;
+        return b.remaining - a.remaining;
+      });
+      const proposed = horizonDays.map(dk => ({ day: dk, total: totalCap[dk]||0, usedBefore: usedBefore[dk]||0, usedAfter: usedBefore[dk]||0, items: [] as Array<{ taskId:string; title:string; course:string; minutes:number; guessed:boolean }> }));
+      const unsched: Array<{ taskId: string; title: string; remaining: number; dueYmd: string }> = [];
+      for (const entry of withRemaining) {
+        const t = entry.task; let rem = entry.remaining; const dueY = ymdFromISO(t.dueDate); const guessed = entry.guessed;
+        for (const dk of horizonDays) {
+          if (rem <= 0) break; if (dk > dueY) break; let left = capLeft[dk] || 0; if (left < 30) continue;
+          let chunk = Math.min(rem, left); if (chunk >= 30) chunk = chunk - (chunk % 30); if (chunk < 30) continue;
+          const row = proposed.find(r => r.day === dk)!; row.items.push({ taskId: t.id, title: t.title, course: t.course || '', minutes: chunk, guessed }); row.usedAfter += chunk; capLeft[dk] -= chunk; rem -= chunk;
+        }
+        if (rem > 0) unsched.push({ taskId: t.id, title: t.title, remaining: rem, dueYmd: dueY });
+      }
+      setCatchupPreview({ days: proposed, unschedulable: unsched });
+      setShowCatchup(true);
+    } catch { setCatchupPreview(null); setShowCatchup(false); }
+  }
+
+  function applyCatchUp() {
+    if (!catchupPreview) return;
+    const prev = blocks.slice();
+    const additions: ScheduledBlock[] = [];
+    for (const dayRow of catchupPreview.days) {
+      for (const it of dayRow.items) {
+        additions.push({ id: uid(), taskId: it.taskId, day: dayRow.day, plannedMinutes: it.minutes, guessed: it.guessed, title: it.title, course: it.course || '', pages: null, priority: null, catchup: true });
+      }
+    }
+    setUndoSnapshot(prev);
+    setBlocks(prev => [...prev, ...additions]);
+    setShowCatchup(false);
+    setCatchupPreview(null);
+  }
+
+  function undoCatchUp() { if (!undoSnapshot) return; setBlocks(undoSnapshot); setUndoSnapshot(null); }
+
+  const backlogSorted = useMemo(() => {
+    const arr = backlog.slice();
+    arr.sort((a,b) => {
+      const ad = a.dueDate ? new Date(a.dueDate).getTime() : Infinity;
+      const bd = b.dueDate ? new Date(b.dueDate).getTime() : Infinity;
+      if (ad !== bd) return ad - bd; const ap = a.priority ?? 0, bp = b.priority ?? 0; return (bp - ap);
+    });
+    return arr;
+  }, [backlog]);
+
+  const scheduledIdsThisWeek = useMemo(() => {
+    const keys = new Set(days.map(d => ymd(d))); return new Set(blocks.filter(b => keys.has(b.day)).map(b => b.taskId));
+  }, [blocks, days]);
+
+  function onDragStartBacklog(e: React.DragEvent, it: BacklogItem) { e.dataTransfer.setData('text/plain', it.id); }
+  function onDropDay(e: React.DragEvent, d: Date) {
+    e.preventDefault(); const id = e.dataTransfer.getData('text/plain'); if (!id) return; const it = backlog.find(x => x.id === id); if (!it) return;
+    const { minutes, guessed } = estimateMinutesFor(it);
+    const block: ScheduledBlock = { id: uid(), taskId: it.id, day: ymd(d), plannedMinutes: minutes, guessed, title: it.title, course: it.course, pages: it.pages ?? null, priority: it.priority ?? null };
+    setBlocks(prev => [...prev, block]);
+  }
+  function removeBlock(id: string) { setBlocks(prev => prev.filter(b => b.id !== id)); }
+
+  function autopackWeek() {
+    const keys = new Set(days.map(d => ymd(d)));
+    const existing = blocks.filter(b => keys.has(b.day));
+    const planned = new Map<string, number>(); for (const d of days) planned.set(ymd(d), existing.filter(b => b.day===ymd(d)).reduce((s,b)=>s+b.plannedMinutes,0));
+    const avail = (d: Date) => availability[d.getDay()] ?? 0;
+    const unscheduled = backlogSorted.filter(it => !existing.some(b => b.taskId === it.id));
+    const nextBlocks: ScheduledBlock[] = [];
+    for (const it of unscheduled) {
+      const { minutes, guessed } = estimateMinutesFor(it); let placed = false;
+      for (const d of days) { const k = ymd(d); const cap = avail(d); const cur = planned.get(k)!; if (cur + minutes <= cap) { nextBlocks.push({ id: uid(), taskId: it.id, day: k, plannedMinutes: minutes, guessed, title: it.title, course: it.course, pages: it.pages ?? null, priority: it.priority ?? null }); planned.set(k, cur + minutes); placed = true; break; } }
+      if (!placed) { let bestDay = days[0]; let bestRem = -Infinity; for (const d of days) { const k = ymd(d); const cap = avail(d); const cur = planned.get(k)!; const rem = cap - cur; if (rem > bestRem) { bestRem = rem; bestDay = d; } } const k = ymd(bestDay); nextBlocks.push({ id: uid(), taskId: it.id, day: k, plannedMinutes: minutes, guessed, title: it.title, course: it.course, pages: it.pages ?? null, priority: it.priority ?? null }); planned.set(k, planned.get(k)! + minutes); }
+    }
+    if (nextBlocks.length) setBlocks(prev => [...prev, ...nextBlocks]);
+  }
+
+  function setAvailForDow(dow: number, val: number) { const v = Math.max(0, Math.round(val)); setAvailability(prev => ({ ...prev, [dow]: v })); }
+  function shiftWeek(delta: number) { setWeekStart(prev => { const x = new Date(prev); x.setDate(x.getDate() + delta*7); return mondayOf(x); }); }
+  function clearThisWeek() { const keys = new Set(days.map(d => ymd(d))); setBlocks(prev => prev.filter(b => !keys.has(b.day))); }
+  async function promoteWeekToTasks() {
+    const keys = new Set(days.map(d => ymd(d))); const batch = blocks.filter(b => keys.has(b.day)); let ok = 0, fail = 0;
+    for (const b of batch) {
+      const body: any = { title: b.title, course: b.course || null, dueDate: endOfDayIso(b.day), status: 'todo', estimatedMinutes: b.plannedMinutes, priority: b.priority ?? null, tags: ['week-plan'] };
+      try { const res = await fetch('/api/tasks', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) }); if (res.ok) ok++; else fail++; } catch { fail++; }
+    }
+    if (typeof window !== 'undefined') window.alert(`Promoted ${ok} task(s)${fail?`, ${fail} failed`:''}`);
+  }
+
+  const noBacklog = backlogSorted.length === 0;
+
+  return (
+    <main className="space-y-6">
+      <section className="card p-6 space-y-4">
+        <div className="flex flex-col gap-2 md:flex-row md:items-center md:justify-between">
+          <div className="flex items-center gap-2">
+            <button aria-label="Previous week" onClick={()=>shiftWeek(-1)} className="px-2 py-1 rounded border border-[#1b2344] focus-visible:outline focus-visible:outline-2 focus-visible:outline-blue-500">◀</button>
+            <div className="text-sm" aria-live="polite">Week of {dayLabel(weekStart)}</div>
+            <button aria-label="Jump to this week" onClick={()=>setWeekStart(mondayOf(new Date()))} className="px-2 py-1 rounded border border-[#1b2344] focus-visible:outline focus-visible:outline-2 focus-visible:outline-blue-500">This week</button>
+            <button aria-label="Next week" onClick={()=>shiftWeek(1)} className="px-2 py-1 rounded border border-[#1b2344] focus-visible:outline focus-visible:outline-2 focus-visible:outline-blue-500">▶</button>
+          </div>
+          <div className="flex items-center gap-2">
+            <button onClick={autopackWeek} className="px-3 py-2 rounded bg-blue-600 hover:bg-blue-500 text-sm focus-visible:outline focus-visible:outline-2 focus-visible:outline-blue-500">Autopack Week</button>
+            <button onClick={clearThisWeek} className="px-3 py-2 rounded border border-[#1b2344] text-sm focus-visible:outline focus-visible:outline-2 focus-visible:outline-blue-500">Clear This Week</button>
+            <button onClick={promoteWeekToTasks} className="px-3 py-2 rounded border border-emerald-600 text-emerald-400 text-sm focus-visible:outline focus-visible:outline-2 focus-visible:outline-blue-500">Promote Week → Tasks</button>
+            <button onClick={computeCatchUpPreview} className="px-3 py-2 rounded border border-[#1b2344] text-sm focus-visible:outline focus-visible:outline-2 focus-visible:outline-blue-500">Catch-Up</button>
+            <button onClick={undoCatchUp} className="px-3 py-2 rounded border border-[#1b2344] text-sm disabled:opacity-50" disabled={!undoSnapshot}>Undo Last</button>
+          </div>
+        </div>
+        <div className="space-y-2">
+          <div className="text-xs text-slate-300/70">Availability (minutes per weekday)</div>
+          <div className="grid grid-cols-2 sm:grid-cols-4 md:grid-cols-7 gap-2">
+            {[1,2,3,4,5,6,0].map(dow => (
+              <div key={dow} className="rounded border border-[#1b2344] p-2">
+                <label className="block text-xs mb-1" htmlFor={`avail-${dow}`}>{['Sun','Mon','Tue','Wed','Thu','Fri','Sat'][dow]}</label>
+                <input id={`avail-${dow}`} type="number" min={0} value={availability[dow] ?? 0} onChange={e=>setAvailForDow(dow, parseInt(e.target.value||'0',10))} className="w-full bg-[#0b1020] border border-[#1b2344] rounded px-2 py-1 text-sm focus-visible:outline focus-visible:outline-2 focus-visible:outline-blue-500" />
+              </div>
+            ))}
+          </div>
+        </div>
+      </section>
+
+      <section className="card p-6 space-y-4">
+        <div>
+          <h3 className="text-sm font-medium mb-2">Inbox (drag to a day)</h3>
+          {noBacklog ? (
+            <div className="rounded border border-dashed border-[#1b2344] p-4 text-sm text-slate-300/80">No inbox items yet. Add some in <a href="/tasks?tag=inbox" className="underline focus-visible:outline focus-visible:outline-2 focus-visible:outline-blue-500">Inbox</a> and return.</div>
+          ) : (
+            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-2">
+              {backlogSorted.map(it => (
+                <div key={it.id} draggable onDragStart={(e)=>onDragStartBacklog(e,it)} className={`p-2 rounded border focus-within:outline focus-within:outline-2 focus-within:outline-blue-500 ${scheduledIdsThisWeek.has(it.id)?'border-emerald-700 bg-emerald-900/10':'border-[#1b2344]'}`} aria-grabbed="false">
+                  <div className="text-sm text-slate-200 truncate">{it.course ? `${it.course}: ` : ''}{it.title}</div>
+                  <div className="text-xs text-slate-300/70 flex items-center gap-2 mt-1">
+                    {it.dueDate ? <span>due {it.dueDate}</span> : <span>no due</span>}
+                    {typeof it.priority==='number' ? <span>p{it.priority}</span> : null}
+                    {typeof it.pages==='number' ? <span>{it.pages}p</span> : null}
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+      </section>
+
+      <section className="space-y-3">
+        <div className="grid grid-cols-1 md:grid-cols-7 gap-2">
+          {days.map((d) => {
+            const k = ymd(d);
+            const planned = plannedByDay[k] || 0;
+            const cap = availability[d.getDay()] ?? 0;
+            const overBy = Math.max(0, planned - cap);
+            const pct = cap>0 ? Math.min(100, Math.round((planned/cap)*100)) : (planned>0?100:0);
+            const dayBlocks = blocks.filter(b => b.day === k);
+            return (
+              <div key={k} className={`rounded border ${overBy>0?'border-rose-600':'border-[#1b2344]'} p-3 min-h-[220px]`} onDragOver={(e)=>e.preventDefault()} onDrop={(e)=>onDropDay(e,d)} role="listbox" aria-label={`Planned items for ${dayLabel(d)}`}>
+                <div className="flex items-center justify-between mb-2">
+                  <div className="text-sm text-slate-200">{dayLabel(d)}</div>
+                  <div className="text-xs text-slate-300/70">{planned} / {cap}m</div>
+                </div>
+                <div className="h-2 w-full bg-[#0b1020] border border-[#1b2344] rounded overflow-hidden mb-2" role="progressbar" aria-valuemin={0} aria-valuemax={cap||0} aria-valuenow={planned} aria-label="Planned minutes">
+                  <div className={`${overBy>0?'bg-rose-600':'bg-blue-600'}`} style={{ width: `${pct}%`, height: '100%' }} />
+                </div>
+                {overBy>0 ? <div className="text-[11px] text-rose-400 mb-2">Over by {overBy}m</div> : null}
+                <ul className="space-y-1">
+                  {dayBlocks.length===0 ? (
+                    <li className="text-[11px] text-slate-300/50">Drop tasks here</li>
+                  ) : dayBlocks.map(b => (
+                    <li key={b.id} className="text-[11px] flex items-start gap-2">
+                      <div className="flex-1 min-w-0">
+                        <div className="text-slate-200 truncate">{b.course ? `${b.course}: ` : ''}{b.title}</div>
+                        <div className="text-slate-300/70">{b.plannedMinutes}m{b.guessed ? <span className="ml-1 inline-block px-1 rounded border border-amber-500 text-amber-400">guessed</span> : null}</div>
+                      </div>
+                      <button aria-label="Remove block" onClick={()=>removeBlock(b.id)} className="px-1 py-0.5 rounded border border-[#1b2344] text-xs focus-visible:outline focus-visible:outline-2 focus-visible:outline-blue-500">X</button>
+                    </li>
+                  ))}
+                </ul>
+              </div>
+            );
+          })}
+        </div>
+      </section>
+
+      {showCatchup && catchupPreview && (
+        <div role="dialog" aria-modal="true" className="fixed inset-0 z-50 flex items-center justify-center">
+          <div className="absolute inset-0 bg-black/60" onClick={()=>{ setShowCatchup(false); setCatchupPreview(null); }} />
+          <div className="relative z-10 max-w-3xl w-[92vw] bg-[#0b1020] border border-[#1b2344] rounded p-4">
+            <div className="flex items-center justify-between mb-2">
+              <h4 className="text-sm font-medium">Catch-Up Preview (next 14 days)</h4>
+              <button onClick={()=>{ setShowCatchup(false); setCatchupPreview(null); }} className="text-xs px-2 py-1 rounded border border-[#1b2344]">Close</button>
+            </div>
+            <div className="max-h-[60vh] overflow-y-auto space-y-3">
+              {catchupPreview.days.map(d => (
+                <div key={d.day} className="border border-[#1b2344] rounded p-2">
+                  <div className="text-xs text-slate-300/70 mb-1">{d.day} · {d.usedAfter}/{d.total}m (was {d.usedBefore}m)</div>
+                  {d.items.length === 0 ? (
+                    <div className="text-xs text-slate-300/50">No placements</div>
+                  ) : (
+                    <ul className="text-xs space-y-1">
+                      {d.items.map((it, i) => (
+                        <li key={i} className="flex items-center justify-between">
+                          <span className="truncate mr-2">{it.course ? `${it.course}: `: ''}{it.title}</span>
+                          <span>{it.minutes}m{it.guessed ? <span className="ml-1 inline-block px-1 rounded border border-amber-500 text-amber-400">guessed</span> : null}</span>
+                        </li>
+                      ))}
+                    </ul>
+                  )}
+                </div>
+              ))}
+              {catchupPreview.unschedulable.length > 0 && (
+                <div className="border border-rose-700 rounded p-2">
+                  <div className="text-xs text-rose-400 mb-1">Could not schedule (insufficient capacity before due date)</div>
+                  <ul className="text-xs space-y-1">
+                    {catchupPreview.unschedulable.map(u => (
+                      <li key={u.taskId} className="flex items-center justify-between">
+                        <span className="truncate mr-2">{u.title}</span>
+                        <span>{u.remaining}m · due {u.dueYmd}</span>
+                      </li>
+                    ))}
+                  </ul>
+                </div>
+              )}
+            </div>
+            <div className="mt-3 flex items-center justify-end gap-2">
+              <button onClick={()=>{ setShowCatchup(false); setCatchupPreview(null); }} className="px-3 py-2 rounded border border-[#1b2344] text-sm">Cancel</button>
+              <button onClick={applyCatchUp} className="px-3 py-2 rounded bg-blue-600 hover:bg-blue-500 text-sm">Apply Catch-Up</button>
+            </div>
+          </div>
+        </div>
+      )}
+    </main>
+  );
+}
+
+export default function WeekPlanPage() {
+  const [weekStart, setWeekStart] = useState<Date>(() => mondayOf(new Date()));
+  const [availability, setAvailability] = useState<AvailabilityTemplate>({ 0:120,1:240,2:240,3:240,4:240,5:240,6:120 });
+  const [blocks, setBlocks] = useState<ScheduledBlock[]>([]);
+  const [backlog, setBacklog] = useState<BacklogItem[]>([]);
+  const [tasks, setTasks] = useState<Task[]>([]);
+  const [undoSnapshot, setUndoSnapshot] = useState<ScheduledBlock[] | null>(null);
+  const [showCatchup, setShowCatchup] = useState(false);
+  const [catchupPreview, setCatchupPreview] = useState<{
+    days: Array<{ day: string; total: number; usedBefore: number; usedAfter: number; items: Array<{ taskId: string; title: string; course: string; minutes: number; guessed: boolean }> }>;
+    unschedulable: Array<{ taskId: string; title: string; remaining: number; dueYmd: string }>;
+  } | null>(null);
+
+  useEffect(() => { setAvailability(loadAvailability()); setBlocks(loadSchedule()); setBacklog(loadBacklog()); }, []);
+  useEffect(() => { saveAvailability(availability); }, [availability]);
+  useEffect(() => { saveSchedule(blocks); }, [blocks]);
+
+  // Fetch tasks for Catch-Up
+  useEffect(() => {
+    (async () => {
+      try {
+        const r = await fetch('/api/tasks', { cache: 'no-store' });
+        const d = await r.json();
+        setTasks((d.tasks || []) as Task[]);
+      } catch {}
+    })();
+  }, []);
+
+  const days = useMemo(() => Array.from({ length: 7 }, (_, i) => { const d = new Date(weekStart); d.setDate(d.getDate()+i); return d; }), [weekStart]);
+
+  const plannedByDay = useMemo(() => {
+    const m: Record<string, number> = {}; for (const d of days) m[ymd(d)] = 0;
+    for (const b of blocks) if (m[b.day] !== undefined) m[b.day] += b.plannedMinutes;
+    return m;
+  }, [blocks, days]);
+
+  // Catch-Up computation helpers
+  function ymdFromISO(iso: string): string { const dt = new Date(iso); return ymd(dt); }
+  function addDaysYmd(ymdStr: string, delta: number): string { const [y,m,da]=ymdStr.split('-').map(n=>parseInt(n,10)); const d=new Date(y,(m as number)-1,da); d.setDate(d.getDate()+delta); return ymd(d); }
+
+  function computeCatchUpPreview() {
+    try {
+      const today = ymd(new Date());
+      const horizonEnd = addDaysYmd(today, 13); // 14-day horizon
+      // Build horizon days and capacity
+      const horizonDays: string[] = []; for (let i=0;i<14;i++) horizonDays.push(addDaysYmd(today, i));
+      const totalCap: Record<string, number> = {};
+      for (const dk of horizonDays) {
+        const [Y,M,D] = dk.split('-').map(x=>parseInt(x,10)); const dt = new Date(Y,(M as number)-1,D);
+        totalCap[dk] = availability[dt.getDay()] ?? 0;
+      }
+      // Used before
+      const usedBefore: Record<string, number> = {}; for (const dk of horizonDays) usedBefore[dk] = 0;
+      for (const b of blocks) if (usedBefore[b.day] !== undefined) usedBefore[b.day] += b.plannedMinutes;
+      const capLeft: Record<string, number> = {}; for (const dk of horizonDays) capLeft[dk] = Math.max(0, (totalCap[dk] || 0) - (usedBefore[dk] || 0));
+
+      // Already scheduled minutes per task
+      const scheduledByTask = new Map<string, number>();
+      for (const b of blocks) { if (b.taskId) scheduledByTask.set(b.taskId, (scheduledByTask.get(b.taskId)||0) + b.plannedMinutes); }
+
+      // Identify spillover tasks (overdue or due in 14 days), todo status
+      const spill = (tasks||[]).filter(t => t && t.status === 'todo').filter(t => {
+        const dueY = ymdFromISO(t.dueDate);
+        return (dueY < today || dueY <= horizonEnd);
+      });
+
+      // Remaining minutes and guessed flag
+      const withRemaining = spill.map(t => {
+        const est = Math.max(0, Math.round(Number(t.estimatedMinutes)||0));
+        const estOrGuess = est > 0 ? est : 30; // default guess 30
+        const already = scheduledByTask.get(t.id) || 0;
+        const rem = Math.max(0, estOrGuess - already);
+        return { task: t, remaining: rem, guessed: est === 0 };
+      }).filter(x => x.remaining > 0);
+
+      // Sort: due asc → priority desc → remaining desc
+      withRemaining.sort((a,b) => {
+        const ad = ymdFromISO(a.task.dueDate), bd = ymdFromISO(b.task.dueDate);
+        if (ad !== bd) return ad.localeCompare(bd);
+        const ap = a.task.priority ?? 0, bp = b.task.priority ?? 0;
+        if (ap !== bp) return bp - ap;
+        return b.remaining - a.remaining;
+      });
+
+      const proposed: Array<{ day: string; total: number; usedBefore: number; usedAfter: number; items: Array<{ taskId: string; title: string; course: string; minutes: number; guessed: boolean }> }> = horizonDays.map(dk => ({ day: dk, total: totalCap[dk]||0, usedBefore: usedBefore[dk]||0, usedAfter: usedBefore[dk]||0, items: [] }));
+      const unsched: Array<{ taskId: string; title: string; remaining: number; dueYmd: string }> = [];
+
+      for (const entry of withRemaining) {
+        const t = entry.task; let rem = entry.remaining; const dueY = ymdFromISO(t.dueDate); const guessed = entry.guessed;
+        for (let i=0; i<horizonDays.length && rem>0; i++) {
+          const dk = horizonDays[i]; if (dk > dueY) break; // don't schedule past due
+          let left = capLeft[dk] || 0; if (left < 30) continue; // min block 30m
+          // Allocate chunk respecting min 30 and available
+          let chunk = Math.min(rem, left);
+          if (chunk >= 30) { chunk = chunk - (chunk % 30); }
+          if (chunk < 30) continue;
+          // Record
+          const row = proposed.find(r => r.day === dk)!;
+          row.items.push({ taskId: t.id, title: t.title, course: t.course || '', minutes: chunk, guessed });
+          row.usedAfter += chunk; capLeft[dk] -= chunk; rem -= chunk;
+        }
+        if (rem > 0) unsched.push({ taskId: t.id, title: t.title, remaining: rem, dueYmd: dueY });
+      }
+
+      setCatchupPreview({ days: proposed, unschedulable: unsched });
+      setShowCatchup(true);
+    } catch {
+      setCatchupPreview(null); setShowCatchup(false);
+    }
+  }
+
+  function applyCatchUp() {
+    if (!catchupPreview) return;
+    const prev = blocks.slice();
+    const additions: ScheduledBlock[] = [];
+    for (const dayRow of catchupPreview.days) {
+      for (const it of dayRow.items) {
+        additions.push({ id: uid(), taskId: it.taskId, day: dayRow.day, plannedMinutes: it.minutes, guessed: it.guessed, title: it.title, course: it.course || '', pages: null, priority: null, catchup: true });
+      }
+    }
+    setUndoSnapshot(prev);
+    setBlocks(prev => [...prev, ...additions]);
+    setShowCatchup(false);
+    setCatchupPreview(null);
+  }
+
+  function undoCatchUp() {
+    if (!undoSnapshot) return;
+    setBlocks(undoSnapshot);
+    setUndoSnapshot(null);
+  }
+
+  const backlogSorted = useMemo(() => {
+    const arr = backlog.slice();
+    arr.sort((a,b) => {
+      const ad = a.dueDate ? new Date(a.dueDate).getTime() : Infinity;
+      const bd = b.dueDate ? new Date(b.dueDate).getTime() : Infinity;
+      if (ad !== bd) return ad - bd;
+      const ap = a.priority ?? 0; const bp = b.priority ?? 0; return (bp - ap);
+    });
+    return arr;
+  }, [backlog]);
+
+  const scheduledIdsThisWeek = useMemo(() => {
+    const keys = new Set(days.map(d => ymd(d))); return new Set(blocks.filter(b => keys.has(b.day)).map(b => b.taskId));
+  }, [blocks, days]);
+
+  function onDragStartBacklog(e: React.DragEvent, it: BacklogItem) { e.dataTransfer.setData('text/plain', it.id); }
+  function onDropDay(e: React.DragEvent, d: Date) {
+    e.preventDefault(); const id = e.dataTransfer.getData('text/plain'); if (!id) return;
+    const it = backlog.find(x => x.id === id); if (!it) return;
+    const { minutes, guessed } = estimateMinutesFor(it);
+    const block: ScheduledBlock = { id: uid(), taskId: it.id, day: ymd(d), plannedMinutes: minutes, guessed, title: it.title, course: it.course, pages: it.pages ?? null, priority: it.priority ?? null };
+    setBlocks(prev => [...prev, block]);
+  }
+  function removeBlock(id: string) { setBlocks(prev => prev.filter(b => b.id !== id)); }
+
+  function autopackWeek() {
+    const keys = new Set(days.map(d => ymd(d)));
+    const existing = blocks.filter(b => keys.has(b.day));
+    const planned = new Map<string, number>(); for (const d of days) planned.set(ymd(d), existing.filter(b => b.day===ymd(d)).reduce((s,b)=>s+b.plannedMinutes,0));
+    const avail = (d: Date) => availability[d.getDay()] ?? 0;
+    const unscheduled = backlogSorted.filter(it => !existing.some(b => b.taskId === it.id));
+    const nextBlocks: ScheduledBlock[] = [];
+    for (const it of unscheduled) {
+      const { minutes, guessed } = estimateMinutesFor(it);
+      let placed = false;
+      for (const d of days) {
+        const k = ymd(d); const cap = avail(d); const cur = planned.get(k)!;
+        if (cur + minutes <= cap) { nextBlocks.push({ id: uid(), taskId: it.id, day: k, plannedMinutes: minutes, guessed, title: it.title, course: it.course, pages: it.pages ?? null, priority: it.priority ?? null }); planned.set(k, cur + minutes); placed = true; break; }
+      }
+      if (!placed) {
+        let bestDay = days[0]; let bestRem = -Infinity;
+        for (const d of days) { const k = ymd(d); const cap = avail(d); const cur = planned.get(k)!; const rem = cap - cur; if (rem > bestRem) { bestRem = rem; bestDay = d; } }
+        const k = ymd(bestDay);
+        nextBlocks.push({ id: uid(), taskId: it.id, day: k, plannedMinutes: minutes, guessed, title: it.title, course: it.course, pages: it.pages ?? null, priority: it.priority ?? null });
+        planned.set(k, planned.get(k)! + minutes);
+      }
+    }
+    if (nextBlocks.length) setBlocks(prev => [...prev, ...nextBlocks]);
+  }
+
+  function setAvailForDow(dow: number, val: number) { const v = Math.max(0, Math.round(val)); setAvailability(prev => ({ ...prev, [dow]: v })); }
+  function shiftWeek(delta: number) { setWeekStart(prev => { const x = new Date(prev); x.setDate(x.getDate() + delta*7); return mondayOf(x); }); }
+  function clearThisWeek() {
+    const keys = new Set(days.map(d => ymd(d))); setBlocks(prev => prev.filter(b => !keys.has(b.day)));
+  }
+  async function promoteWeekToTasks() {
+    const keys = new Set(days.map(d => ymd(d)));
+    const batch = blocks.filter(b => keys.has(b.day));
+    let ok = 0, fail = 0;
+    for (const b of batch) {
+      const body: any = { title: b.title, course: b.course || null, dueDate: endOfDayIso(b.day), status: 'todo', estimatedMinutes: b.plannedMinutes, priority: b.priority ?? null, tags: ['week-plan'] };
+      try { const res = await fetch('/api/tasks', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) }); if (res.ok) ok++; else fail++; } catch { fail++; }
+    }
+    if (typeof window !== 'undefined') window.alert(`Promoted ${ok} task(s)${fail?`, ${fail} failed`:''}`);
+  }
+
+  const noBacklog = backlogSorted.length === 0;
+
+  return (
+    <main className="space-y-6">
+      <section className="card p-6 space-y-4">
+        <div className="flex flex-col gap-2 md:flex-row md:items-center md:justify-between">
+          <div className="flex items-center gap-2">
+            <button aria-label="Previous week" onClick={()=>shiftWeek(-1)} className="px-2 py-1 rounded border border-[#1b2344] focus-visible:outline focus-visible:outline-2 focus-visible:outline-blue-500">◀</button>
+            <div className="text-sm" aria-live="polite">Week of {dayLabel(weekStart)}</div>
+            <button aria-label="Jump to this week" onClick={()=>setWeekStart(mondayOf(new Date()))} className="px-2 py-1 rounded border border-[#1b2344] focus-visible:outline focus-visible:outline-2 focus-visible:outline-blue-500">This week</button>
+            <button aria-label="Next week" onClick={()=>shiftWeek(1)} className="px-2 py-1 rounded border border-[#1b2344] focus-visible:outline focus-visible:outline-2 focus-visible:outline-blue-500">▶</button>
+          </div>
+          <div className="flex items-center gap-2">
+            <button onClick={autopackWeek} className="px-3 py-2 rounded bg-blue-600 hover:bg-blue-500 text-sm focus-visible:outline focus-visible:outline-2 focus-visible:outline-blue-500">Autopack Week</button>
+            <button onClick={clearThisWeek} className="px-3 py-2 rounded border border-[#1b2344] text-sm focus-visible:outline focus-visible:outline-2 focus-visible:outline-blue-500">Clear This Week</button>
+            <button onClick={promoteWeekToTasks} className="px-3 py-2 rounded border border-emerald-600 text-emerald-400 text-sm focus-visible:outline focus-visible:outline-2 focus-visible:outline-blue-500">Promote Week → Tasks</button>
+            <button onClick={computeCatchUpPreview} className="px-3 py-2 rounded border border-[#1b2344] text-sm focus-visible:outline focus-visible:outline-2 focus-visible:outline-blue-500">Catch-Up</button>
+            <button onClick={undoCatchUp} className="px-3 py-2 rounded border border-[#1b2344] text-sm disabled:opacity-50" disabled={!undoSnapshot}>Undo Last</button>
+          </div>
+        </div>
+        <div className="space-y-2">
+          <div className="text-xs text-slate-300/70">Availability (minutes per weekday)</div>
+          <div className="grid grid-cols-2 sm:grid-cols-4 md:grid-cols-7 gap-2">
+            {[1,2,3,4,5,6,0].map(dow => (
+              <div key={dow} className="rounded border border-[#1b2344] p-2">
+                <label className="block text-xs mb-1" htmlFor={`avail-${dow}`}>{['Sun','Mon','Tue','Wed','Thu','Fri','Sat'][dow]}</label>
+                <input id={`avail-${dow}`} type="number" min={0} value={availability[dow] ?? 0} onChange={e=>setAvailForDow(dow, parseInt(e.target.value||'0',10))} className="w-full bg-[#0b1020] border border-[#1b2344] rounded px-2 py-1 text-sm focus-visible:outline focus-visible:outline-2 focus-visible:outline-blue-500" />
+              </div>
+            ))}
+          </div>
+        </div>
+      </section>
+
+      <section className="card p-6 space-y-4">
+        <div>
+          <h3 className="text-sm font-medium mb-2">Inbox (drag to a day)</h3>
+          {noBacklog ? (
+            <div className="rounded border border-dashed border-[#1b2344] p-4 text-sm text-slate-300/80">No inbox items yet. Add some in <a href="/tasks?tag=inbox" className="underline focus-visible:outline focus-visible:outline-2 focus-visible:outline-blue-500">Inbox</a> and return.</div>
+          ) : (
+            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-2">
+              {backlogSorted.map(it => (
+                <div key={it.id} draggable onDragStart={(e)=>onDragStartBacklog(e,it)} className={`p-2 rounded border focus-within:outline focus-within:outline-2 focus-within:outline-blue-500 ${scheduledIdsThisWeek.has(it.id)?'border-emerald-700 bg-emerald-900/10':'border-[#1b2344]'}`} aria-grabbed="false">
+                  <div className="text-sm text-slate-200 truncate">{it.course ? `${it.course}: ` : ''}{it.title}</div>
+                  <div className="text-xs text-slate-300/70 flex items-center gap-2 mt-1">
+                    {it.dueDate ? <span>due {it.dueDate}</span> : <span>no due</span>}
+                    {typeof it.priority==='number' ? <span>p{it.priority}</span> : null}
+                    {typeof it.pages==='number' ? <span>{it.pages}p</span> : null}
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+      </section>
+
+      <section className="space-y-3">
+        <div className="grid grid-cols-1 md:grid-cols-7 gap-2">
+          {days.map((d) => {
+            const k = ymd(d);
+            const planned = plannedByDay[k] || 0;
+            const cap = availability[d.getDay()] ?? 0;
+            const overBy = Math.max(0, planned - cap);
+            const pct = cap>0 ? Math.min(100, Math.round((planned/cap)*100)) : (planned>0?100:0);
+            const dayBlocks = blocks.filter(b => b.day === k);
+            return (
+              <div key={k} className={`rounded border ${overBy>0?'border-rose-600':'border-[#1b2344]'} p-3 min-h-[220px]`} onDragOver={(e)=>e.preventDefault()} onDrop={(e)=>onDropDay(e,d)} role="listbox" aria-label={`Planned items for ${dayLabel(d)}`}>
+                <div className="flex items-center justify-between mb-2">
+                  <div className="text-sm text-slate-200">{dayLabel(d)}</div>
+                  <div className="text-xs text-slate-300/70">{planned} / {cap}m</div>
+                </div>
+                <div className="h-2 w-full bg-[#0b1020] border border-[#1b2344] rounded overflow-hidden mb-2" role="progressbar" aria-valuemin={0} aria-valuemax={cap||0} aria-valuenow={planned} aria-label="Planned minutes">
+                  <div className={`${overBy>0?'bg-rose-600':'bg-blue-600'}`} style={{ width: `${pct}%`, height: '100%' }} />
+                </div>
+                {overBy>0 ? <div className="text-[11px] text-rose-400 mb-2">Over by {overBy}m</div> : null}
+                <ul className="space-y-1">
+                  {dayBlocks.length===0 ? (
+                    <li className="text-[11px] text-slate-300/50">Drop tasks here</li>
+                  ) : dayBlocks.map(b => (
+                    <li key={b.id} className="text-[11px] flex items-start gap-2">
+                      <div className="flex-1 min-w-0">
+                        <div className="text-slate-200 truncate">{b.course ? `${b.course}: ` : ''}{b.title}</div>
+                        <div className="text-slate-300/70">{b.plannedMinutes}m{b.guessed ? <span className="ml-1 inline-block px-1 rounded border border-amber-500 text-amber-400">guessed</span> : null}</div>
+                      </div>
+                      <button aria-label="Remove block" onClick={()=>removeBlock(b.id)} className="px-1 py-0.5 rounded border border-[#1b2344] text-xs focus-visible:outline focus-visible:outline-2 focus-visible:outline-blue-500">X</button>
+                    </li>
+                  ))}
+                </ul>
+              </div>
+            );
+          })}
+        </div>
+      </section>
+
+      {/* Catch-Up Preview Modal */}
+      {showCatchup && catchupPreview && (
+        <div role="dialog" aria-modal="true" className="fixed inset-0 z-50 flex items-center justify-center">
+          <div className="absolute inset-0 bg-black/60" onClick={()=>{ setShowCatchup(false); setCatchupPreview(null); }} />
+          <div className="relative z-10 max-w-3xl w-[92vw] bg-[#0b1020] border border-[#1b2344] rounded p-4">
+            <div className="flex items-center justify-between mb-2">
+              <h4 className="text-sm font-medium">Catch-Up Preview (next 14 days)</h4>
+              <button onClick={()=>{ setShowCatchup(false); setCatchupPreview(null); }} className="text-xs px-2 py-1 rounded border border-[#1b2344]">Close</button>
+            </div>
+            <div className="max-h-[60vh] overflow-y-auto space-y-3">
+              {catchupPreview.days.map(d => (
+                <div key={d.day} className="border border-[#1b2344] rounded p-2">
+                  <div className="text-xs text-slate-300/70 mb-1">{d.day} · {d.usedAfter}/{d.total}m (was {d.usedBefore}m)</div>
+                  {d.items.length === 0 ? (
+                    <div className="text-xs text-slate-300/50">No placements</div>
+                  ) : (
+                    <ul className="text-xs space-y-1">
+                      {d.items.map((it, i) => (
+                        <li key={i} className="flex items-center justify-between">
+                          <span className="truncate mr-2">{it.course ? `${it.course}: `: ''}{it.title}</span>
+                          <span>{it.minutes}m{it.guessed ? <span className="ml-1 inline-block px-1 rounded border border-amber-500 text-amber-400">guessed</span> : null}</span>
+                        </li>
+                      ))}
+                    </ul>
+                  )}
+                </div>
+              ))}
+              {catchupPreview.unschedulable.length > 0 && (
+                <div className="border border-rose-700 rounded p-2">
+                  <div className="text-xs text-rose-400 mb-1">Could not schedule (insufficient capacity before due date)</div>
+                  <ul className="text-xs space-y-1">
+                    {catchupPreview.unschedulable.map(u => (
+                      <li key={u.taskId} className="flex items-center justify-between">
+                        <span className="truncate mr-2">{u.title}</span>
+                        <span>{u.remaining}m · due {u.dueYmd}</span>
+                      </li>
+                    ))}
+                  </ul>
+                </div>
+              )}
+            </div>
+            <div className="mt-3 flex items-center justify-end gap-2">
+              <button onClick={()=>{ setShowCatchup(false); setCatchupPreview(null); }} className="px-3 py-2 rounded border border-[#1b2344] text-sm">Cancel</button>
+              <button onClick={applyCatchUp} className="px-3 py-2 rounded bg-blue-600 hover:bg-blue-500 text-sm">Apply Catch-Up</button>
+            </div>
+          </div>
+        </div>
+      )}
+    </main>
+  );
+}
+
+// Minimal Task shape for catch-up
+type Task = {
+  id: string;
+  title: string;
+  course?: string | null;
+  dueDate: string; // ISO
+  status: 'todo' | 'done';
+  estimatedMinutes?: number | null;
+  priority?: number | null;
+};
+
+const LS_BACKLOG = "backlogItemsV1";
+const LS_AVAIL = "availabilityTemplateV1";
+const LS_SCHEDULE = "weekScheduleV1";
+
+function uid(): string { return Math.random().toString(36).slice(2) + Date.now().toString(36); }
+function startOfDay(d: Date) { const x = new Date(d); x.setHours(0,0,0,0); return x; }
+function mondayOf(d: Date) { const x = startOfDay(d); const dow = x.getDay(); const delta = (dow + 6) % 7; x.setDate(x.getDate() - delta); return x; }
+function ymd(d: Date) { return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`; }
+function dayLabel(d: Date) { return d.toLocaleDateString(undefined, { weekday: 'short', month: 'short', day: 'numeric' }); }
+function endOfDayIso(ymdStr: string) { const [y,m,da]=ymdStr.split('-').map(n=>parseInt(n,10)); const x=new Date(y,(m as number)-1,da,23,59,59,999); return x.toISOString(); }
+function minutesPerPage(): number { if (typeof window==='undefined') return 3; const s=window.localStorage.getItem('minutesPerPage'); const n=s?parseFloat(s):NaN; return !isNaN(n)&&n>0?n:3; }
+
+function loadBacklog(): BacklogItem[] {
+  if (typeof window === 'undefined') return [];
+  try { const raw = window.localStorage.getItem(LS_BACKLOG); const arr = raw ? JSON.parse(raw) : []; return Array.isArray(arr) ? arr : []; } catch { return []; }
+}
+function loadAvailability(): AvailabilityTemplate {
+  if (typeof window === 'undefined') return { 0:120,1:240,2:240,3:240,4:240,5:240,6:120 } as any;
+  try { const raw = window.localStorage.getItem(LS_AVAIL); if (raw) return JSON.parse(raw); } catch {}
+  return { 0:120,1:240,2:240,3:240,4:240,5:240,6:120 };
+}
+function saveAvailability(t: AvailabilityTemplate) { if (typeof window!=='undefined') window.localStorage.setItem(LS_AVAIL, JSON.stringify(t)); }
+function loadSchedule(): ScheduledBlock[] { if (typeof window==='undefined') return []; try { const raw=window.localStorage.getItem(LS_SCHEDULE); const arr=raw?JSON.parse(raw):[]; return Array.isArray(arr)?arr:[]; } catch { return []; } }
+function saveSchedule(blocks: ScheduledBlock[]) { if (typeof window!=='undefined') window.localStorage.setItem(LS_SCHEDULE, JSON.stringify(blocks)); }
+
+function estimateMinutesFor(item: BacklogItem): { minutes: number; guessed: boolean } {
+  if (typeof item.estimatedMinutes === 'number' && item.estimatedMinutes > 0) return { minutes: item.estimatedMinutes, guessed: false };
+  if (typeof item.pages === 'number' && item.pages > 0) return { minutes: Math.round(item.pages * minutesPerPage()), guessed: false };
+  return { minutes: 30, guessed: true };
+}
+
+export default function WeekPlanPage() {
+  const [weekStart, setWeekStart] = useState<Date>(() => mondayOf(new Date()));
+  const [availability, setAvailability] = useState<AvailabilityTemplate>({ 0:120,1:240,2:240,3:240,4:240,5:240,6:120 });
+  const [blocks, setBlocks] = useState<ScheduledBlock[]>([]);
+  const [backlog, setBacklog] = useState<BacklogItem[]>([]);
+  const [tasks, setTasks] = useState<Task[]>([]);
+  const [undoSnapshot, setUndoSnapshot] = useState<ScheduledBlock[] | null>(null);
+  const [showCatchup, setShowCatchup] = useState(false);
+  const [catchupPreview, setCatchupPreview] = useState<{
+    days: Array<{ day: string; total: number; usedBefore: number; usedAfter: number; items: Array<{ taskId: string; title: string; course: string; minutes: number; guessed: boolean }> }>;
+    unschedulable: Array<{ taskId: string; title: string; remaining: number; dueYmd: string }>;
+  } | null>(null);
+
+  useEffect(() => { setAvailability(loadAvailability()); setBlocks(loadSchedule()); setBacklog(loadBacklog()); }, []);
+  useEffect(() => { saveAvailability(availability); }, [availability]);
+  useEffect(() => { saveSchedule(blocks); }, [blocks]);
+
+  // Fetch tasks for Catch-Up
+  useEffect(() => {
+    (async () => {
+      try {
+        const r = await fetch('/api/tasks', { cache: 'no-store' });
+        const d = await r.json();
+        setTasks((d.tasks || []) as Task[]);
+      } catch {}
+    })();
+  }, []);
+
+  const days = useMemo(() => Array.from({ length: 7 }, (_, i) => { const d = new Date(weekStart); d.setDate(d.getDate()+i); return d; }), [weekStart]);
+
+  const plannedByDay = useMemo(() => {
+    const m: Record<string, number> = {}; for (const d of days) m[ymd(d)] = 0;
+    for (const b of blocks) if (m[b.day] !== undefined) m[b.day] += b.plannedMinutes;
+    return m;
+  }, [blocks, days]);
+
+  // Catch-Up computation
+  function ymdFromISO(iso: string): string { const dt = new Date(iso); return ymd(dt); }
+  function addDaysYmd(ymdStr: string, delta: number): string { const [y,m,da]=ymdStr.split('-').map(n=>parseInt(n,10)); const d=new Date(y,(m as number)-1,da); d.setDate(d.getDate()+delta); return ymd(d); }
+  function betweenYmd(a: string, b: string, c: string) { return a >= b && a <= c; }
+
+  function computeCatchUpPreview() {
+    try {
+      const today = ymd(new Date());
+      const horizonEnd = addDaysYmd(today, 13); // 14-day horizon
+      // Precompute total capacity per day in horizon
+      const horizonDays: string[] = []; for (let i=0;i<14;i++) horizonDays.push(addDaysYmd(today, i));
+      const totalCap: Record<string, number> = {};
+      for (const dk of horizonDays) {
+        const [Y,M,D] = dk.split('-').map(x=>parseInt(x,10)); const dt = new Date(Y,(M as number)-1,D);
+        totalCap[dk] = availability[dt.getDay()] ?? 0;
+      }
+      // Used before
+      const usedBefore: Record<string, number> = {};
+      for (const dk of horizonDays) usedBefore[dk] = 0;
+      for (const b of blocks) if (usedBefore[b.day] !== undefined) usedBefore[b.day] += b.plannedMinutes;
+      const capLeft: Record<string, number> = {};
+      for (const dk of horizonDays) capLeft[dk] = Math.max(0, (totalCap[dk] || 0) - (usedBefore[dk] || 0));
+
+      // Already scheduled minutes per task
+      const scheduledByTask = new Map<string, number>();
+      for (const b of blocks) { if (b.taskId) scheduledByTask.set(b.taskId, (scheduledByTask.get(b.taskId)||0) + b.plannedMinutes); }
+
+      // Identify spillover tasks (overdue or due in 14 days), todo status
+      const spill = (tasks||[]).filter(t => t && t.status === 'todo').filter(t => {
+        const dueY = ymdFromISO(t.dueDate);
+        return (dueY < today || dueY <= horizonEnd);
+      });
+      // Exclude tasks fully scheduled
+      const withRemaining = spill.map(t => {
+        const est = Math.max(0, Math.round(Number(t.estimatedMinutes)||0));
+        const estOrGuess = est > 0 ? est : 30; // default guess 30
+        const already = scheduledByTask.get(t.id) || 0;
+        const rem = Math.max(0, estOrGuess - already);
+        return { task: t, remaining: rem, guessed: est === 0 };
+      }).filter(x => x.remaining > 0);
+
+      // Sort: due asc → priority desc → remaining desc
+      withRemaining.sort((a,b) => {
+        const ad = ymdFromISO(a.task.dueDate), bd = ymdFromISO(b.task.dueDate);
+        if (ad !== bd) return ad.localeCompare(bd);
+        const ap = a.task.priority ?? 0, bp = b.task.priority ?? 0;
+        if (ap !== bp) return bp - ap;
+        return b.remaining - a.remaining;
+      });
+
+      const proposed: Array<{ day: string; total: number; usedBefore: number; usedAfter: number; items: Array<{ taskId: string; title: string; course: string; minutes: number; guessed: boolean }> }> = horizonDays.map(dk => ({ day: dk, total: totalCap[dk]||0, usedBefore: usedBefore[dk]||0, usedAfter: usedBefore[dk]||0, items: [] }));
+      const unsched: Array<{ taskId: string; title: string; remaining: number; dueYmd: string }> = [];
+
+      for (const entry of withRemaining) {
+        const t = entry.task; let rem = entry.remaining; const dueY = ymdFromISO(t.dueDate); const guessed = entry.guessed;
+        for (let i=0; i<horizonDays.length && rem>0; i++) {
+          const dk = horizonDays[i]; if (dk > dueY) break; // don't schedule past due
+          let left = capLeft[dk] || 0; if (left < 30) continue; // min block 30m
+          // Allocate chunk respecting min 30 and available
+          let chunk = Math.min(rem, left);
+          if (chunk >= 30) { chunk = chunk - (chunk % 30); }
+          if (chunk < 30) continue;
+          // Record
+          const row = proposed.find(r => r.day === dk)!;
+          row.items.push({ taskId: t.id, title: t.title, course: t.course || '', minutes: chunk, guessed });
+          row.usedAfter += chunk; capLeft[dk] -= chunk; rem -= chunk;
+        }
+        if (rem > 0) unsched.push({ taskId: t.id, title: t.title, remaining: rem, dueYmd: dueY });
+      }
+
+      setCatchupPreview({ days: proposed, unschedulable: unsched });
+      setShowCatchup(true);
+    } catch {
+      setCatchupPreview(null); setShowCatchup(false);
+    }
+  }
+
+  function applyCatchUp() {
+    if (!catchupPreview) return;
+    const prev = blocks.slice();
+    const additions: ScheduledBlock[] = [];
+    for (const dayRow of catchupPreview.days) {
+      for (const it of dayRow.items) {
+        additions.push({ id: uid(), taskId: it.taskId, day: dayRow.day, plannedMinutes: it.minutes, guessed: it.guessed, title: it.title, course: it.course || '', pages: null, priority: null, catchup: true });
+      }
+    }
+    setUndoSnapshot(prev);
+    setBlocks(prev => [...prev, ...additions]);
+    setShowCatchup(false);
+    setCatchupPreview(null);
+  }
+
+  function undoCatchUp() {
+    if (!undoSnapshot) return;
+    setBlocks(undoSnapshot);
+    setUndoSnapshot(null);
+  }
+
+  const backlogSorted = useMemo(() => {
+    const arr = backlog.slice();
+    arr.sort((a,b) => {
+      const ad = a.dueDate ? new Date(a.dueDate).getTime() : Infinity;
+      const bd = b.dueDate ? new Date(b.dueDate).getTime() : Infinity;
+      if (ad !== bd) return ad - bd;
+      const ap = a.priority ?? 0; const bp = b.priority ?? 0; return (bp - ap);
+    });
+    return arr;
+  }, [backlog]);
+
+  const scheduledIdsThisWeek = useMemo(() => {
+    const keys = new Set(days.map(d => ymd(d))); return new Set(blocks.filter(b => keys.has(b.day)).map(b => b.taskId));
+  }, [blocks, days]);
+
+  function onDragStartBacklog(e: React.DragEvent, it: BacklogItem) { e.dataTransfer.setData('text/plain', it.id); }
+  function onDropDay(e: React.DragEvent, d: Date) {
+    e.preventDefault(); const id = e.dataTransfer.getData('text/plain'); if (!id) return;
+    const it = backlog.find(x => x.id === id); if (!it) return;
+    const { minutes, guessed } = estimateMinutesFor(it);
+    const block: ScheduledBlock = { id: uid(), taskId: it.id, day: ymd(d), plannedMinutes: minutes, guessed, title: it.title, course: it.course, pages: it.pages ?? null, priority: it.priority ?? null };
+    setBlocks(prev => [...prev, block]);
+  }
+  function removeBlock(id: string) { setBlocks(prev => prev.filter(b => b.id !== id)); }
+
+  function autopackWeek() {
+    const keys = new Set(days.map(d => ymd(d)));
+    const existing = blocks.filter(b => keys.has(b.day));
+    const planned = new Map<string, number>(); for (const d of days) planned.set(ymd(d), existing.filter(b => b.day===ymd(d)).reduce((s,b)=>s+b.plannedMinutes,0));
+    const avail = (d: Date) => availability[d.getDay()] ?? 0;
+    const unscheduled = backlogSorted.filter(it => !existing.some(b => b.taskId === it.id));
+    const nextBlocks: ScheduledBlock[] = [];
+    for (const it of unscheduled) {
+      const { minutes, guessed } = estimateMinutesFor(it);
+      let placed = false;
+      for (const d of days) {
+        const k = ymd(d); const cap = avail(d); const cur = planned.get(k)!;
+        if (cur + minutes <= cap) { nextBlocks.push({ id: uid(), taskId: it.id, day: k, plannedMinutes: minutes, guessed, title: it.title, course: it.course, pages: it.pages ?? null, priority: it.priority ?? null }); planned.set(k, cur + minutes); placed = true; break; }
+      }
+      if (!placed) {
+        let bestDay = days[0]; let bestRem = -Infinity;
+        for (const d of days) { const k = ymd(d); const cap = avail(d); const cur = planned.get(k)!; const rem = cap - cur; if (rem > bestRem) { bestRem = rem; bestDay = d; } }
+        const k = ymd(bestDay);
+        nextBlocks.push({ id: uid(), taskId: it.id, day: k, plannedMinutes: minutes, guessed, title: it.title, course: it.course, pages: it.pages ?? null, priority: it.priority ?? null });
+        planned.set(k, planned.get(k)! + minutes);
+      }
+    }
+    if (nextBlocks.length) setBlocks(prev => [...prev, ...nextBlocks]);
+  }
+
+  function setAvailForDow(dow: number, val: number) { const v = Math.max(0, Math.round(val)); setAvailability(prev => ({ ...prev, [dow]: v })); }
+  function shiftWeek(delta: number) { setWeekStart(prev => { const x = new Date(prev); x.setDate(x.getDate() + delta*7); return mondayOf(x); }); }
+  function clearThisWeek() {
+    const keys = new Set(days.map(d => ymd(d))); setBlocks(prev => prev.filter(b => !keys.has(b.day)));
+  }
+  async function promoteWeekToTasks() {
+    const keys = new Set(days.map(d => ymd(d)));
+    const batch = blocks.filter(b => keys.has(b.day));
+    let ok = 0, fail = 0;
+    for (const b of batch) {
+      const body: any = { title: b.title, course: b.course || null, dueDate: endOfDayIso(b.day), status: 'todo', estimatedMinutes: b.plannedMinutes, priority: b.priority ?? null, tags: ['week-plan'] };
+      try { const res = await fetch('/api/tasks', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) }); if (res.ok) ok++; else fail++; } catch { fail++; }
+    }
+    if (typeof window !== 'undefined') window.alert(`Promoted ${ok} task(s)${fail?`, ${fail} failed`:''}`);
+  }
+
+  const noBacklog = backlogSorted.length === 0;
+
+  return (
+    <main className="space-y-6">
+      <section className="card p-6 space-y-4">
+        <div className="flex flex-col gap-2 md:flex-row md:items-center md:justify-between">
+          <div className="flex items-center gap-2">
+            <button aria-label="Previous week" onClick={()=>shiftWeek(-1)} className="px-2 py-1 rounded border border-[#1b2344] focus-visible:outline focus-visible:outline-2 focus-visible:outline-blue-500">◀</button>
+            <div className="text-sm" aria-live="polite">Week of {dayLabel(weekStart)}</div>
+            <button aria-label="Jump to this week" onClick={()=>setWeekStart(mondayOf(new Date()))} className="px-2 py-1 rounded border border-[#1b2344] focus-visible:outline focus-visible:outline-2 focus-visible:outline-blue-500">This week</button>
+            <button aria-label="Next week" onClick={()=>shiftWeek(1)} className="px-2 py-1 rounded border border-[#1b2344] focus-visible:outline focus-visible:outline-2 focus-visible:outline-blue-500">▶</button>
+          </div>
+          <div className="flex items-center gap-2">
+            <button onClick={autopackWeek} className="px-3 py-2 rounded bg-blue-600 hover:bg-blue-500 text-sm focus-visible:outline focus-visible:outline-2 focus-visible:outline-blue-500">Autopack Week</button>
+            <button onClick={clearThisWeek} className="px-3 py-2 rounded border border-[#1b2344] text-sm focus-visible:outline focus-visible:outline-2 focus-visible:outline-blue-500">Clear This Week</button>
+            <button onClick={promoteWeekToTasks} className="px-3 py-2 rounded border border-emerald-600 text-emerald-400 text-sm focus-visible:outline focus-visible:outline-2 focus-visible:outline-blue-500">Promote Week → Tasks</button>
+            <button onClick={computeCatchUpPreview} className="px-3 py-2 rounded border border-[#1b2344] text-sm focus-visible:outline focus-visible:outline-2 focus-visible:outline-blue-500">Catch-Up</button>
+            <button onClick={undoCatchUp} className="px-3 py-2 rounded border border-[#1b2344] text-sm disabled:opacity-50" disabled={!undoSnapshot}>Undo Last</button>
+          </div>
+        </div>
+        <div className="space-y-2">
+          <div className="text-xs text-slate-300/70">Availability (minutes per weekday)</div>
+          <div className="grid grid-cols-2 sm:grid-cols-4 md:grid-cols-7 gap-2">
+            {[1,2,3,4,5,6,0].map(dow => (
+              <div key={dow} className="rounded border border-[#1b2344] p-2">
+                <label className="block text-xs mb-1" htmlFor={`avail-${dow}`}>{['Sun','Mon','Tue','Wed','Thu','Fri','Sat'][dow]}</label>
+                <input id={`avail-${dow}`} type="number" min={0} value={availability[dow] ?? 0} onChange={e=>setAvailForDow(dow, parseInt(e.target.value||'0',10))} className="w-full bg-[#0b1020] border border-[#1b2344] rounded px-2 py-1 text-sm focus-visible:outline focus-visible:outline-2 focus-visible:outline-blue-500" />
+              </div>
+            ))}
+          </div>
+        </div>
+      </section>
+
+      <section className="card p-6 space-y-4">
+        <div>
+          <h3 className="text-sm font-medium mb-2">Inbox (drag to a day)</h3>
+          {noBacklog ? (
+            <div className="rounded border border-dashed border-[#1b2344] p-4 text-sm text-slate-300/80">No inbox items yet. Add some in <a href="/tasks?tag=inbox" className="underline focus-visible:outline focus-visible:outline-2 focus-visible:outline-blue-500">Inbox</a> and return.</div>
+          ) : (
+            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-2">
+              {backlogSorted.map(it => (
+                <div key={it.id} draggable onDragStart={(e)=>onDragStartBacklog(e,it)} className={`p-2 rounded border focus-within:outline focus-within:outline-2 focus-within:outline-blue-500 ${scheduledIdsThisWeek.has(it.id)?'border-emerald-700 bg-emerald-900/10':'border-[#1b2344]'}`} aria-grabbed="false">
+                  <div className="text-sm text-slate-200 truncate">{it.course ? `${it.course}: ` : ''}{it.title}</div>
+                  <div className="text-xs text-slate-300/70 flex items-center gap-2 mt-1">
+                    {it.dueDate ? <span>due {it.dueDate}</span> : <span>no due</span>}
+                    {typeof it.priority==='number' ? <span>p{it.priority}</span> : null}
+                    {typeof it.pages==='number' ? <span>{it.pages}p</span> : null}
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+      </section>
+
+      <section className="space-y-3">
+        <div className="grid grid-cols-1 md:grid-cols-7 gap-2">
+          {days.map((d) => {
+            const k = ymd(d);
+            const planned = plannedByDay[k] || 0;
+            const cap = availability[d.getDay()] ?? 0;
+            const overBy = Math.max(0, planned - cap);
+            const pct = cap>0 ? Math.min(100, Math.round((planned/cap)*100)) : (planned>0?100:0);
+            const dayBlocks = blocks.filter(b => b.day === k);
+            return (
+              <div key={k} className={`rounded border ${overBy>0?'border-rose-600':'border-[#1b2344]'} p-3 min-h-[220px]`} onDragOver={(e)=>e.preventDefault()} onDrop={(e)=>onDropDay(e,d)} role="listbox" aria-label={`Planned items for ${dayLabel(d)}`}>
+                <div className="flex items-center justify-between mb-2">
+                  <div className="text-sm text-slate-200">{dayLabel(d)}</div>
+                  <div className="text-xs text-slate-300/70">{planned} / {cap}m</div>
+                </div>
+                <div className="h-2 w-full bg-[#0b1020] border border-[#1b2344] rounded overflow-hidden mb-2" role="progressbar" aria-valuemin={0} aria-valuemax={cap||0} aria-valuenow={planned} aria-label="Planned minutes">
+                  <div className={`${overBy>0?'bg-rose-600':'bg-blue-600'}`} style={{ width: `${pct}%`, height: '100%' }} />
+                </div>
+                {overBy>0 ? <div className="text-[11px] text-rose-400 mb-2">Over by {overBy}m</div> : null}
+                <ul className="space-y-1">
+                  {dayBlocks.length===0 ? (
+                    <li className="text-[11px] text-slate-300/50">Drop tasks here</li>
+                  ) : dayBlocks.map(b => (
+                    <li key={b.id} className="text-[11px] flex items-start gap-2">
+                      <div className="flex-1 min-w-0">
+                        <div className="text-slate-200 truncate">{b.course ? `${b.course}: ` : ''}{b.title}</div>
+                        <div className="text-slate-300/70">{b.plannedMinutes}m{b.guessed ? <span className="ml-1 inline-block px-1 rounded border border-amber-500 text-amber-400">guessed</span> : null}</div>
+                      </div>
+                      <button aria-label="Remove block" onClick={()=>removeBlock(b.id)} className="px-1 py-0.5 rounded border border-[#1b2344] text-xs focus-visible:outline focus-visible:outline-2 focus-visible:outline-blue-500">X</button>
+                    </li>
+                  ))}
+                </ul>
+}
+if (rem > 0) unsched.push({ taskId: t.id, title: t.title, remaining: rem, dueYmd: dueY });
+}
+
+setCatchupPreview({ days: proposed, unschedulable: unsched });
+setShowCatchup(true);
+} catch {
+setCatchupPreview(null); setShowCatchup(false);
+}
+
+function applyCatchUp() {
+if (!catchupPreview) return;
+const prev = blocks.slice();
+const additions: ScheduledBlock[] = [];
+for (const dayRow of catchupPreview.days) {
+for (const it of dayRow.items) {
+additions.push({ id: uid(), taskId: it.taskId, day: dayRow.day, plannedMinutes: it.minutes, guessed: it.guessed, title: it.title, course: it.course || '', pages: null, priority: null, catchup: true });
+}
+}
+setUndoSnapshot(prev);
+setBlocks(prev => [...prev, ...additions]);
+setShowCatchup(false);
+setCatchupPreview(null);
+}
+
+function undoCatchUp() {
+if (!undoSnapshot) return;
+setBlocks(undoSnapshot);
+setUndoSnapshot(null);
+}
+
+const backlogSorted = useMemo(() => {
+const arr = backlog.slice();
+arr.sort((a,b) => {
+const ad = a.dueDate ? new Date(a.dueDate).getTime() : Infinity;
+const bd = b.dueDate ? new Date(b.dueDate).getTime() : Infinity;
+if (ad !== bd) return ad - bd;
+const ap = a.priority ?? 0; const bp = b.priority ?? 0; return (bp - ap);
+});
+return arr;
+}, [backlog]);
+
+const scheduledIdsThisWeek = useMemo(() => {
+const keys = new Set(days.map(d => ymd(d))); return new Set(blocks.filter(b => keys.has(b.day)).map(b => b.taskId));
+}, [blocks, days]);
+
+function onDragStartBacklog(e: React.DragEvent, it: BacklogItem) { e.dataTransfer.setData('text/plain', it.id); }
+function onDropDay(e: React.DragEvent, d: Date) {
+e.preventDefault(); const id = e.dataTransfer.getData('text/plain'); if (!id) return;
+const it = backlog.find(x => x.id === id); if (!it) return;
+const { minutes, guessed } = estimateMinutesFor(it);
+const block: ScheduledBlock = { id: uid(), taskId: it.id, day: ymd(d), plannedMinutes: minutes, guessed, title: it.title, course: it.course, pages: it.pages ?? null, priority: it.priority ?? null };
+setBlocks(prev => [...prev, block]);
+}
+function removeBlock(id: string) { setBlocks(prev => prev.filter(b => b.id !== id)); }
+
+function autopackWeek() {
+const keys = new Set(days.map(d => ymd(d)));
+const existing = blocks.filter(b => keys.has(b.day));
+const planned = new Map<string, number>(); for (const d of days) planned.set(ymd(d), existing.filter(b => b.day===ymd(d)).reduce((s,b)=>s+b.plannedMinutes,0));
+const avail = (d: Date) => availability[d.getDay()] ?? 0;
+const unscheduled = backlogSorted.filter(it => !existing.some(b => b.taskId === it.id));
+const nextBlocks: ScheduledBlock[] = [];
+for (const it of unscheduled) {
+const { minutes, guessed } = estimateMinutesFor(it);
+let placed = false;
+for (const d of days) {
+const k = ymd(d); const cap = avail(d); const cur = planned.get(k)!;
+if (cur + minutes <= cap) { nextBlocks.push({ id: uid(), taskId: it.id, day: k, plannedMinutes: minutes, guessed, title: it.title, course: it.course, pages: it.pages ?? null, priority: it.priority ?? null }); planned.set(k, cur + minutes); placed = true; break; }
+}
+if (!placed) {
+let bestDay = days[0]; let bestRem = -Infinity;
+for (const d of days) { const k = ymd(d); const cap = avail(d); const cur = planned.get(k)!; const rem = cap - cur; if (rem > bestRem) { bestRem = rem; bestDay = d; } }
+const k = ymd(bestDay);
+nextBlocks.push({ id: uid(), taskId: it.id, day: k, plannedMinutes: minutes, guessed, title: it.title, course: it.course, pages: it.pages ?? null, priority: it.priority ?? null });
+planned.set(k, planned.get(k)! + minutes);
+}
+}
+}
+if (nextBlocks.length) setBlocks(prev => [...prev, ...nextBlocks]);
+}
+
+function setAvailForDow(dow: number, val: number) { const v = Math.max(0, Math.round(val)); setAvailability(prev => ({ ...prev, [dow]: v })); }
+function shiftWeek(delta: number) { setWeekStart(prev => { const x = new Date(prev); x.setDate(x.getDate() + delta*7); return mondayOf(x); }); }
+function clearThisWeek() {
+const keys = new Set(days.map(d => ymd(d))); setBlocks(prev => prev.filter(b => !keys.has(b.day)));
+}
+async function promoteWeekToTasks() {
+const keys = new Set(days.map(d => ymd(d)));
+const batch = blocks.filter(b => keys.has(b.day));
+let ok = 0, fail = 0;
+for (const b of batch) {
+const body: any = { title: b.title, course: b.course || null, dueDate: endOfDayIso(b.day), status: 'todo', estimatedMinutes: b.plannedMinutes, priority: b.priority ?? null, tags: ['week-plan'] };
+try { const res = await fetch('/api/tasks', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) }); if (res.ok) ok++; else fail++; } catch { fail++; }
+}
+if (typeof window !== 'undefined') window.alert(`Promoted ${ok} task(s)${fail?`, ${fail} failed`:''}`);
+}
+
+const noBacklog = backlogSorted.length === 0;
+
+return (
+<main className="space-y-6">
+<section className="card p-6 space-y-4">
+<div className="flex flex-col gap-2 md:flex-row md:items-center md:justify-between">
+<div className="flex items-center gap-2">
+<button aria-label="Previous week" onClick={()=>shiftWeek(-1)} className="px-2 py-1 rounded border border-[#1b2344] focus-visible:outline focus-visible:outline-2 focus-visible:outline-blue-500">◀</button>
+<div className="text-sm" aria-live="polite">Week of {dayLabel(weekStart)}</div>
+<button aria-label="Jump to this week" onClick={()=>setWeekStart(mondayOf(new Date()))} className="px-2 py-1 rounded border border-[#1b2344] focus-visible:outline focus-visible:outline-2 focus-visible:outline-blue-500">This week</button>
+<button aria-label="Next week" onClick={()=>shiftWeek(1)} className="px-2 py-1 rounded border border-[#1b2344] focus-visible:outline focus-visible:outline-2 focus-visible:outline-blue-500">▶</button>
+</div>
+<div className="flex items-center gap-2">
+<button onClick={autopackWeek} className="px-3 py-2 rounded bg-blue-600 hover:bg-blue-500 text-sm focus-visible:outline focus-visible:outline-2 focus-visible:outline-blue-500">Autopack Week</button>
+<button onClick={clearThisWeek} className="px-3 py-2 rounded border border-[#1b2344] text-sm focus-visible:outline focus-visible:outline-2 focus-visible:outline-blue-500">Clear This Week</button>
+<button onClick={promoteWeekToTasks} className="px-3 py-2 rounded border border-emerald-600 text-emerald-400 text-sm focus-visible:outline focus-visible:outline-2 focus-visible:outline-blue-500">Promote Week → Tasks</button>
+<button onClick={computeCatchUpPreview} className="px-3 py-2 rounded border border-[#1b2344] text-sm focus-visible:outline focus-visible:outline-2 focus-visible:outline-blue-500">Catch-Up</button>
+<button onClick={undoCatchUp} className="px-3 py-2 rounded border border-[#1b2344] text-sm disabled:opacity-50" disabled={!undoSnapshot}>Undo Last</button>
+</div>
+</div>
+<div className="space-y-2">
+<div className="text-xs text-slate-300/70">Availability (minutes per weekday)</div>
+<div className="grid grid-cols-2 sm:grid-cols-4 md:grid-cols-7 gap-2">
+{[1,2,3,4,5,6,0].map(dow => (
+<div key={dow} className="rounded border border-[#1b2344] p-2">
+<label className="block text-xs mb-1" htmlFor={`avail-${dow}`}>{['Sun','Mon','Tue','Wed','Thu','Fri','Sat'][dow]}</label>
+<input id={`avail-${dow}`} type="number" min={0} value={availability[dow] ?? 0} onChange={e=>setAvailForDow(dow, parseInt(e.target.value||'0',10))} className="w-full bg-[#0b1020] border border-[#1b2344] rounded px-2 py-1 text-sm focus-visible:outline focus-visible:outline-2 focus-visible:outline-blue-500" />
+</div>
+))}
+</div>
+</div>
+</section>
+
+<section className="card p-6 space-y-4">
+<div>
+<h3 className="text-sm font-medium mb-2">Inbox (drag to a day)</h3>
+{noBacklog ? (
+<div className="rounded border border-dashed border-[#1b2344] p-4 text-sm text-slate-300/80">No inbox items yet. Add some in <a href="/tasks?tag=inbox" className="underline focus-visible:outline focus-visible:outline-2 focus-visible:outline-blue-500">Inbox</a> and return.</div>
+) : (
+<div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-2">
+{backlogSorted.map(it => (
+<div key={it.id} draggable onDragStart={(e)=>onDragStartBacklog(e,it)} className={`p-2 rounded border focus-within:outline focus-within:outline-2 focus-within:outline-blue-500 ${scheduledIdsThisWeek.has(it.id)?'border-emerald-700 bg-emerald-900/10':'border-[#1b2344]'}`} aria-grabbed="false">
+<div className="text-sm text-slate-200 truncate">{it.course ? `${it.course}: ` : ''}{it.title}</div>
+<div className="text-xs text-slate-300/70 flex items-center gap-2 mt-1">
+{it.dueDate ? <span>due {it.dueDate}</span> : <span>no due</span>}
+{typeof it.priority==='number' ? <span>p{it.priority}</span> : null}
+{typeof it.pages==='number' ? <span>{it.pages}p</span> : null}
+</div>
+</div>
+))}
+</div>
+)}
+</div>
+</section>
+
+<section className="space-y-3">
+<div className="grid grid-cols-1 md:grid-cols-7 gap-2">
+{days.map((d) => {
+const k = ymd(d);
+const planned = plannedByDay[k] || 0;
+const cap = availability[d.getDay()] ?? 0;
+const overBy = Math.max(0, planned - cap);
+const pct = cap>0 ? Math.min(100, Math.round((planned/cap)*100)) : (planned>0?100:0);
+const dayBlocks = blocks.filter(b => b.day === k);
+return (
+<div key={k} className={`rounded border ${overBy>0?'border-rose-600':'border-[#1b2344]'} p-3 min-h-[220px]`} onDragOver={(e)=>e.preventDefault()} onDrop={(e)=>onDropDay(e,d)} role="listbox" aria-label={`Planned items for ${dayLabel(d)}`}>
+<div className="flex items-center justify-between mb-2">
+<div className="text-sm text-slate-200">{dayLabel(d)}</div>
+<div className="text-xs text-slate-300/70">{planned} / {cap}m</div>
+</div>
+<div className="h-2 w-full bg-[#0b1020] border border-[#1b2344] rounded overflow-hidden mb-2" role="progressbar" aria-valuemin={0} aria-valuemax={cap||0} aria-valuenow={planned} aria-label="Planned minutes">
+<div className={`${overBy>0?'bg-rose-600':'bg-blue-600'}`} style={{ width: `${pct}%`, height: '100%' }} />
+</div>
+{overBy>0 ? <div className="text-[11px] text-rose-400 mb-2">Over by {overBy}m</div> : null}
+<ul className="space-y-1">
+{dayBlocks.length===0 ? (
+<li className="text-[11px] text-slate-300/50">Drop tasks here</li>
+) : dayBlocks.map(b => (
+<li key={b.id} className="text-[11px] flex items-start gap-2">
+<div className="flex-1 min-w-0">
+<div className="text-slate-200 truncate">{b.course ? `${b.course}: ` : ''}{b.title}</div>
+<div className="text-slate-300/70">{b.plannedMinutes}m{b.guessed ? <span className="ml-1 inline-block px-1 rounded border border-amber-500 text-amber-400">guessed</span> : null}</div>
+</div>
+<button aria-label="Remove block" onClick={()=>removeBlock(b.id)} className="px-1 py-0.5 rounded border border-[#1b2344] text-xs focus-visible:outline focus-visible:outline-2 focus-visible:outline-blue-500">X</button>
+</li>
+))}
+</ul>
+</div>
+);
+})}
+</div>
+</section>
+
+{/* Catch-Up Preview Modal */}
+{showCatchup && catchupPreview && (
+<div role="dialog" aria-modal="true" className="fixed inset-0 z-50 flex items-center justify-center">
+<div className="absolute inset-0 bg-black/60" onClick={()=>{ setShowCatchup(false); setCatchupPreview(null); }} />
+<div className="relative z-10 max-w-3xl w-[92vw] bg-[#0b1020] border border-[#1b2344] rounded p-4">
+<div className="flex items-center justify-between mb-2">
+<h4 className="text-sm font-medium">Catch-Up Preview (next 14 days)</h4>
+<button onClick={()=>{ setShowCatchup(false); setCatchupPreview(null); }} className="text-xs px-2 py-1 rounded border border-[#1b2344]">Close</button>
+</div>
+<div className="max-h-[60vh] overflow-y-auto space-y-3">
+{catchupPreview.days.map(d => (
+<div key={d.day} className="border border-[#1b2344] rounded p-2">
+<div className="text-xs text-slate-300/70 mb-1">{d.day} · {d.usedAfter}/{d.total}m (was {d.usedBefore}m)</div>
+{d.items.length === 0 ? (
+<div className="text-xs text-slate-300/50">No placements</div>
+) : (
+<ul className="text-xs space-y-1">
+{d.items.map((it, i) => (
+<li key={i} className="flex items-center justify-between">
+<span className="truncate mr-2">{it.course ? `${it.course}: `: ''}{it.title}</span>
+<span>{it.minutes}m{it.guessed ? <span className="ml-1 inline-block px-1 rounded border border-amber-500 text-amber-400">guessed</span> : null}</span>
+</li>
+))}
+</ul>
+)}
+</div>
+))}
+{catchupPreview.unschedulable.length > 0 && (
+<div className="border border-rose-700 rounded p-2">
+<div className="text-xs text-rose-400 mb-1">Could not schedule (insufficient capacity before due date)</div>
+<ul className="text-xs space-y-1">
+{catchupPreview.unschedulable.map(u => (
+<li key={u.taskId} className="flex items-center justify-between">
+<span className="truncate mr-2">{u.title}</span>
+<span>{u.remaining}m · due {u.dueYmd}</span>
+</li>
+))}
+</ul>
+</div>
+)}
+</div>
+<div className="mt-3 flex items-center justify-end gap-2">
+<button onClick={()=>{ setShowCatchup(false); setCatchupPreview(null); }} className="px-3 py-2 rounded border border-[#1b2344] text-sm">Cancel</button>
+<button onClick={applyCatchUp} className="px-3 py-2 rounded bg-blue-600 hover:bg-blue-500 text-sm">Apply Catch-Up</button>
+</div>
+</div>
+</div>
+)}
+</main>
+);
+}
