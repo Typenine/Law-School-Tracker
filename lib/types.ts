@@ -178,3 +178,11 @@ export interface StatsPayload {
     totalTasks: number;
   }>;
 }
+
+// Weekly study goals: global or per-course scope
+export interface WeeklyGoal {
+  id: string;
+  scope: 'global' | 'course';
+  weeklyMinutes: number;
+  course?: string | null;
+}

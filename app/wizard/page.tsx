@@ -30,7 +30,7 @@ export default function WizardPreviewPage() {
 
   return (
     <main className="space-y-4">
-      <h1 className="text-xl font-semibold">Syllabus Import Wizard (Preview)</h1>
+      <h1 className="text-xl font-semibold">Import Wizard (Preview)</h1>
       <div className="card p-4 space-y-3">
         <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
           <div>
@@ -43,7 +43,7 @@ export default function WizardPreviewPage() {
             <p className="text-xs text-slate-300/70 mt-1">Default America/Chicago</p>
           </div>
           <div>
-            <label className="block text-sm mb-1">Syllabus file</label>
+            <label className="block text-sm mb-1">Source file</label>
             <input type="file" accept=".pdf,.docx,.txt" onChange={e => setFile(e.target.files?.[0] || null)} className="w-full" />
           </div>
         </div>

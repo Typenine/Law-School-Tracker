@@ -326,7 +326,7 @@ export default function TaskTable() {
             .filter(t => (!currentTerm || (t.term || '') === currentTerm)).length === 0 && tasks.length > 0) ? (
         <p className="text-sm text-slate-300/80">No matching tasks. Adjust filters.</p>
       ) : tasks.length === 0 ? (
-        <p className="text-sm text-slate-300/80">No tasks yet. Upload a syllabus or add tasks.</p>
+        <p className="text-sm text-slate-300/80">No tasks yet. Add tasks in Backlog or here.</p>
       ) : (
         <div className="overflow-x-auto">
           <table className="w-full text-sm">

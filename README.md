@@ -1,13 +1,12 @@
 # Law School Tracker (Next.js on Vercel)
 
-A simple app to help you stay on track with readings and assignments and log study sessions. Upload syllabi (PDF/DOCX/TXT) to auto-create dated tasks.
+A simple app to help you stay on track with readings and assignments and log study sessions.
 
 ## Features
-- Upload a syllabus to parse readings/assignments into dated tasks
+- Backlog Quick Add and filters (status, course)
 - Task dashboard: due dates, status, quick complete/delete
-- Quick-add task form and filters (status, course)
 - Export tasks to calendar via ICS download
-- Log study sessions with minutes, focus level (1-10), notes
+- Log study sessions with minutes, focus level (1-10), notes (CSV import supported)
 - Stats: upcoming tasks, hours this week, focus average
 - Planner page: next 7 days grouped by date
 - Storage: Postgres via `DATABASE_URL` on Vercel; JSON file locally for dev
@@ -39,12 +38,8 @@ By default, data is stored in `data/db.json` (created on first write). This file
 - Push this repo to GitHub/GitLab/Bitbucket
 - Import to Vercel → Framework: Next.js → set `DATABASE_URL` if using Postgres → Deploy
 
-## Supported Upload Types
-- PDF: parsed with `pdf-parse`
-- DOCX: parsed with `mammoth`
-- TXT: read as plain text
-
-Parsing syllabi is heuristic. After upload, review tasks and edit any details.
+## Import Sessions (CSV)
+- Use Settings → Import Data (CSV) to import study sessions with mapping, preview, deduplication, and append/replace modes.
 
 ## ICS Export (Calendar)
 - Use the "Download .ics" button in the Tasks card (homepage) or visit `/api/export/ics` directly.
@@ -66,8 +61,7 @@ Parsing syllabi is heuristic. After upload, review tasks and edit any details.
 - Tasks are grouped by day; each card shows title, course, time, and status.
 
 ## Estimated Minutes
-- The parser uses simple heuristics (e.g., page ranges like `pp. 10-25` ≈ 3 min/page) to set `estimatedMinutes` for reading tasks.
-- You can edit estimated minutes inline in the Tasks table or set it when using Quick Add.
+- You can set estimated minutes when adding tasks or edit them inline in the Tasks table.
 
 ## Focus Timer
 - Start/Pause/Resume a timer and save the session to `/api/sessions` with rounded minutes and optional focus score.
@@ -79,7 +73,6 @@ Parsing syllabi is heuristic. After upload, review tasks and edit any details.
 
 ## Settings
 - Visit `/settings` to configure:
-  - Default minutes per page (used by the parser and upload flow)
   - Default focus (1-5) used by Focus Timer/Session Logger
   - Reminders (enable and lead hours)
   - Per-course minutes-per-page overrides

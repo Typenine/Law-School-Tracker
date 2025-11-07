@@ -1,4 +1,4 @@
-"use client";
+﻿"use client";
 import { useEffect, useMemo, useState } from 'react';
 import { Task } from '@/lib/types';
 import { courseColorClass } from '@/lib/colors';
@@ -113,6 +113,8 @@ export default function CalendarPage() {
   const [addStartTime, setAddStartTime] = useState<string>('');
   const [addEndTime, setAddEndTime] = useState<string>('');
   const [showClasses, setShowClasses] = useState<boolean>(true);
+  const [timedIcs, setTimedIcs] = useState<boolean>(false);
+  const [icsToken, setIcsToken] = useState<string>('');
 
   // Edit modal state
   const [editOpen, setEditOpen] = useState(false);
@@ -142,6 +144,7 @@ export default function CalendarPage() {
     if (typeof window !== 'undefined') {
       const v = window.localStorage.getItem('calendarShowClasses');
       setShowClasses(v === null ? true : v === 'true');
+      setIcsToken(window.localStorage.getItem('icsToken') || '');
     }
   }, []);
   useEffect(() => {
@@ -255,6 +258,16 @@ export default function CalendarPage() {
 
   const monthLabel = useMemo(() => new Date(year, month, 1).toLocaleString(undefined, { month: 'long', year: 'numeric' }), [year, month]);
   const monthNames = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
+
+  const icsHref = useMemo(() => {
+    const params: string[] = [];
+    if (courseFilter) params.push(`course=${encodeURIComponent(courseFilter)}`);
+    if (statusFilter !== 'all') params.push(`status=${encodeURIComponent(statusFilter)}`);
+    if (timedIcs) params.push('timed=1');
+    if (showClasses) params.push('classes=1');
+    if (icsToken) params.push(`token=${encodeURIComponent(icsToken)}`);
+    return `/api/export/ics${params.length ? `?${params.join('&')}` : ''}`;
+  }, [courseFilter, statusFilter, timedIcs, showClasses, icsToken]);
 
   function openAdd() {
     const today = new Date();
@@ -395,6 +408,7 @@ export default function CalendarPage() {
           </button>
           <button onClick={() => { const d = new Date(year, month + 1, 1); setYear(d.getFullYear()); setMonth(d.getMonth()); setMonthOpen(false); }} className="px-2 py-1 rounded border border-[#1b2344]">Next</button>
           <button onClick={openAdd} className="px-2 py-1 rounded bg-emerald-600 hover:bg-emerald-500">Add event</button>
+          <a href={icsHref} className="px-2 py-1 rounded bg-indigo-600 hover:bg-indigo-500">Download .ics</a>
 
           {monthOpen && (
             <div className="absolute z-10 top-[120%] left-1/2 -translate-x-1/2 bg-[#0b1020] border border-[#1b2344] rounded shadow-xl p-3 w-72">
@@ -515,7 +529,10 @@ export default function CalendarPage() {
         </div>
         <div>
           <label className="block text-xs text-slate-300/70 mb-1">Display</label>
-          <label className="inline-flex items-center gap-2 text-sm"><input type="checkbox" checked={showClasses} onChange={e => setShowClasses(e.target.checked)} /> Show class times</label>
+          <div className="flex items-center gap-4">
+            <label className="inline-flex items-center gap-2 text-sm"><input type="checkbox" checked={showClasses} onChange={e => setShowClasses(e.target.checked)} /> Show class times</label>
+            <label className="inline-flex items-center gap-2 text-sm"><input type="checkbox" checked={timedIcs} onChange={e => setTimedIcs(e.target.checked)} /> Timed blocks (.ics)</label>
+          </div>
         </div>
       </div>
       {loading && <div className="text-xs text-slate-300/70">Loading…</div>}

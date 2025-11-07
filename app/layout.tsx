@@ -7,7 +7,7 @@ import CommandPalette from '@/components/CommandPalette'
 
 export const metadata: Metadata = {
   title: 'Law School Tracker',
-  description: 'Stay on track with readings and assignments, plus study session logging.',
+  description: 'Structure your workload, stay on pace, and review your progress.',
 }
 
 export default function RootLayout({ children }: { children: React.ReactNode }) {
@@ -19,16 +19,20 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
       </head>
       <body>
         <div className="app-container">
-          <header className="mb-6">
-            <h1 className="text-2xl font-semibold">Law School Tracker</h1>
-            <p className="text-sm text-slate-300/80">Upload syllabi, manage tasks, and log study sessions.</p>
-            <nav className="mt-2 flex gap-3 text-sm">
-              <Link href="/" className="px-2 py-1 rounded border border-[#1b2344] hover:bg-[#0b1020]">Home</Link>
-              <Link href="/planner" className="px-2 py-1 rounded border border-[#1b2344] hover:bg-[#0b1020]">Planner</Link>
-              <Link href="/courses" className="px-2 py-1 rounded border border-[#1b2344] hover:bg-[#0b1020]">Courses</Link>
-              <Link href="/calendar" className="px-2 py-1 rounded border border-[#1b2344] hover:bg-[#0b1020]">Calendar</Link>
-              <Link href="/settings" className="px-2 py-1 rounded border border-[#1b2344] hover:bg-[#0b1020]">Settings</Link>
-              <Link href="/help" className="px-2 py-1 rounded border border-[#1b2344] hover:bg-[#0b1020]">Help</Link>
+          <header className="mb-6 space-y-3">
+            <div>
+              <h1 className="text-2xl font-semibold">Law School Tracker</h1>
+              <p className="text-sm text-slate-300/80">Structure your workload, stay on pace, and review your progress.</p>
+            </div>
+            <nav className="flex flex-wrap gap-2 text-sm">
+              <Link href="/" className="px-3 py-1.5 rounded border border-[#1b2344] hover:bg-[#0b1020]">Today</Link>
+              <Link href="/week-plan" className="px-3 py-1.5 rounded border border-[#1b2344] hover:bg-[#0b1020]">Week Plan</Link>
+              <Link href="/backlog" className="px-3 py-1.5 rounded border border-[#1b2344] hover:bg-[#0b1020]">Backlog</Link>
+              <Link href="/courses" className="px-3 py-1.5 rounded border border-[#1b2344] hover:bg-[#0b1020]">Courses</Link>
+              <Link href="/calendar" className="px-3 py-1.5 rounded border border-[#1b2344] hover:bg-[#0b1020]">Calendar</Link>
+              <Link href="/settings" className="px-3 py-1.5 rounded border border-[#1b2344] hover:bg-[#0b1020]">Settings</Link>
+              <Link href="/help" className="px-3 py-1.5 rounded border border-[#1b2344] hover:bg-[#0b1020]">Help</Link>
+              <Link href="/review" className="px-3 py-1.5 rounded border border-[#1b2344] hover:bg-[#0b1020]">Review</Link>
             </nav>
           </header>
           {children}

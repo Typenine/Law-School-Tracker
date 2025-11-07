@@ -1,4 +1,4 @@
-"use client";
+﻿"use client";
 import { useEffect, useMemo, useState } from 'react';
 import type { Course, Semester } from '@/lib/types';
 import { courseColorClass } from '@/lib/colors';
@@ -10,6 +10,27 @@ export const dynamic = 'force-dynamic';
 
 const SEMS: Semester[] = ['Spring','Summer','Fall'];
 
+type WeeklyGoal = { id: string; scope: 'global'|'course'; weeklyMinutes: number; course?: string | null };
+const LS_GOALS = 'weeklyGoalsV1';
+
+function chicagoYmd(d: Date): string {
+  const f = new Intl.DateTimeFormat('en-US', { timeZone: 'America/Chicago', year: 'numeric', month: '2-digit', day: '2-digit' });
+  const parts = f.formatToParts(d);
+  const y = parts.find(p=>p.type==='year')?.value || '0000';
+  const m = parts.find(p=>p.type==='month')?.value || '01';
+  const da = parts.find(p=>p.type==='day')?.value || '01';
+  return `${y}-${m}-${da}`;
+}
+function mondayOfChicago(d: Date): Date { const ymd = chicagoYmd(d); const [yy,mm,dd]=ymd.split('-').map(x=>parseInt(x,10)); const local = new Date(yy,(mm as number)-1,dd); const dow = local.getDay(); const delta = (dow + 6) % 7; local.setDate(local.getDate()-delta); return local; }
+function weekKeysChicago(d: Date): string[] { const monday = mondayOfChicago(d); return Array.from({length:7},(_,i)=>{const x=new Date(monday); x.setDate(x.getDate()+i); return chicagoYmd(x);}); }
+function loadGoals(): WeeklyGoal[] { if (typeof window==='undefined') return []; try { const raw=window.localStorage.getItem(LS_GOALS); const arr=raw?JSON.parse(raw):[]; return Array.isArray(arr)?arr:[]; } catch { return []; } }
+function saveGoals(goals: WeeklyGoal[]) { if (typeof window!=='undefined') window.localStorage.setItem(LS_GOALS, JSON.stringify(goals)); }
+function extractCourseFromNotes(notes?: string | null): string {
+  if (!notes) return '';
+  const m = notes.match(/^\s*\[([^\]]+)\]/);
+  return m ? m[1].trim() : '';
+}
+
 export default function CoursesPage() {
   const [courses, setCourses] = useState<Course[]>([]);
   const [loading, setLoading] = useState(true);
@@ -18,6 +39,9 @@ export default function CoursesPage() {
   const [showWizard, setShowWizard] = useState(false);
   const [showBacklog, setShowBacklog] = useState(false);
   const [editCourse, setEditCourse] = useState<Course | null>(null);
+  const [goals, setGoals] = useState<WeeklyGoal[]>([]);
+  const [sessions, setSessions] = useState<any[]>([]);
+  const [tasks, setTasks] = useState<any[]>([]);
 
   async function refresh() {
     setLoading(true);
@@ -27,7 +51,25 @@ export default function CoursesPage() {
     setLoading(false);
   }
 
-  useEffect(() => { refresh(); }, []);
+  useEffect(() => { refresh(); setGoals(loadGoals()); }, []);
+  useEffect(() => { saveGoals(goals); }, [goals]);
+
+  // Load sessions and tasks (for per-course logged minutes)
+  useEffect(() => {
+    let mounted = true;
+    (async () => {
+      try {
+        const [sRes, tRes] = await Promise.all([
+          fetch('/api/sessions', { cache: 'no-store' }),
+          fetch('/api/tasks', { cache: 'no-store' })
+        ]);
+        const sData = await sRes.json().catch(() => ({ sessions: [] }));
+        const tData = await tRes.json().catch(() => ({ tasks: [] }));
+        if (mounted) { setSessions(sData.sessions || []); setTasks(tData.tasks || []); }
+      } catch {}
+    })();
+    return () => { mounted = false; };
+  }, []);
 
   const fmt12 = (hhmm?: string | null) => {
     if (!hhmm || !/^\d{2}:\d{2}$/.test(hhmm)) return '';
@@ -53,6 +95,35 @@ export default function CoursesPage() {
       return true;
     });
   }, [courses, yearFilter, semFilter]);
+
+  // Per-course logged minutes this week
+  const weekKeys = useMemo(() => weekKeysChicago(new Date()), []);
+  const minutesByCourse = useMemo(() => {
+    const m = new Map<string, number>();
+    const tasksById = new Map<string, any>();
+    for (const t of (tasks||[])) if (t && t.id) tasksById.set(t.id, t);
+    for (const s of (sessions||[])) {
+      const k = chicagoYmd(new Date(s.when));
+      if (!weekKeys.includes(k)) continue;
+      let course = '';
+      if (s.taskId && tasksById.has(s.taskId)) course = tasksById.get(s.taskId)?.course || '';
+      if (!course) course = extractCourseFromNotes(s.notes);
+      if (!course) continue;
+      m.set(course, (m.get(course)||0) + (s.minutes||0));
+    }
+    return m;
+  }, [sessions, tasks, weekKeys]);
+
+  function setCourseGoalHours(courseTitle: string, hours: number) {
+    const mins = Math.max(0, Math.round(hours * 60));
+    setGoals(prev => {
+      const arr = prev.slice();
+      const idx = arr.findIndex(g => g.scope==='course' && (g.course||'') === courseTitle);
+      if (idx >= 0) arr[idx] = { ...arr[idx], weeklyMinutes: mins };
+      else arr.push({ id: `course:${courseTitle}`, scope: 'course', weeklyMinutes: mins, course: courseTitle });
+      return arr;
+    });
+  }
 
   return (
     <main className="space-y-4">
@@ -100,6 +171,7 @@ export default function CoursesPage() {
                 <th className="py-2 pr-4">Meeting</th>
                 <th className="py-2 pr-4">Dates</th>
                 <th className="py-2 pr-4">Term</th>
+                <th className="py-2 pr-4">Weekly Goal</th>
                 <th className="py-2 pr-4">Actions</th>
               </tr>
             </thead>
@@ -110,6 +182,9 @@ export default function CoursesPage() {
                   : ((Array.isArray(c.meetingDays) && c.meetingStart && c.meetingEnd)
                       ? [{ days: c.meetingDays, start: c.meetingStart, end: c.meetingEnd, location: c.room || c.location || null }]
                       : []);
+                const goalMin = goals.find(g => g.scope==='course' && (g.course||'')===c.title)?.weeklyMinutes || 0;
+                const loggedMin = minutesByCourse.get(c.title) || 0;
+                const pct = goalMin>0 ? Math.min(1, loggedMin/goalMin) : 0;
                 return (
                   <tr key={c.id} className="border-t border-[#1b2344]">
                     <td className="py-2 pr-4">
@@ -148,6 +223,16 @@ export default function CoursesPage() {
                     <td className="py-2 pr-4 whitespace-nowrap">
                       {c.semester && c.year ? `${c.semester} ${c.year}` : '—'}
                     </td>
+                    <td className="py-2 pr-4">
+                      <div className="flex items-center gap-2 mb-2">
+                        <label className="text-xs text-slate-300/70">Goal (hrs)</label>
+                        <input type="number" min={0} step={1} value={Math.round(goalMin/60)} onChange={e=>setCourseGoalHours(c.title, parseInt(e.target.value||'0',10)||0)} className="w-20 bg-[#0b1020] border border-[#1b2344] rounded px-2 py-1 text-sm" />
+                      </div>
+                      <div className="h-2 bg-[#0c1328] rounded overflow-hidden border border-[#1b2344]">
+                        <div className="h-full bg-emerald-600" style={{ width: `${Math.round(pct*100)}%` }}></div>
+                      </div>
+                      <div className="text-xs text-slate-300/70 mt-1">{Math.round(loggedMin/60)}h of {Math.round(goalMin/60)}h</div>
+                    </td>
                     <td className="py-2 pr-4 whitespace-nowrap">
                       <div className="flex items-center gap-2">
                         <a href={`/calendar?course=${encodeURIComponent(c.title)}`} className="px-2 py-1 rounded border border-[#1b2344] text-xs">Calendar</a>
@@ -164,11 +249,9 @@ export default function CoursesPage() {
                           onClick={async () => {
                             console.log('Delete clicked for course:', c.id, c.title);
                             if (!confirm(`Delete "${c.title}"? This will not delete related tasks.`)) return;
-                            
                             console.log('Making DELETE request to:', `/api/courses/${c.id}`);
                             const res = await fetch(`/api/courses/${c.id}`, { method: 'DELETE' });
                             console.log('DELETE response status:', res.status);
-                            
                             if (res.ok) {
                               console.log('Delete successful, removing from UI');
                               setCourses(prev => prev.filter(x => x.id !== c.id));

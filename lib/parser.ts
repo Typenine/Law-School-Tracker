@@ -82,7 +82,7 @@ function parseSemesterYear(text: string): { semester: Semester | null; year: num
   return { semester: null, year: yr ? parseInt(yr, 10) : null };
 }
 
-export function parseSyllabusToCourseMeta(text: string, fallbackTitle?: string | null): NewCourseInput | null {
+export function parseCourseMetaFromText(text: string, fallbackTitle?: string | null): NewCourseInput | null {
   const lines = text.split(/\r?\n/).map(l => l.trim()).filter(Boolean);
   const first = lines.slice(0, 40).join('\n');
   let title: string | undefined;
@@ -317,7 +317,7 @@ function unwrapHyphenation(s: string): string {
   return s.replace(/([A-Za-z])-[\r\n]+([a-z])/g, '$1$2');
 }
 
-export function parseSyllabusToTasks(text: string, course?: string | null, opts?: { minutesPerPage?: number, bulletsOnly?: boolean, shortWindow?: boolean, ignorePolicies?: boolean }): NewTaskInput[] {
+export function parseTextToTasks(text: string, course?: string | null, opts?: { minutesPerPage?: number, bulletsOnly?: boolean, shortWindow?: boolean, ignorePolicies?: boolean }): NewTaskInput[] {
   const normalized = unwrapHyphenation(text);
   const lines = normalized.split(/\r?\n/).map(l => l.trim()).filter(Boolean);
   const tasks: NewTaskInput[] = [];
@@ -419,7 +419,7 @@ export function parseSyllabusToTasks(text: string, course?: string | null, opts?
   if (tasks.length === 0) {
     const firstDate = chrono.parse(text, new Date(), { forwardDate: true })[0]?.date();
     if (firstDate) {
-      tasks.push({ title: 'Syllabus item', course: course ?? null, dueDate: endOfDay(firstDate).toISOString(), status: 'todo', estimatedMinutes: null });
+      tasks.push({ title: 'Parsed item', course: course ?? null, dueDate: endOfDay(firstDate).toISOString(), status: 'todo', estimatedMinutes: null });
     }
   }
 

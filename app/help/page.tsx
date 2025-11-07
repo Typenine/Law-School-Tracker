@@ -5,18 +5,16 @@ export default function HelpPage() {
     <main className="space-y-6">
       <section className="card p-5">
         <h2 className="text-xl font-semibold mb-2">Welcome to Law School Tracker</h2>
-        <p className="text-slate-300/80">This guide explains how to upload syllabi, manage tasks, log study time, and export to your calendar.</p>
+        <p className="text-slate-300/80">This guide explains how to manage tasks, plan your week, log study time, and export to your calendar.</p>
       </section>
 
       <section className="card p-5 space-y-3">
-        <h3 className="text-lg font-medium">Upload a syllabus</h3>
-        <ol className="list-decimal list-inside space-y-1 text-sm">
-          <li>Go to the home page and find the <b>Upload Syllabus</b> card.</li>
-          <li>Optionally enter a Course name and Minutes per page. You can enable <b>Preview before saving</b> to review parsed items.</li>
-          <li>Select a PDF/DOCX/TXT file and click <b>Upload & Parse</b>.</li>
-          <li>If preview is enabled, a review table appears. Edit, uncheck unwanted items, and click <b>Save All</b>.</li>
-        </ol>
-        <p className="text-xs text-slate-300/70">Tip: Minutes/page and course-specific defaults are remembered in Settings.</p>
+        <h3 className="text-lg font-medium">Backlog & CSV Import</h3>
+        <ul className="list-disc list-inside space-y-1 text-sm">
+          <li><b>Backlog Quick Add</b>: Capture tasks fast with title, optional course, due date, and estimated minutes.</li>
+          <li><b>CSV Import (sessions)</b>: Open <b>Settings → Import Data (CSV)</b> to import study sessions with mapping, preview, deduplication, and replace/append modes.</li>
+        </ul>
+        <p className="text-xs text-slate-300/70">Tip: Minutes/page and per-course defaults can be set in Settings.</p>
       </section>
 
       <section className="card p-5 space-y-3">

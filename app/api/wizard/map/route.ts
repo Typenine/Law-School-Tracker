@@ -58,7 +58,7 @@ export async function POST(req: Request) {
     const rd = (r[readingsCol] || '').trim();
     const as = (r[assignmentsCol] || '').trim();
     if (!dc && !tp && !rd && !as) continue;
-    const headerish = /\b(professor|instructor|syllabus|suite|office|email|phone)\b/i.test([dc, tp, rd, as].join(' '));
+    const headerish = /\b(professor|instructor|suite|office|email|phone)\b/i.test([dc, tp, rd, as].join(' '));
     if (headerish) continue;
 
     let when: Date | null = null;

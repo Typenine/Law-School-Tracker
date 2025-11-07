@@ -1,4 +1,4 @@
-// Data model for Syllabus Import Wizard (strict names per spec)
+// Data model for Import Wizard (strict names per spec)
 
 export type SourceType = 'casebook' | 'article' | 'case' | 'statute';
 export type ReadingPriority = 'required' | 'optional' | 'skim';

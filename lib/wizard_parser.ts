@@ -2,7 +2,7 @@ import * as chrono from 'chrono-node';
 import { endOfDay } from 'date-fns';
 import type { WizardCourse, WizardPreview, Session, Reading, WizardTask, ReadingPriority, TaskType } from './wizard_types';
 import type { NewCourseInput } from './types';
-import { parseSyllabusToCourseMeta } from './parser';
+import { parseCourseMetaFromText } from './parser';
 
 function unwrapHyphenation(s: string): string {
   return s.replace(/([A-Za-z])-[\r\n]+([a-z])/g, '$1$2');
@@ -49,7 +49,7 @@ export function buildWizardPreview(rawText: string, courseHint?: string | null, 
   const lines = text.split(/\r?\n/);
 
   // Stage 1: meta
-  const metaParsed = (() => { try { return parseSyllabusToCourseMeta(text, courseHint); } catch { return null as NewCourseInput | null; } })();
+  const metaParsed = (() => { try { return parseCourseMetaFromText(text, courseHint); } catch { return null as NewCourseInput | null; } })();
   const course: WizardCourse | null = metaParsed ? {
     code: metaParsed.code ?? null,
     title: metaParsed.title ?? null,

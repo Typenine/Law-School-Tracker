@@ -602,6 +602,21 @@ export async function createSession(input: NewSessionInput): Promise<StudySessio
   return s;
 }
 
+// Reset all study sessions. Returns number of rows removed (best-effort in JSON mode)
+export async function resetAllSessions(): Promise<number> {
+  if (DB_URL) {
+    const p = getPool();
+    const res = await p.query(`DELETE FROM sessions`);
+    // rowCount may be undefined for some drivers; treat as 0
+    return (res as any)?.rowCount ?? 0;
+  }
+  const db = await readJson();
+  const n = db.sessions.length;
+  db.sessions = [];
+  await writeJson(db);
+  return n;
+}
+
 export async function statsNow() {
   const tasks = await listTasks();
   const sessions = await listSessions();
