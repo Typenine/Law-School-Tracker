@@ -20,6 +20,7 @@ type StudySession = {
   focus?: number | null;
   notes?: string | null;
   activity?: string | null;
+  pagesRead?: number | null;
 };
 
 type PlannedBlock = {
@@ -288,6 +289,37 @@ export default function ReviewPage() {
     return { rows, totalMinutes, totalSessions, weightedAvgFocus };
   }, [sessions, startYMD30]);
 
+  // Reading Pace by Course (Last 30 days)
+  type PaceRow = { course: string; minutes: number; pages: number; sessions: number; mpp: number };
+  const paceByCourse30 = useMemo(() => {
+    const map = new Map<string, { minutes: number; pages: number; sessions: number }>();
+    for (const s of sessions) {
+      const ymd = chicagoYMD(new Date(s.when));
+      if (ymd < startYMD30) continue;
+      const pages = Math.max(0, Number((s as any).pagesRead) || 0);
+      if (pages <= 0) continue;
+      const isReading = (s.activity || '').toLowerCase() === 'reading';
+      if (!isReading) continue;
+      const task = s.taskId ? tasksById.get(s.taskId) : undefined;
+      const inferredCourse = extractCourseFromNotes(s.notes);
+      const isIntern = (s.activity || '').toLowerCase() === 'internship';
+      const course = (task?.course || (isIntern ? 'Internship' : inferredCourse) || 'Unassigned') as string;
+      const entry = map.get(course) || { minutes: 0, pages: 0, sessions: 0 };
+      entry.minutes += Math.max(0, Number(s.minutes) || 0);
+      entry.pages += pages;
+      entry.sessions += 1;
+      map.set(course, entry);
+    }
+    const rows: PaceRow[] = Array.from(map.entries()).map(([course, v]) => ({
+      course,
+      minutes: v.minutes,
+      pages: v.pages,
+      sessions: v.sessions,
+      mpp: v.pages > 0 ? v.minutes / v.pages : 0,
+    })).sort((a, b) => (a.course || '').localeCompare(b.course || ''));
+    return { rows };
+  }, [sessions, tasksById, startYMD30]);
+
   // Focus Averages: 7/14/30-day (sessions with non-null focus)
   function avgFocusSince(days: number) {
     const cutoff = Date.now() - days * 24 * 60 * 60 * 1000;
@@ -480,6 +512,38 @@ export default function ReviewPage() {
             summaryBullets.map((b, i) => <li key={i}>{b}</li>)
           )}
         </ul>
+      </section>
+
+      <section className="card p-5 space-y-3">
+        <h3 className="text-lg font-medium">Reading Pace by Course (Last 30 days)</h3>
+        <div className="overflow-x-auto">
+          <table className="w-full text-sm">
+            <thead className="text-left text-slate-300/60">
+              <tr>
+                <th className="py-1 pr-2">Course</th>
+                <th className="py-1 pr-2">Minutes</th>
+                <th className="py-1 pr-2">Pages</th>
+                <th className="py-1 pr-2">Sessions</th>
+                <th className="py-1 pr-2">Min/Page</th>
+              </tr>
+            </thead>
+            <tbody>
+              {paceByCourse30.rows.length === 0 ? (
+                <tr className="border-t border-[#1b2344]"><td className="py-1 pr-2">—</td><td className="py-1 pr-2">0m</td><td className="py-1 pr-2">0</td><td className="py-1 pr-2">0</td><td className="py-1 pr-2">—</td></tr>
+              ) : (
+                paceByCourse30.rows.map((r) => (
+                  <tr key={r.course} className="border-t border-[#1b2344]">
+                    <td className="py-1 pr-2">{r.course || 'Unassigned'}</td>
+                    <td className="py-1 pr-2">{fmtHM(r.minutes)}</td>
+                    <td className="py-1 pr-2">{r.pages}</td>
+                    <td className="py-1 pr-2">{r.sessions}</td>
+                    <td className="py-1 pr-2">{r.mpp > 0 ? r.mpp.toFixed(2) : '—'}</td>
+                  </tr>
+                ))
+              )}
+            </tbody>
+          </table>
+        </div>
       </section>
 
       {/* Weekly Burndown */}

@@ -6,6 +6,14 @@ type Props = { onCreated?: () => void };
 
 function clamp(n: number, lo: number, hi: number) { return Math.max(lo, Math.min(hi, n)); }
 function round5(n: number) { return Math.round(n / 5) * 5; }
+function fmtHM(min: number | null | undefined): string {
+  const n = Math.max(0, Math.round(Number(min) || 0));
+  const h = Math.floor(n / 60);
+  const m = n % 60;
+  if (h > 0 && m > 0) return `${h}h ${m}m`;
+  if (h > 0) return `${h}h`;
+  return `${m}m`;
+}
 
 function minutesPerPageFor(course: string): number {
   try {
@@ -259,7 +267,7 @@ export default function MultiAddDrawer({ onCreated }: Props) {
                   <td className="py-1 pr-2">{r.title}</td>
                   <td className="py-1 pr-2">{r.pages || '-'}</td>
                   <td className="py-1 pr-2">{r.due ? new Date(r.due).toLocaleString() : '—'}</td>
-                  <td className="py-1 pr-2">{r.estimate ? `${r.estimate}m (${r.estimateOrigin})` : '—'}</td>
+                  <td className="py-1 pr-2">{r.estimate ? `${fmtHM(r.estimate)} (${r.estimateOrigin})` : '—'}</td>
                 </tr>
               ))
             )}

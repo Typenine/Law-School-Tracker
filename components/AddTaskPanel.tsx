@@ -6,6 +6,14 @@ type Props = { onCreated?: () => void };
 
 function clamp(n: number, lo: number, hi: number) { return Math.max(lo, Math.min(hi, n)); }
 function round5(n: number) { return Math.round(n / 5) * 5; }
+function fmtHM(min: number | null | undefined): string {
+  const n = Math.max(0, Math.round(Number(min) || 0));
+  const h = Math.floor(n / 60);
+  const m = n % 60;
+  if (h > 0 && m > 0) return `${h}h ${m}m`;
+  if (h > 0) return `${h}h`;
+  return `${m}m`;
+}
 
 function minutesPerPageFor(course: string): number {
   try {
@@ -307,7 +315,7 @@ export default function AddTaskPanel({ onCreated }: Props) {
         {estimateOrigin === 'manual' ? (
           <input type="number" min={0} step={5} value={manualEst} onChange={e=>setManualEst(e.target.value)} className="w-24 bg-[#0b1020] border border-[#1b2344] rounded px-2 py-1 text-sm" />
         ) : (
-          <div className="text-sm px-2 py-1 rounded border border-[#1b2344]">≈ {est || 0}m ({estimateOrigin || 'auto'})</div>
+          <div className="text-sm px-2 py-1 rounded border border-[#1b2344]">≈ {fmtHM(est || 0)} ({estimateOrigin || 'auto'})</div>
         )}
         <button type="button" onClick={() => setEstimateOrigin(estimateOrigin==='manual'? null : 'manual')} className="px-2 py-1 rounded border border-[#1b2344] text-xs">{estimateOrigin==='manual' ? 'Auto' : 'Edit'}</button>
         {dupWarn && <div className="text-xs text-amber-400">{dupWarn} <span className="text-slate-300/60">(Add anyway allowed)</span></div>}
