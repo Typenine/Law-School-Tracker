@@ -58,8 +58,8 @@ function chicagoYmd(d: Date): string { const f = new Intl.DateTimeFormat('en-US'
 function mondayOfChicago(d: Date): Date { const ymd = chicagoYmd(d); const [yy,mm,dd]=ymd.split('-').map(x=>parseInt(x,10)); const local = new Date(yy,(mm as number)-1,dd); const dow = local.getDay(); const delta = (dow + 1) % 7; local.setDate(local.getDate()-delta); return local; }
 function weekKeysChicago(d: Date): string[] { const start = mondayOfChicago(d); return Array.from({length:7},(_,i)=>{const x=new Date(start); x.setDate(x.getDate()+i); return chicagoYmd(x);}); }
 function startOfDay(d: Date) { const x = new Date(d); x.setHours(0,0,0,0); return x; }
-function mondayOf(d: Date) { const x = startOfDay(d); const dow = x.getDay(); const delta = (dow + 1) % 7; x.setDate(x.getDate() - delta); return x; }
-function ymd(d: Date) { return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`; }
+function saturdayOf(d: Date) { const x = startOfDay(d); const dow = x.getDay(); const delta = (dow - 6 + 7) % 7; x.setDate(x.getDate() - delta); return x; }
+function ymd(d: Date) { return chicagoYmd(d); }
 function dayLabel(d: Date) { return d.toLocaleDateString(undefined, { weekday: 'short', month: 'short', day: 'numeric' }); }
 function endOfDayIso(ymdStr: string) { const [y,m,da]=ymdStr.split('-').map(n=>parseInt(n,10)); const x=new Date(y,(m as number)-1,da,23,59,59,999); return x.toISOString(); }
 function minutesPerPage(): number { if (typeof window==='undefined') return 3; const s=window.localStorage.getItem('minutesPerPage'); const n=s?parseFloat(s):NaN; return !isNaN(n)&&n>0?n:3; }
@@ -141,16 +141,16 @@ export default function WeekPlanPage() {
   const [sortBy, setSortBy] = useState<'due'|'course'|'priority'|'estimate'>('due');
   const [sortDir, setSortDir] = useState<'asc'|'desc'>('asc');
   const [weekStart, setWeekStart] = useState<Date>(() => {
-    if (typeof window === 'undefined') return mondayOf(new Date());
+    if (typeof window === 'undefined') return saturdayOf(new Date());
     try {
       const s = window.localStorage.getItem(LS_WEEK_START);
       if (s) {
         const [y,m,da] = s.split('-').map(x=>parseInt(x,10));
         const dt = new Date(y,(m as number)-1,da);
-        return mondayOf(dt);
+        return saturdayOf(dt);
       }
     } catch {}
-    return mondayOf(new Date());
+    return saturdayOf(new Date());
   });
   const [availability, setAvailability] = useState<AvailabilityTemplate>({ 0:120,1:240,2:240,3:240,4:240,5:240,6:120 });
   const [blocks, setBlocks] = useState<ScheduledBlock[]>([]);
@@ -209,7 +209,7 @@ export default function WeekPlanPage() {
           const wk = settings.weekPlanWeekStartYmd;
           if (typeof wk === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(wk)) {
             const [y,m,da] = wk.split('-').map(x=>parseInt(x,10));
-            setWeekStart(mondayOf(new Date(y,(m as number)-1,da)));
+            setWeekStart(saturdayOf(new Date(y,(m as number)-1,da)));
           }
           const sStart: any = (settings as any).availabilityStartHHMM;
           const sEnd: any = (settings as any).availabilityEndHHMM;
@@ -303,7 +303,7 @@ export default function WeekPlanPage() {
   // Build busy minutes and overlappers per day from classes and timed events
   const busyByDay = useMemo(() => {
     const map: Record<string, number> = {};
-    const items: Record<string, Array<{ label: string; time?: string; sMin?: number; eMin?: number }>> = {};
+    const items: Record<string, Array<{ label: string; time?: string; sMin?: number; eMin?: number; color?: string }>> = {};
     const keyOf = (dt: Date) => `${dt.getFullYear()}-${String(dt.getMonth()+1).padStart(2,'0')}-${String(dt.getDate()).padStart(2,'0')}`;
     const fmt12 = (hhmm?: string | null) => {
       if (!hhmm || !/^\d{2}:\d{2}$/.test(hhmm)) return '';
@@ -328,9 +328,14 @@ export default function WeekPlanPage() {
         for (const b of blocksArr) {
           if (!Array.isArray(b.days)) continue;
           if (b.days.includes(d.getDay())) {
-            const sMin = toMinLocal((b as any).start); const eMin = toMinLocal((b as any).end);
+            const sNorm = normHHMM((b as any).start);
+            const eNorm = normHHMM((b as any).end);
+            const sMin = toMinLocal(sNorm); const eMin = toMinLocal(eNorm);
             const dur = (sMin!=null && eMin!=null && eMin>sMin) ? (eMin - sMin) : 0;
-            const k = keyOf(d); map[k] += dur; items[k].push({ label: c.title || c.code || 'Class', time: ((b as any).start && (b as any).end) ? `${fmt12((b as any).start)}–${fmt12((b as any).end)}` : undefined, sMin: sMin==null?undefined:sMin, eMin: eMin==null?undefined:eMin });
+            const k = keyOf(d);
+            map[k] += dur;
+            const courseName = (c.title || c.code || '').toString();
+            items[k].push({ label: courseName || 'Class', time: ((b as any).start && (b as any).end) ? `${fmt12(sNorm||'')}–${fmt12(eNorm||'')}` : undefined, sMin: sMin==null?undefined:sMin, eMin: eMin==null?undefined:eMin, color: colorForCourse(courseName) });
           }
         }
       }
@@ -339,9 +344,15 @@ export default function WeekPlanPage() {
     for (const t of (tasks||[])) {
       const k = keyOf(new Date(t.dueDate));
       if (!(k in map)) continue;
-      const sMin = toMinLocal((t as any).startTime); const eMin = toMinLocal((t as any).endTime);
+      const sNorm = normHHMM((t as any).startTime);
+      const eNorm = normHHMM((t as any).endTime);
+      const sMin = toMinLocal(sNorm); const eMin = toMinLocal(eNorm);
       const dur = (sMin!=null && eMin!=null && eMin>sMin) ? (eMin - sMin) : 0;
-      if (dur > 0) { map[k] += dur; items[k].push({ label: t.title, time: ((t as any).startTime && (t as any).endTime) ? `${fmt12((t as any).startTime)}–${fmt12((t as any).endTime)}` : undefined, sMin: sMin==null?undefined:sMin, eMin: eMin==null?undefined:eMin }); }
+      if (dur > 0) {
+        map[k] += dur;
+        const courseName = (t.course || '').toString();
+        items[k].push({ label: t.title, time: (sNorm && eNorm) ? `${fmt12(sNorm)}–${fmt12(eNorm)}` : undefined, sMin: sMin==null?undefined:sMin, eMin: eMin==null?undefined:eMin, color: colorForCourse(courseName) });
+      }
     }
     // Finals (calendar-only)
     const finals: Array<{ iso: string; title: string }> = [
@@ -353,8 +364,16 @@ export default function WeekPlanPage() {
       if (k in map) {
         const s = toMinLocal('09:00'); const e = s!=null ? s+180 : null;
         map[k] += 180;
-        items[k].push({ label: f.title, time: `${fmt12('09:00')}–${fmt12('12:00')}`, sMin: s==null?undefined:s, eMin: e==null?undefined:e! });
+        items[k].push({ label: f.title, time: `${fmt12('09:00')}–${fmt12('12:00')}`, sMin: s==null?undefined:s, eMin: e==null?undefined:e!, color: colorForCourse(f.title.replace(/^Final —\s*/,'').trim()) });
       }
+    }
+    // Sort events by start time (sMin) ascending
+    for (const k of Object.keys(items)) {
+      items[k].sort((a,b) => {
+        const sa = (a.sMin ?? 1e9); const sb = (b.sMin ?? 1e9);
+        if (sa !== sb) return sa - sb;
+        return (a.label||'').localeCompare(b.label||'');
+      });
     }
     return { minutes: map, items };
   }, [courses, tasks, days]);
@@ -585,17 +604,35 @@ export default function WeekPlanPage() {
     const nextBlocks: ScheduledBlock[] = [];
     for (const t of unscheduled) {
       const { minutes, guessed } = estimateMinutesForTask(t);
+      const dueY = chicagoYmd(new Date(t.dueDate));
       let placed = false;
+      // try days up to and including due date
       for (const d of days) {
-        const k = ymd(d); const cap = eff(d); const cur = planned.get(k)!;
+        const k = ymd(d);
+        if (k > dueY) continue;
+        const cap = eff(d); const cur = planned.get(k)!;
         if (cur + minutes <= cap) { nextBlocks.push({ id: uid(), taskId: t.id, day: k, plannedMinutes: minutes, guessed, title: t.title, course: t.course || '', pages: (typeof (t as any).pagesRead==='number' && (t as any).pagesRead>0)? (t as any).pagesRead : null, priority: t.priority ?? null }); planned.set(k, cur + minutes); placed = true; break; }
       }
+      // if not placed before due date, choose best remaining before due date if any, else best overall
       if (!placed) {
-        let bestDay = days[0]; let bestRem = -Infinity;
-        for (const d of days) { const k = ymd(d); const cap = eff(d); const cur = planned.get(k)!; const rem = cap - cur; if (rem > bestRem) { bestRem = rem; bestDay = d; } }
-        const k = ymd(bestDay);
-        nextBlocks.push({ id: uid(), taskId: t.id, day: k, plannedMinutes: minutes, guessed, title: t.title, course: t.course || '', pages: (typeof (t as any).pagesRead==='number' && (t as any).pagesRead>0)? (t as any).pagesRead : null, priority: t.priority ?? null });
-        planned.set(k, planned.get(k)! + minutes);
+        let bestDay: Date | null = null; let bestRem = -Infinity;
+        for (const d of days) { const k = ymd(d); if (k > dueY) continue; const cap = eff(d); const cur = planned.get(k)!; const rem = cap - cur; if (rem > bestRem) { bestRem = rem; bestDay = d; } }
+        if (bestDay) {
+          const k = ymd(bestDay);
+          nextBlocks.push({ id: uid(), taskId: t.id, day: k, plannedMinutes: minutes, guessed, title: t.title, course: t.course || '', pages: (typeof (t as any).pagesRead==='number' && (t as any).pagesRead>0)? (t as any).pagesRead : null, priority: t.priority ?? null });
+          planned.set(k, planned.get(k)! + minutes);
+          placed = true;
+        }
+      }
+      // final fallback: any day in week with most remaining
+      if (!placed) {
+        let bestDay: Date | null = null; let bestRem = -Infinity;
+        for (const d2 of days) { const k2 = ymd(d2); const cap2 = eff(d2); const cur2 = planned.get(k2)!; const rem2 = cap2 - cur2; if (rem2 > bestRem) { bestRem = rem2; bestDay = d2; } }
+        if (bestDay) {
+          const k2 = ymd(bestDay);
+          nextBlocks.push({ id: uid(), taskId: t.id, day: k2, plannedMinutes: minutes, guessed, title: t.title, course: t.course || '', pages: (typeof (t as any).pagesRead==='number' && (t as any).pagesRead>0)? (t as any).pagesRead : null, priority: t.priority ?? null });
+          planned.set(k2, planned.get(k2)! + minutes);
+        }
       }
     }
     if (nextBlocks.length) setBlocks(prev => [...prev, ...nextBlocks]);
@@ -628,7 +665,7 @@ function overlap(a0:number,a1:number,b0:number|null,b1:number|null): number { if
   function bumpAvail(dow: number, delta: number) {
     setAvailability(prev => ({ ...prev, [dow]: Math.max(0, Math.round((prev[dow]||0) + delta)) }));
   }
-  function shiftWeek(delta: number) { setWeekStart(prev => { const x = new Date(prev); x.setDate(x.getDate() + delta*7); return mondayOf(x); }); }
+  function shiftWeek(delta: number) { setWeekStart(prev => { const x = new Date(prev); x.setDate(x.getDate() + delta*7); return saturdayOf(x); }); }
   function clearThisWeek() { const keys = new Set(days.map(d => ymd(d))); setBlocks(prev => prev.filter(b => !keys.has(b.day))); }
   async function promoteWeekToTasks() {
     const keys = new Set(days.map(d => ymd(d))); const batch = blocks.filter(b => keys.has(b.day)); let ok = 0, fail = 0;
@@ -648,7 +685,7 @@ function overlap(a0:number,a1:number,b0:number|null,b1:number|null): number { if
           <div className="flex items-center gap-2">
             <button aria-label="Previous week" onClick={()=>shiftWeek(-1)} className="px-2 py-1 rounded border border-[#1b2344] focus-visible:outline focus-visible:outline-2 focus-visible:outline-blue-500">◀</button>
             <div className="text-sm" aria-live="polite">Week of {dayLabel(weekStart)}</div>
-            <button aria-label="Jump to this week" onClick={()=>setWeekStart(mondayOf(new Date()))} className="px-2 py-1 rounded border border-[#1b2344] focus-visible:outline focus-visible:outline-2 focus-visible:outline-blue-500">This week</button>
+            <button aria-label="Jump to this week" onClick={()=>setWeekStart(saturdayOf(new Date()))} className="px-2 py-1 rounded border border-[#1b2344] focus-visible:outline focus-visible:outline-2 focus-visible:outline-blue-500">This week</button>
             <button aria-label="Next week" onClick={()=>shiftWeek(1)} className="px-2 py-1 rounded border border-[#1b2344] focus-visible:outline focus-visible:outline-2 focus-visible:outline-blue-500">▶</button>
           </div>
           <div className="flex items-center gap-2">
@@ -681,11 +718,27 @@ function overlap(a0:number,a1:number,b0:number|null,b1:number|null): number { if
                 <div className="grid grid-cols-2 gap-2 mt-2">
                   <div>
                     <label className="block text-[10px] mb-1" htmlFor={`start-${dow}`}>Start</label>
-                    <input id={`start-${dow}`} type="text" placeholder="7:00 AM" value={fmt12Input(availStartByDow[dow]||'')} onChange={e=>setAvailStartByDow(prev=>({ ...prev, [dow]: e.target.value }))} onBlur={e=>setAvailStartByDow(prev=>({ ...prev, [dow]: fmt12Input(e.target.value) }))} className="w-full bg-[#0b1020] border border-[#1b2344] rounded px-2 py-1 text-sm focus-visible:outline focus-visible:outline-2 focus-visible:outline-blue-500" />
+                    <div className="flex gap-2 items-center">
+                      <input id={`start-${dow}`} type="text" placeholder="7:00" value={fmt12Input(availStartByDow[dow]||'').replace(/\s?(AM|PM)$/,'')} onChange={e=>setAvailStartByDow(prev=>({ ...prev, [dow]: e.target.value }))} onBlur={e=>setAvailStartByDow(prev=>({ ...prev, [dow]: fmt12Input(e.target.value) }))} className="w-full bg-[#0b1020] border border-[#1b2344] rounded px-2 py-1 text-sm focus-visible:outline focus-visible:outline-2 focus-visible:outline-blue-500" />
+                      {(() => { const hh = toMin(normHHMM(availStartByDow[dow]||'')); const isPM = (hh ?? 0) >= 12*60; return (
+                        <span className="inline-flex">
+                          <button type="button" onClick={()=>{ const cur = normHHMM(availStartByDow[dow]||'')||'09:00'; const [H,M]=cur.split(':').map(v=>parseInt(v,10)); const nextH = (H>=12?H-12:H); const nn = `${String(nextH).padStart(2,'0')}:${String(M).padStart(2,'0')}`; setAvailStartByDow(prev=>({ ...prev, [dow]: nn })); }} className={`px-2 py-1 text-xs border ${!isPM?'bg-blue-600 text-white':'border-[#1b2344]'}`}>AM</button>
+                          <button type="button" onClick={()=>{ const cur = normHHMM(availStartByDow[dow]||'')||'13:00'; const [H,M]=cur.split(':').map(v=>parseInt(v,10)); const nextH = (H<12?H+12:H); const nn = `${String(nextH).padStart(2,'0')}:${String(M).padStart(2,'0')}`; setAvailStartByDow(prev=>({ ...prev, [dow]: nn })); }} className={`px-2 py-1 text-xs border ${isPM?'bg-blue-600 text-white':'border-[#1b2344]'}`}>PM</button>
+                        </span>
+                      ); })()}
+                    </div>
                   </div>
                   <div>
                     <label className="block text-[10px] mb-1" htmlFor={`end-${dow}`}>End</label>
-                    <input id={`end-${dow}`} type="text" placeholder="5:00 PM" value={fmt12Input(availEndByDow[dow]||'')} onChange={e=>setAvailEndByDow(prev=>({ ...prev, [dow]: e.target.value }))} onBlur={e=>setAvailEndByDow(prev=>({ ...prev, [dow]: fmt12Input(e.target.value) }))} className="w-full bg-[#0b1020] border border-[#1b2344] rounded px-2 py-1 text-sm focus-visible:outline focus-visible:outline-2 focus-visible:outline-blue-500" />
+                    <div className="flex gap-2 items-center">
+                      <input id={`end-${dow}`} type="text" placeholder="5:00" value={fmt12Input(availEndByDow[dow]||'').replace(/\s?(AM|PM)$/,'')} onChange={e=>setAvailEndByDow(prev=>({ ...prev, [dow]: e.target.value }))} onBlur={e=>setAvailEndByDow(prev=>({ ...prev, [dow]: fmt12Input(e.target.value) }))} className="w-full bg-[#0b1020] border border-[#1b2344] rounded px-2 py-1 text-sm focus-visible:outline focus-visible:outline-2 focus-visible:outline-blue-500" />
+                      {(() => { const hh = toMin(normHHMM(availEndByDow[dow]||'')); const isPM = (hh ?? 0) >= 12*60; return (
+                        <span className="inline-flex">
+                          <button type="button" onClick={()=>{ const cur = normHHMM(availEndByDow[dow]||'')||'17:00'; const [H,M]=cur.split(':').map(v=>parseInt(v,10)); const nextH = (H>=12?H-12:H); const nn = `${String(nextH).padStart(2,'0')}:${String(M).padStart(2,'0')}`; setAvailEndByDow(prev=>({ ...prev, [dow]: nn })); }} className={`px-2 py-1 text-xs border ${!isPM?'bg-blue-600 text-white':'border-[#1b2344]'}`}>AM</button>
+                          <button type="button" onClick={()=>{ const cur = normHHMM(availEndByDow[dow]||'')||'17:00'; const [H,M]=cur.split(':').map(v=>parseInt(v,10)); const nextH = (H<12?H+12:H); const nn = `${String(nextH).padStart(2,'0')}:${String(M).padStart(2,'0')}`; setAvailEndByDow(prev=>({ ...prev, [dow]: nn })); }} className={`px-2 py-1 text-xs border ${isPM?'bg-blue-600 text-white':'border-[#1b2344]'}`}>PM</button>
+                        </span>
+                      ); })()}
+                    </div>
                   </div>
                 </div>
               </div>
@@ -765,7 +818,7 @@ function overlap(a0:number,a1:number,b0:number|null,b1:number|null): number { if
                     <ul className="text-[11px] space-y-1">
                       {evs.map((ev, i) => (
                         <li key={i} className="flex flex-wrap items-center gap-2">
-                          <span className="inline-block w-2 h-2 rounded-full bg-slate-400/70" />
+                          <span className="inline-block w-2 h-2 rounded-full" style={{ backgroundColor: ev.color || 'hsl(215 16% 70%)' }} />
                           <span className="text-slate-200 break-words whitespace-pre-wrap">{ev.label}</span>
                           {ev.time ? <span className="text-slate-300/70">· {ev.time}</span> : null}
                         </li>
@@ -783,7 +836,7 @@ function overlap(a0:number,a1:number,b0:number|null,b1:number|null): number { if
                       <div className="flex-1 min-w-0">
                         <div className="text-slate-200 truncate">{b.course ? `${b.course}: ` : ''}{b.title}</div>
                         <div className="text-slate-300/70 flex items-center gap-2">
-                          <span>{b.plannedMinutes}m{b.guessed ? <span className="ml-1 inline-block px-1 rounded border border-amber-500 text-amber-400">guessed</span> : null}{typeof b.pages==='number' && b.pages>0 ? <span className="ml-2">· {b.pages}p</span> : null}</span>
+                          <span>{minutesToHM(b.plannedMinutes)}{b.guessed ? <span className="ml-1 inline-block px-1 rounded border border-amber-500 text-amber-400">guessed</span> : null}{typeof b.pages==='number' && b.pages>0 ? <span className="ml-2">· {b.pages}p</span> : null}</span>
                           {dayHasConflict(k, d.getDay()) && showConflicts && (
                             <span className="inline-flex items-center gap-1">
                               <span className="px-1 rounded border border-rose-600 text-rose-400" title={(busyByDay.items[k]||[]).map(x=>`${x.label}${x.time?` · ${x.time}`:''}`).join('\n')}>conflict</span>
@@ -801,6 +854,45 @@ function overlap(a0:number,a1:number,b0:number|null,b1:number|null): number { if
             );
           })}
         </div>
+      </section>
+
+      <section className="card p-6 space-y-4 order-3">
+        <div className="flex items-end justify-between gap-2">
+          <h3 className="text-sm font-medium">Tasks to plan (drag to a day)</h3>
+          <div className="flex items-center gap-2 text-xs">
+            <label className="flex items-center gap-1">
+              <span>Sort by</span>
+              <select value={sortBy} onChange={e=>setSortBy(e.target.value as any)} className="bg-[#0b1020] border border-[#1b2344] rounded px-2 py-1">
+                <option value="due">Due date</option>
+                <option value="course">Course</option>
+                <option value="priority">Priority</option>
+                <option value="estimate">Estimate</option>
+              </select>
+            </label>
+            <button onClick={()=>setSortDir(d=>d==='asc'?'desc':'asc')} className="px-2 py-1 rounded border border-[#1b2344]">{sortDir==='asc'?'Asc':'Desc'}</button>
+            <label className="flex items-center gap-1">
+              <input type="checkbox" checked={twoWeeksOnly} onChange={e=>setTwoWeeksOnly(e.target.checked)} />
+              <span>Due next 2 weeks</span>
+            </label>
+          </div>
+        </div>
+        {noTasksToPlan ? (
+          <div className="rounded border border-dashed border-[#1b2344] p-4 text-sm text-slate-300/80">No todo tasks to plan. Add some in <a href="/tasks" className="underline focus-visible:outline focus-visible:outline-2 focus-visible:outline-blue-500">Tasks</a> and return.</div>
+        ) : (
+          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-2">
+            {unscheduledSorted.map(t => (
+              <div key={t.id} draggable onDragStart={(e)=>onDragStartTask(e,t)} className={`p-2 pl-3 rounded border focus-within:outline focus-within:outline-2 focus-within:outline-blue-500 ${scheduledIdsThisWeek.has(t.id)?'border-emerald-700 bg-emerald-900/10':'border-[#1b2344]'}`} aria-grabbed="false" style={{ borderLeft: `3px solid ${colorForCourse(displayCourseFor(t))}` }}>
+                <div className="text-sm text-slate-200 truncate">{displayCourseFor(t) ? `${displayCourseFor(t)}: ` : ''}{t.title}</div>
+                <div className="text-xs text-slate-300/70 flex items-center gap-2 mt-1">
+                  <span>due {ymdFromISO(t.dueDate)}</span>
+                  {typeof t.priority==='number' ? <span>p{t.priority}</span> : null}
+                  {typeof (t as any).pagesRead==='number' ? <span>{(t as any).pagesRead}p</span> : null}
+                  {typeof t.estimatedMinutes==='number' && (t.estimatedMinutes ?? 0) > 0 ? <span>{minutesToHM(t.estimatedMinutes)}</span> : null}
+                </div>
+              </div>
+            ))}
+          </div>
+        )}
       </section>
 
       {showCatchup && catchupPreview && (
@@ -825,7 +917,7 @@ function overlap(a0:number,a1:number,b0:number|null,b1:number|null): number { if
                             <span className="inline-block w-2 h-2 rounded-full mr-2 flex-shrink-0" style={{ backgroundColor: colorForCourse(it.course) }} />
                             <span className="truncate mr-2">{it.course ? `${it.course}: `: ''}{it.title}</span>
                           </div>
-                          <span>{it.minutes}m{it.guessed ? <span className="ml-1 inline-block px-1 rounded border border-amber-500 text-amber-400">guessed</span> : null}</span>
+                          <span>{minutesToHM(it.minutes)}{it.guessed ? <span className="ml-1 inline-block px-1 rounded border border-amber-500 text-amber-400">guessed</span> : null}</span>
                         </li>
                       ))}
                     </ul>

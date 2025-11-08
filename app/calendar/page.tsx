@@ -8,6 +8,22 @@ export const dynamic = 'force-dynamic';
 
 function startOfDay(d: Date) { const x = new Date(d); x.setHours(0,0,0,0); return x; }
 
+function minutesToHM(min?: number | null) {
+  const n = Math.max(0, Math.round(Number(min || 0)));
+  const h = Math.floor(n/60);
+  const m = n % 60;
+  return `${h}:${String(m).padStart(2,'0')}`;
+}
+
+function extractPageRanges(title: string): string[] {
+  try {
+    const m = title.match(/p(?:ages?)?\.?\s*([0-9,\s–-]+(?:\s*,\s*[0-9–-]+)*)/i);
+    if (!m) return [];
+    const raw = m[1] || '';
+    return raw.split(/\s*,\s*/).map(x => x.replace(/-/g, '–').trim()).filter(x => /\d/.test(x));
+  } catch { return []; }
+}
+
 // Fallback course color as HSL string for left stripe
 function hueFromString(s: string): number { let h = 0; for (let i=0;i<s.length;i++) { h = (h * 31 + s.charCodeAt(i)) >>> 0; } return h % 360; }
 function fallbackCourseHsl(name?: string | null): string { const key=(name||'').toString().trim().toLowerCase(); if (!key) return 'hsl(215 16% 47%)'; const h=hueFromString(key); return `hsl(${h} 70% 55%)`; }
@@ -502,7 +518,7 @@ export default function CalendarPage() {
               <div>
                 <label className="block text-xs mb-1">Type</label>
                 <div className="flex items-center gap-2 flex-wrap text-[11px]">
-                  {['reading','review','outline','practice','other'].map(t => (
+                  {['reading','review','outline','practice','assignment','other'].map(t => (
                     <button key={t} onClick={() => setAddType(addType===t ? '' : t)} className={`px-2 py-1 rounded border ${addType===t ? 'border-blue-500 bg-[#1a2243]' : 'border-[#1b2344]'}`}>{t}</button>
                   ))}
                 </div>
@@ -638,7 +654,7 @@ export default function CalendarPage() {
                                     </span>
                                   ) : null}
                                   {t.course ? <span className="text-slate-300/70">· {t.course}</span> : null}
-                                  {typeof t.estimatedMinutes === 'number' ? <span className="text-slate-300/70">· {t.estimatedMinutes}m</span> : null}
+                                  {typeof t.estimatedMinutes === 'number' ? <span className="text-slate-300/70">· {minutesToHM(t.estimatedMinutes)}</span> : null}
                                 </div>
                                 {(t.tags && t.tags.length > 0) && (
                                   <div className="flex flex-wrap gap-1 mt-0.5">
@@ -701,7 +717,7 @@ export default function CalendarPage() {
               <div>
                 <label className="block text-xs mb-1">Type</label>
                 <div className="flex items-center gap-2 flex-wrap text-[11px]">
-                  {['reading','review','outline','practice','other'].map(t => (
+                  {['reading','review','outline','practice','assignment','other'].map(t => (
                     <button key={t} onClick={() => setEditType(editType===t ? '' : t)} className={`px-2 py-1 rounded border ${editType===t ? 'border-blue-500 bg-[#1a2243]' : 'border-[#1b2344]'}`}>{t}</button>
                   ))}
                 </div>
@@ -715,6 +731,9 @@ export default function CalendarPage() {
                   <button onClick={() => { setEditStartTime(''); setEditEndTime(''); }} className="text-xs underline">No time</button>
                 </div>
               </div>
+              {(() => { const ranges = extractPageRanges(editTitle || ''); return ranges.length ? (
+                <div className="text-xs text-slate-300/70">Pages: <span className="text-slate-100">{ranges.join(', ')}</span></div>
+              ) : null; })()}
               <div>
                 <label className="block text-xs mb-1">Est. minutes (optional)</label>
                 <input type="number" min={0} step={5} value={editEst} onChange={e => setEditEst(e.target.value)} className="w-28 bg-[#0b1020] border border-[#1b2344] rounded px-3 py-2" />

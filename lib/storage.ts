@@ -19,6 +19,55 @@ function resolveDbUrl(): string | null {
     // Default to sslmode=require for hosted providers
     return `postgres://${encodeURIComponent(PGUSER)}:${encodeURIComponent(PGPASSWORD)}@${PGHOST}${port}/${PGDATABASE}?sslmode=require`;
   }
+
+export async function updateSession(id: string, patch: Partial<Pick<StudySession, 'when'|'minutes'|'focus'|'notes'|'pagesRead'|'outlinePages'|'practiceQs'|'activity'>>): Promise<StudySession | null> {
+  if (DB_URL) {
+    const p = getPool();
+    const fields: string[] = []; const values: any[] = []; let idx = 1;
+    const push = (col: string, val: any, cast?: string) => { fields.push(`${col} = $${idx}${cast?`::${cast}`:''}`); values.push(val); idx++; };
+    if (patch.when !== undefined) push('when_ts', new Date(patch.when));
+    if (patch.minutes !== undefined) push('minutes', patch.minutes);
+    if (patch.focus !== undefined) push('focus', patch.focus);
+    if (patch.notes !== undefined) push('notes', patch.notes);
+    if (patch.pagesRead !== undefined) push('pages_read', patch.pagesRead);
+    if (patch.outlinePages !== undefined) push('outline_pages', patch.outlinePages);
+    if (patch.practiceQs !== undefined) push('practice_qs', patch.practiceQs);
+    if (patch.activity !== undefined) push('activity', patch.activity);
+    if (!fields.length) {
+      const cur = await p.query(`SELECT id, task_id, when_ts, minutes, focus, notes, pages_read, outline_pages, practice_qs, activity, created_at FROM sessions WHERE id=$1`, [id]);
+      if (!cur.rowCount) return null;
+      const r = cur.rows[0];
+      return { id: r.id, taskId: r.task_id, when: new Date(r.when_ts).toISOString(), minutes: r.minutes, focus: r.focus, notes: r.notes, pagesRead: r.pages_read, outlinePages: r.outline_pages, practiceQs: r.practice_qs, activity: r.activity, createdAt: new Date(r.created_at).toISOString() };
+    }
+    const q = `UPDATE sessions SET ${fields.join(', ')} WHERE id = $${idx} RETURNING id, task_id, when_ts, minutes, focus, notes, pages_read, outline_pages, practice_qs, activity, created_at`;
+    values.push(id);
+    const res = await p.query(q, values);
+    if (!res.rowCount) return null;
+    const r = res.rows[0];
+    return { id: r.id, taskId: r.task_id, when: new Date(r.when_ts).toISOString(), minutes: r.minutes, focus: r.focus, notes: r.notes, pagesRead: r.pages_read, outlinePages: r.outline_pages, practiceQs: r.practice_qs, activity: r.activity, createdAt: new Date(r.created_at).toISOString() };
+  }
+  const db = await readJson();
+  const i = db.sessions.findIndex(s => s.id === id);
+  if (i === -1) return null;
+  const cur = db.sessions[i];
+  const updated: StudySession = { ...cur, ...patch } as any;
+  db.sessions[i] = updated;
+  await writeJson(db);
+  return updated;
+}
+
+export async function deleteSession(id: string): Promise<boolean> {
+  if (DB_URL) {
+    const p = getPool();
+    const res = await p.query(`DELETE FROM sessions WHERE id=$1`, [id]);
+    return res.rowCount > 0;
+  }
+  const db = await readJson();
+  const before = db.sessions.length;
+  db.sessions = db.sessions.filter(s => s.id !== id);
+  await writeJson(db);
+  return db.sessions.length < before;
+}
   return null;
 }
 const DB_URL = resolveDbUrl();

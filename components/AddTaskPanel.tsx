@@ -101,7 +101,7 @@ export default function AddTaskPanel({ onCreated }: Props) {
       const minutes = pages > 0 ? pages * mpp + 10 : 0;
       return round5(minutes);
     }
-    const defaults: Record<string, number> = { review: 30, outline: 45, practice: 60, clinic: 60, admin: 15, other: 30 };
+    const defaults: Record<string, number> = { review: 30, outline: 45, practice: 60, clinic: 60, admin: 15, assignment: 60, other: 30 };
     return round5(defaults[activity] ?? 30);
   }, [activity, course, pages, estimateOrigin, manualEst]);
 
@@ -261,6 +261,7 @@ export default function AddTaskPanel({ onCreated }: Props) {
             <option value="review">Review</option>
             <option value="outline">Outline</option>
             <option value="practice">Practice</option>
+            <option value="assignment">Assignment</option>
             <option value="clinic">Clinic/Internship</option>
             <option value="admin">Admin</option>
             <option value="other">Other</option>

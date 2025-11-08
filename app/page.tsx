@@ -54,6 +54,9 @@ function chicagoYmd(d: Date): string {
 function mondayOfChicago(d: Date): Date { const ymd = chicagoYmd(d); const [yy,mm,dd]=ymd.split('-').map(x=>parseInt(x,10)); const local = new Date(yy,(mm as number)-1,dd); const dow = local.getDay(); const delta = (dow + 1) % 7; local.setDate(local.getDate()-delta); return local; }
 function weekKeysChicago(d: Date): string[] { const monday = mondayOfChicago(d); return Array.from({length:7},(_,i)=>{const x=new Date(monday); x.setDate(x.getDate()+i); return chicagoYmd(x);}); }
 function minutesStr(mins: number): string { const h=Math.floor(mins/60), m=mins%60; return `${h>0?`${h}h `:''}${m}m`.trim(); }
+function minutesToHM(min: number | null | undefined): string { const n=Math.max(0,Math.round(Number(min)||0)); const h=Math.floor(n/60); const m=n%60; return `${h}:${String(m).padStart(2,'0')}`; }
+function hueFromString(s: string): number { let h=0; for (let i=0;i<s.length;i++){ h=(h*31 + s.charCodeAt(i))>>>0; } return h%360; }
+function courseColor(name?: string | null): string { const key=(name||'').toString().trim().toLowerCase(); if(!key) return 'hsl(215 16% 47%)'; const h=hueFromString(key); return `hsl(${h} 70% 55%)`; }
 
 function mmss(sec: number): string {
   const n = Math.max(0, Math.floor(Number(sec) || 0));
@@ -152,6 +155,15 @@ export default function TodayPage() {
   const [itemSeconds, setItemSeconds] = useState<Record<string, number>>({});
   const itemTickRef = useRef<NodeJS.Timeout|null>(null);
   const carryoverRef = useRef<boolean>(false);
+  const [ctNow, setCtNow] = useState<string>(() => new Intl.DateTimeFormat('en-US',{ timeZone:'America/Chicago', hour:'numeric', minute:'2-digit', hour12:true }).format(new Date()));
+  useEffect(() => {
+    const id = setInterval(() => {
+      setCtNow(new Intl.DateTimeFormat('en-US',{ timeZone:'America/Chicago', hour:'numeric', minute:'2-digit', hour12:true }).format(new Date()));
+    }, 60000);
+    // sync at mount
+    setCtNow(new Intl.DateTimeFormat('en-US',{ timeZone:'America/Chicago', hour:'numeric', minute:'2-digit', hour12:true }).format(new Date()));
+    return () => clearInterval(id);
+  }, []);
 
   useEffect(() => {
     if (typeof window==='undefined') return;
@@ -680,7 +692,7 @@ export default function TodayPage() {
         <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
           <div>
             <h2 className="text-lg font-medium">Today</h2>
-            <p className="text-xs text-slate-300/60">Central time · {dateKey}</p>
+            <p className="text-xs text-slate-300/60">Central time · {dateKey} · {ctNow}</p>
           </div>
           {!plan.locked ? (
             <button aria-label="Open Plan Today" onClick={()=>setStep(1)} className="inline-flex items-center justify-center px-4 py-2 rounded bg-blue-600 hover:bg-blue-500 text-sm font-medium transition focus-visible:outline focus-visible:outline-2 focus-visible:outline-blue-500">Plan Today</button>
@@ -704,7 +716,7 @@ export default function TodayPage() {
                     <ul className="text-sm space-y-1">
                       {todaysBlocks.map(b => (
                         <li key={b.id} className="flex items-center justify-between">
-                          <span className="truncate">{b.course ? `${b.course}: ` : ''}{b.title} · {b.plannedMinutes}m</span>
+                          <span className="truncate">{b.course ? `${b.course}: ` : ''}{b.title} · {minutesToHM(b.plannedMinutes)}</span>
                           {!plan.items.find(p=>p.id===b.taskId) && (
                             <button aria-label="Add from schedule" onClick={()=>addFromBacklog({ id:b.taskId, title:b.title, course:b.course, estimatedMinutes:b.plannedMinutes })} className="px-2 py-1 rounded border border-[#1b2344] text-xs focus-visible:outline focus-visible:outline-2 focus-visible:outline-blue-500">Add</button>
                           )}
@@ -768,19 +780,30 @@ export default function TodayPage() {
             ) : (
               <ul className="space-y-1 text-sm">
                 {plan.items.map((it, i) => (
-                  <li key={it.id} className="flex items-center justify-between">
-                    <span className="truncate">{i+1}. {it.course ? `${it.course}: `:''}{it.title}</span>
-                    <div className="flex items-center gap-2 shrink-0">
-                      <span className="text-slate-300/70">{it.minutes}m</span>
-                      <span className="text-slate-300/60 tabular-nums">{mmss(itemSeconds[it.id] || 0)}</span>
-                      {activeItemId === it.id ? (
-                        <button aria-label="Pause item timer" onClick={()=>setActiveItemId(null)} className="px-2 py-1 rounded border border-[#1b2344] text-xs focus-visible:outline focus-visible:outline-2 focus-visible:outline-blue-500">Pause</button>
-                      ) : (
-                        <button aria-label="Start item timer" onClick={()=>setActiveItemId(it.id)} className="px-2 py-1 rounded border border-[#1b2344] text-xs focus-visible:outline focus-visible:outline-2 focus-visible:outline-blue-500">Start</button>
-                      )}
-                      <button aria-label="Partial complete" onClick={()=>handlePartialItem(it.id)} className="px-2 py-1 rounded border border-[#1b2344] text-xs focus-visible:outline focus-visible:outline-2 focus-visible:outline-blue-500">Partial</button>
-                      <button aria-label="Finish task" onClick={()=>handleFinishItem(it.id)} className="px-2 py-1 rounded bg-emerald-600 hover:bg-emerald-500 text-xs focus-visible:outline focus-visible:outline-2 focus-visible:outline-blue-500">Finish</button>
+                  <li key={it.id} className="space-y-0.5">
+                    <div className="flex items-center justify-between">
+                      <span className="truncate flex items-center gap-2">
+                        <span className="inline-block w-2 h-2 rounded-full" style={{ backgroundColor: courseColor(it.course) }} />
+                        <span>{i+1}. {it.course ? `${it.course}: `:''}{it.title}</span>
+                      </span>
+                      <div className="flex items-center gap-2 shrink-0">
+                        <span className="text-slate-300/70">{minutesToHM(it.minutes)}</span>
+                        <span className="text-slate-300/60 tabular-nums">{mmss(itemSeconds[it.id] || 0)}</span>
+                        {activeItemId === it.id ? (
+                          <button aria-label="Pause item timer" onClick={()=>setActiveItemId(null)} className="px-2 py-1 rounded border border-[#1b2344] text-xs focus-visible:outline focus-visible:outline-2 focus-visible:outline-blue-500">Pause</button>
+                        ) : (
+                          <button aria-label="Start item timer" onClick={()=>setActiveItemId(it.id)} className="px-2 py-1 rounded border border-[#1b2344] text-xs focus-visible:outline focus-visible:outline-2 focus-visible:outline-blue-500">Start</button>
+                        )}
+                        <button aria-label="Reset timer" onClick={()=>setItemSeconds(prev=>({ ...prev, [it.id]: 0 }))} className="px-2 py-1 rounded border border-[#1b2344] text-xs">Reset</button>
+                        <button aria-label="Partial complete" onClick={()=>setLogModal({ mode:'partial', itemId: it.id })} className="px-2 py-1 rounded border border-[#1b2344] text-xs focus-visible:outline focus-visible:outline-2 focus-visible:outline-blue-500">Partial</button>
+                        <button aria-label="Finish task" onClick={()=>setLogModal({ mode:'finish', itemId: it.id })} className="px-2 py-1 rounded bg-emerald-600 hover:bg-emerald-500 text-xs focus-visible:outline focus-visible:outline-2 focus-visible:outline-blue-500">Finish</button>
+                      </div>
                     </div>
+                    {(() => { const chips = (() => { const arr = extractPageRanges(String(it.title||'')); return arr; })(); return chips.length ? (
+                      <div className="flex flex-wrap gap-1 text-[11px] text-slate-300/80 pl-4">
+                        {chips.map((ch:string, j:number) => (<span key={j} className="px-1.5 py-0.5 rounded border border-[#1b2344]">{ch}</span>))}
+                      </div>
+                    ) : null; })()}
                   </li>
                 ))}
               </ul>
@@ -789,7 +812,7 @@ export default function TodayPage() {
               <div className="text-xs text-slate-300/70 mt-2">Locked · Total {totalPlannedLabel}</div>
             )}
           </div>
-          <div className="rounded border border-[#1b2344] p-4 min-h-[140px]">
+          {/* ... */}
             <div className="flex items-center justify-between mb-2">
               <h3 className="text-sm font-medium">Preview</h3>
               <div className="flex items-center gap-2 text-xs">
@@ -831,7 +854,7 @@ export default function TodayPage() {
                         {selectedBlocks.map(b => (
                           <li key={b.id} className="flex items-center justify-between">
                             <span className="truncate">{b.course ? `${b.course}: ` : ''}{b.title}</span>
-                            <span className="text-slate-300/70">{b.plannedMinutes}m</span>
+                            <span className="text-slate-300/70">{minutesToHM(b.plannedMinutes)}</span>
                           </li>
                         ))}
                       </ul>
@@ -854,7 +877,7 @@ export default function TodayPage() {
                                 {chips.map((ch:string, i:number) => (<span key={i} className="px-1.5 py-0.5 rounded border border-[#1b2344]">{ch}</span>))}
                               </div>
                             ) : null; })()}
-                            {typeof t.estimatedMinutes === 'number' ? <div className="text-xs text-slate-300/70">{t.estimatedMinutes}m</div> : null}
+                            {typeof t.estimatedMinutes === 'number' ? <div className="text-xs text-slate-300/70">{minutesToHM(t.estimatedMinutes)}</div> : null}
                           </li>
                         ))}
                       </ul>

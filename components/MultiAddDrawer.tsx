@@ -51,7 +51,7 @@ export default function MultiAddDrawer({ onCreated }: Props) {
   const [courses, setCourses] = useState<Course[]>([]);
   const [mode, setMode] = useState<'paste'|'grid'>('paste');
   const [course, setCourse] = useState('');
-  const [activity, setActivity] = useState<'reading'|'review'|'outline'|'practice'|'clinic'|'admin'|'other'>('reading');
+  const [activity, setActivity] = useState<'reading'|'review'|'outline'|'practice'|'clinic'|'admin'|'assignment'|'other'>('reading');
   const [baseDue, setBaseDue] = useState('');
   const [stepDays, setStepDays] = useState('1');
   const [paste, setPaste] = useState('');
@@ -85,7 +85,7 @@ export default function MultiAddDrawer({ onCreated }: Props) {
       const minutes = pages > 0 ? round5(pages * mpp + 10) : 0;
       return { minutes, origin: learned ? 'learned' : 'default' };
     }
-    const defaults: Record<string, number> = { review: 30, outline: 45, practice: 60, clinic: 60, admin: 15, other: 30 };
+    const defaults: Record<string, number> = { review: 30, outline: 45, practice: 60, clinic: 60, admin: 15, assignment: 60, other: 30 };
     return { minutes: round5(defaults[act] ?? 30), origin: 'default' };
   }
 
@@ -202,6 +202,7 @@ export default function MultiAddDrawer({ onCreated }: Props) {
             <option value="practice">Practice</option>
             <option value="clinic">Clinic/Internship</option>
             <option value="admin">Admin</option>
+            <option value="assignment">Assignment</option>
             <option value="other">Other</option>
           </select>
         </div>
