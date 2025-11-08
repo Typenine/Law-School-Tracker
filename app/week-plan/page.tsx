@@ -445,7 +445,22 @@ export default function WeekPlanPage() {
     if (nextBlocks.length) setBlocks(prev => [...prev, ...nextBlocks]);
   }
 
-  function setAvailForDow(dow: number, val: number) { const v = Math.max(0, Math.round(val)); setAvailability(prev => ({ ...prev, [dow]: v })); }
+  function minutesToHM(min: number): string { const n = Math.max(0, Math.round(Number(min)||0)); const h = Math.floor(n/60); const m = n % 60; return `${h}:${String(m).padStart(2,'0')}`; }
+  function parseAvailFlexible(input: string): number | null {
+    const s = (input||'').trim().toLowerCase();
+    if (!s) return null;
+    const colon = /^(\d{1,3}):(\d{1,2})$/.exec(s);
+    if (colon) { const h = parseInt(colon[1],10); const m = parseInt(colon[2],10); if (!isNaN(h) && !isNaN(m)) return Math.max(0, h*60 + m); }
+    const hr = /([0-9]+(?:\.[0-9]+)?)\s*h/.exec(s); const mr = /([0-9]+)\s*m(?![a-z])/i.exec(s);
+    if (hr || mr) { let tot = 0; if (hr) { const h = parseFloat(hr[1]); if (!isNaN(h)) tot += Math.round(h*60); } if (mr) { const m = parseInt(mr[1],10); if (!isNaN(m)) tot += m; } return Math.max(0, tot); }
+    const plain = parseFloat(s); if (!isNaN(plain)) { return Math.max(0, Math.round(plain)); }
+    return null;
+  }
+  function setAvailForDow(dow: number, val: string) {
+    const parsed = parseAvailFlexible(val);
+    const v = parsed == null ? 0 : parsed;
+    setAvailability(prev => ({ ...prev, [dow]: v }));
+  }
   function shiftWeek(delta: number) { setWeekStart(prev => { const x = new Date(prev); x.setDate(x.getDate() + delta*7); return mondayOf(x); }); }
   function clearThisWeek() { const keys = new Set(days.map(d => ymd(d))); setBlocks(prev => prev.filter(b => !keys.has(b.day))); }
   async function promoteWeekToTasks() {
@@ -475,19 +490,19 @@ export default function WeekPlanPage() {
             <button onClick={promoteWeekToTasks} className="px-3 py-2 rounded border border-emerald-600 text-emerald-400 text-sm focus-visible:outline focus-visible:outline-2 focus-visible:outline-blue-500">Promote Week → Tasks</button>
             <button onClick={computeCatchUpPreview} className="px-3 py-2 rounded border border-[#1b2344] text-sm focus-visible:outline focus-visible:outline-2 focus-visible:outline-blue-500">Catch-Up</button>
             <button onClick={undoCatchUp} className="px-3 py-2 rounded border border-[#1b2344] text-sm disabled:opacity-50" disabled={!undoSnapshot}>Undo Last</button>
-            <div className="text-xs text-slate-300/80 ml-2">Need ~{dailyQuotaCur}m/day to hit goal · <button onClick={autopackWeek} className="underline">Autopack</button></div>
+            <div className="text-xs text-slate-300/80 ml-2">Need ~{minutesToHM(dailyQuotaCur)}/day to hit goal · <button onClick={autopackWeek} className="underline">Autopack</button></div>
             <label className="ml-2 inline-flex items-center gap-1 text-xs">
               <input type="checkbox" checked={showConflicts} onChange={e=>setShowConflicts(e.target.checked)} /> Show conflicts
             </label>
           </div>
         </div>
         <div className="space-y-2">
-          <div className="text-xs text-slate-300/70">Availability (minutes per weekday)</div>
+          <div className="text-xs text-slate-300/70">Availability (hours:minutes per weekday)</div>
           <div className="grid grid-cols-2 sm:grid-cols-4 md:grid-cols-7 gap-2">
             {[1,2,3,4,5,6,0].map(dow => (
               <div key={dow} className="rounded border border-[#1b2344] p-2">
                 <label className="block text-xs mb-1" htmlFor={`avail-${dow}`}>{['Sun','Mon','Tue','Wed','Thu','Fri','Sat'][dow]}</label>
-                <input id={`avail-${dow}`} type="number" min={0} value={availability[dow] ?? 0} onChange={e=>setAvailForDow(dow, parseInt(e.target.value||'0',10))} className="w-full bg-[#0b1020] border border-[#1b2344] rounded px-2 py-1 text-sm focus-visible:outline focus-visible:outline-2 focus-visible:outline-blue-500" />
+                <input id={`avail-${dow}`} type="text" inputMode="numeric" placeholder="H:MM" value={minutesToHM(availability[dow] ?? 0)} onChange={e=>setAvailForDow(dow, e.target.value)} className="w-full bg-[#0b1020] border border-[#1b2344] rounded px-2 py-1 text-sm focus-visible:outline focus-visible:outline-2 focus-visible:outline-blue-500" />
               </div>
             ))}
           </div>
@@ -543,7 +558,7 @@ export default function WeekPlanPage() {
                 <div className="flex items-center justify-between mb-2">
                   <div className="text-sm text-slate-200">{dayLabel(d)}</div>
                   <div className="text-xs text-slate-300/70 flex items-center gap-2">
-                    <span>{planned} / {cap}m</span>
+                    <span>{minutesToHM(planned)} / {minutesToHM(cap)}</span>
                     {dayHasConflict(k, d.getDay()) && (
                       <span className="px-1 py-0.5 rounded border border-rose-600 text-rose-400" title={(busyByDay.items[k]||[]).map(x=>`${x.label}${x.time?` · ${x.time}`:''}`).join('\n')}>conflict</span>
                     )}
@@ -552,7 +567,7 @@ export default function WeekPlanPage() {
                 <div className="h-2 w-full bg-[#0b1020] border border-[#1b2344] rounded overflow-hidden mb-2" role="progressbar" aria-valuemin={0} aria-valuemax={cap||0} aria-valuenow={planned} aria-label="Planned minutes">
                   <div className={`${overBy>0?'bg-rose-600':'bg-blue-600'}`} style={{ width: `${pct}%`, height: '100%' }} />
                 </div>
-                {overBy>0 ? <div className="text-[11px] text-rose-400 mb-2">Over by {overBy}m</div> : null}
+                {overBy>0 ? <div className="text-[11px] text-rose-400 mb-2">Over by {minutesToHM(overBy)}</div> : null}
                 <ul className="space-y-1">
                   {dayBlocks.length===0 ? (
                     <li className="text-[11px] text-slate-300/50">Drop tasks here</li>

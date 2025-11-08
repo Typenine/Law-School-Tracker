@@ -129,7 +129,13 @@ export async function createCourse(input: NewCourseInput): Promise<Course> {
           input.endDate ? new Date(input.endDate) : null,
           input.semester ?? null,
           (typeof input.year === 'number' ? input.year : (input.year as any) ?? null),
-          new Date(now)
+          new Date(now),
+          null, // learned_mpp
+          null, // learned_sample
+          null, // learned_updated_at
+          null, // override_enabled
+          null, // override_mpp
+          null  // default_activity
         ]
       );
       const r = res.rows[0];
