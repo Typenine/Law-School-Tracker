@@ -104,6 +104,8 @@ function estimateMinutesFor(item: BacklogItem): { minutes: number; guessed: bool
 }
 
 export default function WeekPlanPage() {
+  const [sortBy, setSortBy] = useState<'due'|'course'|'priority'|'estimate'>('due');
+  const [sortDir, setSortDir] = useState<'asc'|'desc'>('asc');
   const [weekStart, setWeekStart] = useState<Date>(() => mondayOf(new Date()));
   const [availability, setAvailability] = useState<AvailabilityTemplate>({ 0:120,1:240,2:240,3:240,4:240,5:240,6:120 });
   const [blocks, setBlocks] = useState<ScheduledBlock[]>([]);
@@ -328,23 +330,52 @@ export default function WeekPlanPage() {
 
   function undoCatchUp() { if (!undoSnapshot) return; setBlocks(undoSnapshot); setUndoSnapshot(null); }
 
-  const backlogSorted = useMemo(() => {
-    const arr = backlog.slice();
-    arr.sort((a,b) => {
-      const ad = a.dueDate ? new Date(a.dueDate).getTime() : Infinity;
-      const bd = b.dueDate ? new Date(b.dueDate).getTime() : Infinity;
-      if (ad !== bd) return ad - bd; const ap = a.priority ?? 0, bp = b.priority ?? 0; return (bp - ap);
-    });
-    return arr;
-  }, [backlog]);
-
+  // Tasks to schedule: from Tasks API (status=todo), excluding tasks already scheduled this week
+  const tasksTodo = useMemo(() => (tasks||[]).filter(t => t && t.status === 'todo'), [tasks]);
   const scheduledIdsThisWeek = useMemo(() => {
     const keys = new Set(days.map(d => ymd(d))); return new Set(blocks.filter(b => keys.has(b.day)).map(b => b.taskId));
   }, [blocks, days]);
+  const unscheduledTasks = useMemo(() => tasksTodo.filter(t => !scheduledIdsThisWeek.has(t.id)), [tasksTodo, scheduledIdsThisWeek]);
+  function sortValCourse(t: Task) { return (t.course || '').toLowerCase(); }
+  function sortValDue(t: Task) { const n = new Date(t.dueDate).getTime(); return isNaN(n) ? Number.MAX_SAFE_INTEGER : n; }
+  function sortValPriority(t: Task) { return -(t.priority ?? 0); }
+  function sortValEstimate(t: Task) { return -((t.estimatedMinutes ?? 0) as number); }
+  const unscheduledSorted = useMemo(() => {
+    const arr = unscheduledTasks.slice();
+    arr.sort((a,b) => {
+      let cmp = 0;
+      if (sortBy === 'due') cmp = sortValDue(a) - sortValDue(b);
+      else if (sortBy === 'course') cmp = sortValCourse(a).localeCompare(sortValCourse(b));
+      else if (sortBy === 'priority') cmp = sortValPriority(a) - sortValPriority(b);
+      else cmp = sortValEstimate(a) - sortValEstimate(b);
+      return sortDir === 'asc' ? cmp : -cmp;
+    });
+    return arr;
+  }, [unscheduledTasks, sortBy, sortDir]);
 
-  function onDragStartBacklog(e: React.DragEvent, it: BacklogItem) { e.dataTransfer.setData('text/plain', it.id); }
+  function estimateMinutesForTask(t: Task): { minutes: number; guessed: boolean } {
+    const est = Math.max(0, Math.round(Number(t.estimatedMinutes)||0));
+    if (est > 0) return { minutes: est, guessed: false };
+    const pages = Math.max(0, Number((t as any).pagesRead) || 0);
+    if (pages > 0) {
+      const mpp = getCourseMpp(t.course || '');
+      return { minutes: Math.round(pages * mpp + 10), guessed: false };
+    }
+    return { minutes: 30, guessed: true };
+  }
+  function onDragStartTask(e: React.DragEvent, t: Task) { e.dataTransfer.setData('text/plain', `task:${t.id}`); }
   function onDropDay(e: React.DragEvent, d: Date) {
     e.preventDefault(); const id = e.dataTransfer.getData('text/plain'); if (!id) return;
+    if (id.startsWith('task:')) {
+      const tid = id.slice('task:'.length);
+      const t = tasksTodo.find(x => x.id === tid);
+      if (!t) return;
+      const { minutes, guessed } = estimateMinutesForTask(t);
+      const block: ScheduledBlock = { id: uid(), taskId: t.id, day: ymd(d), plannedMinutes: minutes, guessed, title: t.title, course: t.course || '', pages: null, priority: t.priority ?? null };
+      setBlocks(prev => [...prev, block]);
+      return;
+    }
+    // legacy: backlog id
     const it = backlog.find(x => x.id === id); if (!it) return;
     const { minutes, guessed } = estimateMinutesFor(it);
     const block: ScheduledBlock = { id: uid(), taskId: it.id, day: ymd(d), plannedMinutes: minutes, guessed, title: it.title, course: it.course, pages: it.pages ?? null, priority: it.priority ?? null };
@@ -357,20 +388,20 @@ export default function WeekPlanPage() {
     const existing = blocks.filter(b => keys.has(b.day));
     const planned = new Map<string, number>(); for (const d of days) planned.set(ymd(d), existing.filter(b => b.day===ymd(d)).reduce((s,b)=>s+b.plannedMinutes,0));
     const avail = (d: Date) => availability[d.getDay()] ?? 0;
-    const unscheduled = backlogSorted.filter(it => !existing.some(b => b.taskId === it.id));
+    const unscheduled = unscheduledSorted.filter(t => !existing.some(b => b.taskId === t.id));
     const nextBlocks: ScheduledBlock[] = [];
-    for (const it of unscheduled) {
-      const { minutes, guessed } = estimateMinutesFor(it);
+    for (const t of unscheduled) {
+      const { minutes, guessed } = estimateMinutesForTask(t);
       let placed = false;
       for (const d of days) {
         const k = ymd(d); const cap = avail(d); const cur = planned.get(k)!;
-        if (cur + minutes <= cap) { nextBlocks.push({ id: uid(), taskId: it.id, day: k, plannedMinutes: minutes, guessed, title: it.title, course: it.course, pages: it.pages ?? null, priority: it.priority ?? null }); planned.set(k, cur + minutes); placed = true; break; }
+        if (cur + minutes <= cap) { nextBlocks.push({ id: uid(), taskId: t.id, day: k, plannedMinutes: minutes, guessed, title: t.title, course: t.course || '', pages: null, priority: t.priority ?? null }); planned.set(k, cur + minutes); placed = true; break; }
       }
       if (!placed) {
         let bestDay = days[0]; let bestRem = -Infinity;
         for (const d of days) { const k = ymd(d); const cap = avail(d); const cur = planned.get(k)!; const rem = cap - cur; if (rem > bestRem) { bestRem = rem; bestDay = d; } }
         const k = ymd(bestDay);
-        nextBlocks.push({ id: uid(), taskId: it.id, day: k, plannedMinutes: minutes, guessed, title: it.title, course: it.course, pages: it.pages ?? null, priority: it.priority ?? null });
+        nextBlocks.push({ id: uid(), taskId: t.id, day: k, plannedMinutes: minutes, guessed, title: t.title, course: t.course || '', pages: null, priority: t.priority ?? null });
         planned.set(k, planned.get(k)! + minutes);
       }
     }
@@ -389,7 +420,7 @@ export default function WeekPlanPage() {
     if (typeof window !== 'undefined') window.alert(`Promoted ${ok} task(s)${fail?`, ${fail} failed`:''}`);
   }
 
-  const noBacklog = backlogSorted.length === 0;
+  const noTasksToPlan = unscheduledSorted.length === 0;
 
   return (
     <main className="space-y-6">
@@ -427,25 +458,38 @@ export default function WeekPlanPage() {
       </section>
 
       <section className="card p-6 space-y-4">
-        <div>
-          <h3 className="text-sm font-medium mb-2">Inbox (drag to a day)</h3>
-          {noBacklog ? (
-            <div className="rounded border border-dashed border-[#1b2344] p-4 text-sm text-slate-300/80">No inbox items yet. Add some in <a href="/tasks?tag=inbox" className="underline focus-visible:outline focus-visible:outline-2 focus-visible:outline-blue-500">Inbox</a> and return.</div>
-          ) : (
-            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-2">
-              {backlogSorted.map(it => (
-                <div key={it.id} draggable onDragStart={(e)=>onDragStartBacklog(e,it)} className={`p-2 rounded border focus-within:outline focus-within:outline-2 focus-within:outline-blue-500 ${scheduledIdsThisWeek.has(it.id)?'border-emerald-700 bg-emerald-900/10':'border-[#1b2344]'}`} aria-grabbed="false">
-                  <div className="text-sm text-slate-200 truncate">{it.course ? `${it.course}: ` : ''}{it.title}</div>
-                  <div className="text-xs text-slate-300/70 flex items-center gap-2 mt-1">
-                    {it.dueDate ? <span>due {it.dueDate}</span> : <span>no due</span>}
-                    {typeof it.priority==='number' ? <span>p{it.priority}</span> : null}
-                    {typeof it.pages==='number' ? <span>{it.pages}p</span> : null}
-                  </div>
-                </div>
-              ))}
-            </div>
-          )}
+        <div className="flex items-end justify-between gap-2">
+          <h3 className="text-sm font-medium">Tasks to plan (drag to a day)</h3>
+          <div className="flex items-center gap-2 text-xs">
+            <label className="flex items-center gap-1">
+              <span>Sort by</span>
+              <select value={sortBy} onChange={e=>setSortBy(e.target.value as any)} className="bg-[#0b1020] border border-[#1b2344] rounded px-2 py-1">
+                <option value="due">Due date</option>
+                <option value="course">Course</option>
+                <option value="priority">Priority</option>
+                <option value="estimate">Estimate</option>
+              </select>
+            </label>
+            <button onClick={()=>setSortDir(d=>d==='asc'?'desc':'asc')} className="px-2 py-1 rounded border border-[#1b2344]">{sortDir==='asc'?'Asc':'Desc'}</button>
+          </div>
         </div>
+        {noTasksToPlan ? (
+          <div className="rounded border border-dashed border-[#1b2344] p-4 text-sm text-slate-300/80">No todo tasks to plan. Add some in <a href="/tasks" className="underline focus-visible:outline focus-visible:outline-2 focus-visible:outline-blue-500">Tasks</a> and return.</div>
+        ) : (
+          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-2">
+            {unscheduledSorted.map(t => (
+              <div key={t.id} draggable onDragStart={(e)=>onDragStartTask(e,t)} className={`p-2 rounded border focus-within:outline focus-within:outline-2 focus-within:outline-blue-500 ${scheduledIdsThisWeek.has(t.id)?'border-emerald-700 bg-emerald-900/10':'border-[#1b2344]'}`} aria-grabbed="false">
+                <div className="text-sm text-slate-200 truncate">{t.course ? `${t.course}: ` : ''}{t.title}</div>
+                <div className="text-xs text-slate-300/70 flex items-center gap-2 mt-1">
+                  <span>due {ymdFromISO(t.dueDate)}</span>
+                  {typeof t.priority==='number' ? <span>p{t.priority}</span> : null}
+                  {typeof (t as any).pagesRead==='number' ? <span>{(t as any).pagesRead}p</span> : null}
+                  {typeof t.estimatedMinutes==='number' && (t.estimatedMinutes ?? 0) > 0 ? <span>{t.estimatedMinutes}m</span> : null}
+                </div>
+              </div>
+            ))}
+          </div>
+        )}
       </section>
 
       <section className="space-y-3">
