@@ -1,7 +1,6 @@
 "use client";
 import { useEffect, useMemo, useRef, useState } from 'react';
 import type { Task, Course } from '@/lib/types';
-import { courseColorClass } from '@/lib/colors';
 import AddTaskPanel from '@/components/AddTaskPanel';
 import MultiAddDrawer from '@/components/MultiAddDrawer';
 
@@ -14,12 +13,43 @@ function fmtHM(min: number | null | undefined): string {
   return `${m}m`;
 }
 
+function parseMinutesFlexible(input: string): number | null {
+  if (!input) return null;
+  const s = input.trim().toLowerCase();
+  if (!s) return null;
+  // 1) HH:MM
+  const colon = /^(\d{1,3}):(\d{1,2})$/.exec(s);
+  if (colon) {
+    const h = parseInt(colon[1], 10);
+    const m = parseInt(colon[2], 10);
+    if (!isNaN(h) && !isNaN(m)) return Math.max(0, h * 60 + m);
+  }
+  // 2) Xh Ym or Xh or Ym
+  let total = 0; let matched = false;
+  const hr = /([0-9]+(?:\.[0-9]+)?)\s*h/.exec(s);
+  if (hr) { const h = parseFloat(hr[1]); if (!isNaN(h)) { total += Math.round(h * 60); matched = true; } }
+  const mr = /([0-9]+)\s*m(?![a-z])/i.exec(s);
+  if (mr) { const m = parseInt(mr[1], 10); if (!isNaN(m)) { total += m; matched = true; } }
+  if (matched) return Math.max(0, total);
+  // 3) Plain number => minutes
+  const plain = parseFloat(s);
+  if (!isNaN(plain)) {
+    // Treat numbers >= 10 as minutes; small decimals as hours if suffixed with 'h' already handled
+    if (plain > 0 && plain < 10 && /h\b/.test(s)) return Math.round(plain * 60);
+    return Math.round(plain);
+  }
+  return null;
+}
+
 function minutesPerPage(): number {
   if (typeof window === 'undefined') return 3;
   const s = window.localStorage.getItem('minutesPerPage');
   const n = s ? parseFloat(s) : NaN;
   return !isNaN(n) && n > 0 ? n : 3;
 }
+
+function hueFromString(s: string): number { let h = 0; for (let i=0;i<s.length;i++) { h = (h * 31 + s.charCodeAt(i)) >>> 0; } return h % 360; }
+function fallbackCourseHsl(name?: string | null): string { const key=(name||'').toString().trim().toLowerCase(); if (!key) return 'hsl(215 16% 47%)'; const h=hueFromString(key); return `hsl(${h} 70% 55%)`; }
 
 export default function TaskTable() {
   const [tasks, setTasks] = useState<Task[]>([]);
@@ -55,6 +85,8 @@ export default function TaskTable() {
   const [qaInput, setQaInput] = useState('');
   const [qaError, setQaError] = useState('');
   const [backlogCount, setBacklogCount] = useState<number>(0);
+  const [timers, setTimers] = useState<Record<string, { accMs: number; running: boolean; startedAt?: number }>>({});
+  const [timerTick, setTimerTick] = useState(0);
 
   async function refresh() {
     setLoading(true);
@@ -94,6 +126,24 @@ export default function TaskTable() {
   }, []);
 
   useEffect(() => {
+    if (typeof window === 'undefined') return;
+    try { const raw = window.localStorage.getItem('taskTimersV1') || '{}'; const obj = JSON.parse(raw) || {}; setTimers(obj); } catch {}
+  }, []);
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+    try { window.localStorage.setItem('taskTimersV1', JSON.stringify(timers)); } catch {}
+  }, [timers]);
+  useEffect(() => {
+    const id = setInterval(() => setTimerTick(x => x + 1), 1000);
+    return () => clearInterval(id);
+  }, []);
+
+  function elapsedMs(id: string): number { const t = timers[id]; return t ? (t.accMs + (t.running ? (Date.now() - (t.startedAt || Date.now())) : 0)) : 0; }
+  function startTimerFor(id: string) { setTimers(prev => { const t = prev[id] || { accMs: 0, running: false }; return { ...prev, [id]: { accMs: t.accMs, running: true, startedAt: Date.now() } }; }); }
+  function pauseTimerFor(id: string) { setTimers(prev => { const t = prev[id]; if (!t || !t.running) return prev; const delta = Date.now() - (t.startedAt || Date.now()); return { ...prev, [id]: { accMs: t.accMs + Math.max(0, delta), running: false } }; }); }
+  function clearTimerFor(id: string) { setTimers(prev => { const next = { ...prev }; delete next[id]; return next; }); }
+
+  useEffect(() => {
     (async () => {
       try {
         const r = await fetch('/api/courses', { cache: 'no-store' });
@@ -102,6 +152,21 @@ export default function TaskTable() {
       } catch {}
     })();
   }, []);
+
+  const colorForCourse = useMemo(() => {
+    const map: Record<string, string> = {};
+    for (const c of (courses||[])) {
+      const key = (c?.title || '').toString().trim().toLowerCase();
+      const col = (c?.color || '').toString().trim();
+      if (key && col) map[key] = col;
+    }
+    return (name?: string | null) => {
+      const k = (name || '').toString().trim().toLowerCase();
+      try { if (typeof window !== 'undefined' && k === 'internship') { const ls = window.localStorage.getItem('internshipColor'); if (ls) return ls; } } catch {}
+      try { if (typeof window !== 'undefined' && k === 'sports law review') { const ls = window.localStorage.getItem('sportsLawReviewColor'); if (ls) return ls; } } catch {}
+      return map[k] || fallbackCourseHsl(name || '');
+    };
+  }, [courses]);
 
   useEffect(() => {
     if (typeof window === 'undefined') return;
@@ -202,8 +267,33 @@ export default function TaskTable() {
   }, []);
 
   async function toggleDone(t: Task) {
-    const res = await fetch(`/api/tasks/${t.id}`, { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ status: t.status === 'done' ? 'todo' : 'done' }) });
-    if (res.ok) refresh();
+    const markingDone = t.status !== 'done';
+    const body: any = { status: markingDone ? 'done' : 'todo' };
+    if (markingDone && typeof window !== 'undefined') {
+      try {
+        const recMin = Math.round(elapsedMs(t.id) / 60000);
+        if (recMin > 0) {
+          const ans = window.prompt(`Recorded ${fmtHM(recMin)}. Enter a different time or leave blank to use recorded:`);
+          if (ans == null || ans.trim() === '') body.actualMinutes = recMin;
+          else {
+            const mins = parseMinutesFlexible(ans);
+            if (mins != null && mins >= 0) body.actualMinutes = mins; else window.alert('Could not parse duration. Using recorded time.');
+          }
+        } else {
+          const ans = window.prompt('How long did this task actually take? (e.g., 90, 1h30m, 1:30)');
+          if (ans != null && ans.trim().length > 0) {
+            const mins = parseMinutesFlexible(ans);
+            if (mins != null && mins >= 0) body.actualMinutes = mins;
+            else window.alert('Could not parse duration. Marking done without actual time.');
+          }
+        }
+      } catch {}
+    }
+    const res = await fetch(`/api/tasks/${t.id}`, { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
+    if (res.ok) {
+      if (markingDone) clearTimerFor(t.id);
+      refresh();
+    }
   }
 
   async function remove(id: string) {
@@ -333,7 +423,11 @@ export default function TaskTable() {
   const filteredTasks = useMemo(() => {
     return tasks
       .filter(t => (statusFilter === 'all' || t.status === statusFilter))
-      .filter(t => (!courseFilter || (t.course || '').toLowerCase().includes(courseFilter.toLowerCase())))
+      .filter(t => {
+        if (!courseFilter) return true;
+        const dc = displayCourseForTask(t);
+        return (dc || '').toLowerCase().includes(courseFilter.toLowerCase());
+      })
       .filter(t => (!tagFilter || (t.tags || []).some(tag => tag.toLowerCase().includes(tagFilter.toLowerCase()))))
       .filter(t => (!textFilter || (t.title || '').toLowerCase().includes(textFilter.toLowerCase())));
   }, [tasks, statusFilter, courseFilter, tagFilter, textFilter]);
@@ -412,6 +506,17 @@ export default function TaskTable() {
     if (x === 'internship') return 'other';
     return 'other';
   }
+
+  const displayCourseForTask = (t: Task): string => {
+    const raw = (t.course || '').trim();
+    if (raw) return raw;
+    const act = (t.activity || '').toLowerCase();
+    if (act === 'internship') return 'Internship';
+    const titleL = (t.title || '').toLowerCase();
+    const tagsL: string[] = Array.isArray((t as any).tags) ? ((t as any).tags as string[]).map(s=>String(s).toLowerCase()) : [];
+    if (titleL.includes('sports law review') || tagsL.includes('sports law review') || /\bslr\b/i.test(t.title || '')) return 'Sports Law Review';
+    return '';
+  };
 
   const pace = useMemo(() => {
     const sumsPages: Record<string, { minutes: number; pages: number }> = {};
@@ -772,8 +877,8 @@ export default function TaskTable() {
                       <input value={editCourse} onChange={e => setEditCourse(e.target.value)} className="w-full bg-[#0b1020] border border-[#1b2344] rounded px-2 py-1" />
                     ) : (
                       <div className="flex items-center gap-2">
-                        {t.course ? <span className={`inline-block w-2.5 h-2.5 rounded-full ${courseColorClass(t.course, 'bg')}`}></span> : null}
-                        <span>{t.course || '-'}</span>
+                        {(() => { const dc = displayCourseForTask(t); return dc ? <span className="inline-block w-2.5 h-2.5 rounded-full" style={{ backgroundColor: colorForCourse(dc) }}></span> : null; })()}
+                        <span>{displayCourseForTask(t) || '-'}</span>
                       </div>
                     )}
                   </td>
@@ -840,6 +945,15 @@ export default function TaskTable() {
                         <button onClick={() => startEdit(t)} className="px-2 py-1 rounded border border-[#1b2344]">Edit</button>
                         <button onClick={() => toggleDone(t)} className="px-2 py-1 rounded bg-emerald-600 hover:bg-emerald-500">{t.status === 'done' ? 'Undo' : 'Done'}</button>
                         <button onClick={() => remove(t.id)} className="px-2 py-1 rounded bg-rose-600 hover:bg-rose-500">Delete</button>
+                        <span className="inline-flex items-center gap-1 text-xs align-middle border border-[#1b2344] rounded px-1.5 py-0.5">
+                          <span className="text-slate-300/70">{fmtHM(Math.round(elapsedMs(t.id)/60000))}</span>
+                          {timers[t.id]?.running ? (
+                            <button onClick={() => pauseTimerFor(t.id)} className="px-1 py-0.5 rounded border border-[#1b2344]">Pause</button>
+                          ) : (
+                            <button onClick={() => startTimerFor(t.id)} className="px-1 py-0.5 rounded border border-[#1b2344]">Start</button>
+                          )}
+                          <button onClick={() => clearTimerFor(t.id)} className="px-1 py-0.5 rounded border border-[#1b2344]">Clear</button>
+                        </span>
                       </>
                     )}
                   </td>

@@ -36,6 +36,8 @@ type Task = {
   status: "todo" | "done";
   estimatedMinutes?: number | null;
   priority?: number | null;
+  activity?: string | null;
+  tags?: string[] | null;
 };
 
 const LS_BACKLOG = "backlogItemsV1";
@@ -158,6 +160,8 @@ export default function WeekPlanPage() {
     }
     return (name?: string | null) => {
       const k = (name || '').toString().trim().toLowerCase();
+      try { if (typeof window !== 'undefined' && k === 'internship') { const ls = window.localStorage.getItem('internshipColor'); if (ls) return ls; } } catch {}
+      try { if (typeof window !== 'undefined' && k === 'sports law review') { const ls = window.localStorage.getItem('sportsLawReviewColor'); if (ls) return ls; } } catch {}
       return map[k] || courseColor(name || '');
     };
   }, [courses]);
@@ -352,7 +356,7 @@ export default function WeekPlanPage() {
     const keys = new Set(days.map(d => ymd(d))); return new Set(blocks.filter(b => keys.has(b.day)).map(b => b.taskId));
   }, [blocks, days]);
   const unscheduledTasks = useMemo(() => tasksTodo.filter(t => !scheduledIdsThisWeek.has(t.id)), [tasksTodo, scheduledIdsThisWeek]);
-  function sortValCourse(t: Task) { return (t.course || '').toLowerCase(); }
+  function sortValCourse(t: Task) { return displayCourseFor(t).toLowerCase(); }
   function sortValDue(t: Task) { const n = new Date(t.dueDate).getTime(); return isNaN(n) ? Number.MAX_SAFE_INTEGER : n; }
   function sortValPriority(t: Task) { return -(t.priority ?? 0); }
   function sortValEstimate(t: Task) { return -((t.estimatedMinutes ?? 0) as number); }
@@ -379,6 +383,14 @@ export default function WeekPlanPage() {
     }
     return { minutes: 30, guessed: true };
   }
+  function displayCourseFor(t: Task): string {
+    const c = (t.course || '').trim(); if (c) return c;
+    const a = (t as any).activity; if ((a || '').toLowerCase() === 'internship') return 'Internship';
+    const titleL = (t.title || '').toLowerCase();
+    const tagsL: string[] = Array.isArray((t as any).tags) ? ((t as any).tags as string[]).map(s=>String(s).toLowerCase()) : [];
+    if (titleL.includes('sports law review') || tagsL.includes('sports law review') || /\bslr\b/i.test(t.title || '')) return 'Sports Law Review';
+    return '';
+  }
   function onDragStartTask(e: React.DragEvent, t: Task) { e.dataTransfer.setData('text/plain', `task:${t.id}`); }
   function onDropDay(e: React.DragEvent, d: Date) {
     e.preventDefault(); const id = e.dataTransfer.getData('text/plain'); if (!id) return;
@@ -387,7 +399,7 @@ export default function WeekPlanPage() {
       const t = tasksTodo.find(x => x.id === tid);
       if (!t) return;
       const { minutes, guessed } = estimateMinutesForTask(t);
-      const block: ScheduledBlock = { id: uid(), taskId: t.id, day: ymd(d), plannedMinutes: minutes, guessed, title: t.title, course: t.course || '', pages: null, priority: t.priority ?? null };
+      const block: ScheduledBlock = { id: uid(), taskId: t.id, day: ymd(d), plannedMinutes: minutes, guessed, title: t.title, course: displayCourseFor(t) || '', pages: null, priority: t.priority ?? null };
       setBlocks(prev => [...prev, block]);
       return;
     }
@@ -494,8 +506,8 @@ export default function WeekPlanPage() {
         ) : (
           <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-2">
             {unscheduledSorted.map(t => (
-              <div key={t.id} draggable onDragStart={(e)=>onDragStartTask(e,t)} className={`p-2 pl-3 rounded border focus-within:outline focus-within:outline-2 focus-within:outline-blue-500 ${scheduledIdsThisWeek.has(t.id)?'border-emerald-700 bg-emerald-900/10':'border-[#1b2344]'}`} aria-grabbed="false" style={{ borderLeft: `3px solid ${colorForCourse(t.course || '')}` }}>
-                <div className="text-sm text-slate-200 truncate">{t.course ? `${t.course}: ` : ''}{t.title}</div>
+              <div key={t.id} draggable onDragStart={(e)=>onDragStartTask(e,t)} className={`p-2 pl-3 rounded border focus-within:outline focus-within:outline-2 focus-within:outline-blue-500 ${scheduledIdsThisWeek.has(t.id)?'border-emerald-700 bg-emerald-900/10':'border-[#1b2344]'}`} aria-grabbed="false" style={{ borderLeft: `3px solid ${colorForCourse(displayCourseFor(t))}` }}>
+                <div className="text-sm text-slate-200 truncate">{displayCourseFor(t) ? `${displayCourseFor(t)}: ` : ''}{t.title}</div>
                 <div className="text-xs text-slate-300/70 flex items-center gap-2 mt-1">
                   <span>due {ymdFromISO(t.dueDate)}</span>
                   {typeof t.priority==='number' ? <span>p{t.priority}</span> : null}

@@ -141,6 +141,25 @@ export default function ReviewPage() {
     return m ? m[1].trim() : null;
   }
 
+  function deriveCourseForSession(s: StudySession, task?: Task): string {
+    // 1) Internship overrides to its own bucket
+    const act = (s.activity || '').toLowerCase();
+    if (act === 'internship') return 'Internship';
+    // 2) Base course from task or [Course] in notes
+    let base = (task?.course || extractCourseFromNotes(s.notes) || '').toString().trim();
+    const notesL = (s.notes || '').toLowerCase();
+    const baseL = base.toLowerCase();
+    // 3) Sports Law Review detection from course/notes keywords
+    if (baseL.includes('sports law review') || notesL.includes('sports law review') || /\bslr\b/i.test(s.notes || '')) {
+      return 'Sports Law Review';
+    }
+    if (act === 'review' && (baseL.includes('amateur sports law') || baseL === 'sports law')) {
+      return 'Sports Law Review';
+    }
+    // 4) Default
+    return base || 'Unassigned';
+  }
+
   const tasksById = useMemo(() => {
     const m = new Map<string, Task>();
     for (const t of tasks) m.set(t.id, t);
@@ -162,9 +181,7 @@ export default function ReviewPage() {
       const ymd = chicagoYMD(new Date(s.when));
       if (!inYmdRange(ymd, startYMD, endYMD)) continue;
       const task = s.taskId ? tasksById.get(s.taskId) : undefined;
-      const inferredCourse = extractCourseFromNotes(s.notes);
-      const isIntern = (s.activity || '').toLowerCase() === 'internship';
-      const course = (task?.course || (isIntern ? 'Internship' : inferredCourse) || "Unassigned") as string;
+      const course = deriveCourseForSession(s, task);
       actualByCourse.set(course, (actualByCourse.get(course) || 0) + Math.max(0, Number(s.minutes) || 0));
     }
     const courses = Array.from(new Set([...plannedByCourse.keys(), ...actualByCourse.keys()])).sort((a, b) => (a || "").localeCompare(b || ""));
@@ -239,9 +256,7 @@ export default function ReviewPage() {
       const ymd = chicagoYMD(new Date(s.when));
       if (ymd < startYMD30) continue;
       const task = s.taskId ? tasksById.get(s.taskId) : undefined;
-      const inferredCourse = extractCourseFromNotes(s.notes);
-      const isIntern = (s.activity || '').toLowerCase() === 'internship';
-      const course = (task?.course || (isIntern ? 'Internship' : inferredCourse) || 'Unassigned') as string;
+      const course = deriveCourseForSession(s, task);
       const entry = map.get(course) || { minutes: 0, sessions: 0, focusSum: 0, focusCount: 0 };
       entry.minutes += Math.max(0, Number(s.minutes) || 0);
       entry.sessions += 1;
@@ -301,9 +316,7 @@ export default function ReviewPage() {
       const isReading = (s.activity || '').toLowerCase() === 'reading';
       if (!isReading) continue;
       const task = s.taskId ? tasksById.get(s.taskId) : undefined;
-      const inferredCourse = extractCourseFromNotes(s.notes);
-      const isIntern = (s.activity || '').toLowerCase() === 'internship';
-      const course = (task?.course || (isIntern ? 'Internship' : inferredCourse) || 'Unassigned') as string;
+      const course = deriveCourseForSession(s, task);
       const entry = map.get(course) || { minutes: 0, pages: 0, sessions: 0 };
       entry.minutes += Math.max(0, Number(s.minutes) || 0);
       entry.pages += pages;

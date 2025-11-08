@@ -34,9 +34,14 @@ function activityLabel(a?: string | null): string {
   return x[0].toUpperCase() + x.slice(1);
 }
 
+// Course color helpers
+function hueFromString(s: string): number { let h = 0; for (let i=0;i<s.length;i++) { h = (h * 31 + s.charCodeAt(i)) >>> 0; } return h % 360; }
+function fallbackCourseHsl(name?: string | null): string { const key=(name||'').toString().trim().toLowerCase(); if (!key) return 'hsl(215 16% 47%)'; const h=hueFromString(key); return `hsl(${h} 70% 55%)`; }
+
 export default function LogPage() {
   const [sessions, setSessions] = useState<any[]>([]);
   const [tasks, setTasks] = useState<any[]>([]);
+  const [courses, setCourses] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
 
   // Filters
@@ -50,14 +55,17 @@ export default function LogPage() {
   async function refresh() {
     setLoading(true);
     try {
-      const [sRes, tRes] = await Promise.all([
+      const [sRes, tRes, cRes] = await Promise.all([
         fetch('/api/sessions', { cache: 'no-store' }),
-        fetch('/api/tasks', { cache: 'no-store' })
+        fetch('/api/tasks', { cache: 'no-store' }),
+        fetch('/api/courses', { cache: 'no-store' }),
       ]);
       const sj = await sRes.json().catch(()=>({ sessions: [] }));
       const tj = await tRes.json().catch(()=>({ tasks: [] }));
+      const cj = await cRes.json().catch(()=>({ courses: [] }));
       setSessions(Array.isArray(sj?.sessions) ? sj.sessions : []);
       setTasks(Array.isArray(tj?.tasks) ? tj.tasks : []);
+      setCourses(Array.isArray(cj?.courses) ? cj.courses : []);
     } finally {
       setLoading(false);
     }
@@ -78,6 +86,19 @@ export default function LogPage() {
     for (const t of tasks) if (t && t.id) m.set(t.id, t);
     return m;
   }, [tasks]);
+
+  const colorForCourse = useMemo(() => {
+    const map: Record<string, string> = {};
+    for (const c of (courses||[])) {
+      const key = (c?.title || '').toString().trim().toLowerCase();
+      const col = (c?.color || '').toString().trim();
+      if (key && col) map[key] = col;
+    }
+    return (name?: string | null) => {
+      const k = (name || '').toString().trim().toLowerCase();
+      return map[k] || fallbackCourseHsl(name || '');
+    };
+  }, [courses]);
 
   type Row = { id: string; when: string; ymd: string; minutes: number; course: string; activity: string; focus: number | null; notes: string | null };
   const rows: Row[] = useMemo(() => {
@@ -241,7 +262,12 @@ export default function LogPage() {
                 filtered.map((r) => (
                   <tr key={r.id} className="border-t border-[#1b2344]">
                     <td className="py-1 pr-2 whitespace-nowrap">{new Date(r.when).toLocaleString()}</td>
-                    <td className="py-1 pr-2">{r.course || '—'}</td>
+                    <td className="py-1 pr-2">
+                      <div className="flex items-center gap-2">
+                        {r.course ? <span className="inline-block w-2.5 h-2.5 rounded-full" style={{ backgroundColor: colorForCourse(r.course) }} /> : null}
+                        <span>{r.course || '—'}</span>
+                      </div>
+                    </td>
                     <td className="py-1 pr-2">{r.activity}</td>
                     <td className="py-1 pr-2">{fmtHM(r.minutes)}</td>
                     <td className="py-1 pr-2">{r.focus ?? '—'}</td>
