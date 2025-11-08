@@ -21,6 +21,7 @@ export default function SettingsPage() {
   const [localColors, setLocalColors] = useState<Record<string,string>>({});
   const [savingId, setSavingId] = useState<string | null>(null);
   const [internshipColor, setInternshipColor] = useState<string>('');
+  const [sportsLawReviewColor, setSportsLawReviewColor] = useState<string>('');
 
   useEffect(() => {
     if (typeof window === "undefined") return;
@@ -51,6 +52,12 @@ export default function SettingsPage() {
     if (typeof window !== 'undefined') {
       const ls = window.localStorage.getItem('internshipColor');
       setInternshipColor(ls || fallbackHex('Internship'));
+    }
+  }, []);
+  useEffect(() => {
+    if (typeof window !== 'undefined') {
+      const ls = window.localStorage.getItem('sportsLawReviewColor');
+      setSportsLawReviewColor(ls || fallbackHex('Sports Law Review'));
     }
   }, []);
 
@@ -86,6 +93,8 @@ export default function SettingsPage() {
   }
   function saveInternColor() { try { if (typeof window !== 'undefined') window.localStorage.setItem('internshipColor', internshipColor || fallbackHex('Internship')); } catch {} }
   function resetInternColor() { const def = fallbackHex('Internship'); setInternshipColor(def); try { if (typeof window !== 'undefined') window.localStorage.removeItem('internshipColor'); } catch {} }
+  function saveSlrColor() { try { if (typeof window !== 'undefined') window.localStorage.setItem('sportsLawReviewColor', sportsLawReviewColor || fallbackHex('Sports Law Review')); } catch {} }
+  function resetSlrColor() { const def = fallbackHex('Sports Law Review'); setSportsLawReviewColor(def); try { if (typeof window !== 'undefined') window.localStorage.removeItem('sportsLawReviewColor'); } catch {} }
   // Save Nudges
   useEffect(() => { if (typeof window!== 'undefined') window.localStorage.setItem('nudgesEnabled', nudgesEnabled ? 'true':'false'); }, [nudgesEnabled]);
   useEffect(() => { if (typeof window!== 'undefined' && /^(\d{2}):(\d{2})$/.test(dailyReminderTime||'')) window.localStorage.setItem('nudgesReminderTime', dailyReminderTime); }, [dailyReminderTime]);
@@ -167,17 +176,24 @@ export default function SettingsPage() {
             <div className="space-y-2">
               {/* Internship virtual course */}
               <div className="flex items-center gap-3">
-                <span className="inline-block w-3 h-3 rounded-full" style={{ backgroundColor: fallbackCourseHsl('Internship') }} />
+                <span className="inline-block w-3 h-3 rounded-full" style={{ backgroundColor: (internshipColor && /^#?[0-9a-fA-F]{6}$/.test(internshipColor) ? (internshipColor.startsWith('#')? internshipColor : `#${internshipColor}`) : fallbackHex('Internship')) }} />
                 <div className="flex-1 truncate text-sm">Internship</div>
                 <input type="color" value={/^#?[0-9a-fA-F]{6}$/.test(internshipColor||'') ? (internshipColor.startsWith('#')? internshipColor : `#${internshipColor}`) : fallbackHex('Internship')} onChange={e=>setInternshipColor(e.target.value)} className="h-7 w-12 bg-[#0b1020] border border-[#1b2344] rounded" />
                 <button onClick={saveInternColor} className="px-2 py-1 rounded border border-[#1b2344] text-xs">Save</button>
                 <button onClick={resetInternColor} className="px-2 py-1 rounded border border-[#1b2344] text-xs">Reset</button>
               </div>
+              <div className="flex items-center gap-3">
+                <span className="inline-block w-3 h-3 rounded-full" style={{ backgroundColor: (sportsLawReviewColor && /^#?[0-9a-fA-F]{6}$/.test(sportsLawReviewColor) ? (sportsLawReviewColor.startsWith('#')? sportsLawReviewColor : `#${sportsLawReviewColor}`) : fallbackHex('Sports Law Review')) }} />
+                <div className="flex-1 truncate text-sm">Sports Law Review</div>
+                <input type="color" value={/^#?[0-9a-fA-F]{6}$/.test(sportsLawReviewColor||'') ? (sportsLawReviewColor.startsWith('#')? sportsLawReviewColor : `#${sportsLawReviewColor}`) : fallbackHex('Sports Law Review')} onChange={e=>setSportsLawReviewColor(e.target.value)} className="h-7 w-12 bg-[#0b1020] border border-[#1b2344] rounded" />
+                <button onClick={saveSlrColor} className="px-2 py-1 rounded border border-[#1b2344] text-xs">Save</button>
+                <button onClick={resetSlrColor} className="px-2 py-1 rounded border border-[#1b2344] text-xs">Reset</button>
+              </div>
               {courses.length === 0 ? (
                 <div className="text-xs text-slate-300/60">No courses found.</div>
               ) : courses.map((c:any) => (
                 <div key={c.id} className="flex items-center gap-3">
-                  <span className="inline-block w-3 h-3 rounded-full" style={{ backgroundColor: fallbackCourseHsl(c.title) }} />
+                  <span className="inline-block w-3 h-3 rounded-full" style={{ backgroundColor: (localColors[c.id] || c.color || fallbackHex(c.title)) }} />
                   <div className="flex-1 truncate text-sm">{c.title}</div>
                   <input type="color" value={localColors[c.id] || c.color || fallbackHex(c.title)} onChange={e=>setLocalColors(prev=>({ ...prev, [c.id]: e.target.value }))} className="h-7 w-12 bg-[#0b1020] border border-[#1b2344] rounded" />
                   <button onClick={()=>saveCourseColor(c.id, localColors[c.id] || c.color || fallbackHex(c.title))} className="px-2 py-1 rounded border border-[#1b2344] text-xs" disabled={savingId===c.id}>Save</button>

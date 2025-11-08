@@ -23,6 +23,14 @@ function extractCourseFromNotes(notes?: string | null): string {
   const m = notes.match(/^\s*\[([^\]]+)\]/);
   return m ? m[1].trim() : '';
 }
+function normCourseKey(name?: string | null): string {
+  let x = (name || '').toString().toLowerCase().trim();
+  if (!x) return '';
+  x = x.replace(/&/g, 'and');
+  x = x.replace(/[^a-z0-9]+/g, ' ').trim().replace(/\s+/g, ' ');
+  if (/\blaw$/.test(x)) x = x.replace(/\s*law$/, '');
+  return x;
+}
 function activityLabel(a?: string | null): string {
   const x = (a || '').toLowerCase();
   if (x === 'reading') return 'Reading';
@@ -90,13 +98,16 @@ export default function LogPage() {
   const colorForCourse = useMemo(() => {
     const map: Record<string, string> = {};
     for (const c of (courses||[])) {
-      const key = (c?.title || '').toString().trim().toLowerCase();
+      const key = normCourseKey(c?.title || '');
       const col = (c?.color || '').toString().trim();
       if (key && col) map[key] = col;
     }
     return (name?: string | null) => {
-      const k = (name || '').toString().trim().toLowerCase();
-      return map[k] || fallbackCourseHsl(name || '');
+      const raw = (name || '').toString();
+      const k = normCourseKey(raw);
+      try { if (typeof window !== 'undefined' && k === 'internship') { const ls = window.localStorage.getItem('internshipColor'); if (ls) return ls; } } catch {}
+      try { if (typeof window !== 'undefined' && k === 'sports law review') { const ls = window.localStorage.getItem('sportsLawReviewColor'); if (ls) return ls; } } catch {}
+      return map[k] || fallbackCourseHsl(raw || '');
     };
   }, [courses]);
 
@@ -109,8 +120,12 @@ export default function LogPage() {
       let course = '';
       if (s.taskId && tasksById.has(s.taskId)) course = tasksById.get(s.taskId)?.course || '';
       if (!course) {
-        course = ((s.activity||'').toLowerCase()==='internship') ? 'Internship' : extractCourseFromNotes(s.notes);
+        const act = (s.activity||'').toLowerCase();
+        if (act === 'internship') course = 'Internship'; else course = extractCourseFromNotes(s.notes);
       }
+      const notesL = (s.notes || '').toLowerCase();
+      const courseL = (course || '').toLowerCase();
+      if (courseL.includes('sports law review') || /\bslr\b/i.test(s.notes || '')) course = 'Sports Law Review';
       out.push({ id: s.id, when, ymd, minutes: Number(s.minutes)||0, course: course||'', activity: activityLabel(s.activity), focus: (typeof s.focus==='number'? s.focus : null), notes: s.notes ?? null });
     }
     out.sort((a,b) => b.when.localeCompare(a.when));

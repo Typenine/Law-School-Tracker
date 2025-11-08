@@ -51,6 +51,15 @@ function minutesPerPage(): number {
 function hueFromString(s: string): number { let h = 0; for (let i=0;i<s.length;i++) { h = (h * 31 + s.charCodeAt(i)) >>> 0; } return h % 360; }
 function fallbackCourseHsl(name?: string | null): string { const key=(name||'').toString().trim().toLowerCase(); if (!key) return 'hsl(215 16% 47%)'; const h=hueFromString(key); return `hsl(${h} 70% 55%)`; }
 
+function normCourseKey(name?: string | null): string {
+  let x = (name || '').toString().toLowerCase().trim();
+  if (!x) return '';
+  x = x.replace(/&/g, 'and');
+  x = x.replace(/[^a-z0-9]+/g, ' ').trim().replace(/\s+/g, ' ');
+  if (/\blaw$/.test(x)) x = x.replace(/\s*law$/, '');
+  return x;
+}
+
 export default function TaskTable() {
   const [tasks, setTasks] = useState<Task[]>([]);
   const [courses, setCourses] = useState<Course[]>([]);
@@ -156,15 +165,16 @@ export default function TaskTable() {
   const colorForCourse = useMemo(() => {
     const map: Record<string, string> = {};
     for (const c of (courses||[])) {
-      const key = (c?.title || '').toString().trim().toLowerCase();
+      const key = normCourseKey(c?.title || '');
       const col = (c?.color || '').toString().trim();
       if (key && col) map[key] = col;
     }
     return (name?: string | null) => {
-      const k = (name || '').toString().trim().toLowerCase();
+      const raw = (name || '').toString();
+      const k = normCourseKey(raw);
       try { if (typeof window !== 'undefined' && k === 'internship') { const ls = window.localStorage.getItem('internshipColor'); if (ls) return ls; } } catch {}
       try { if (typeof window !== 'undefined' && k === 'sports law review') { const ls = window.localStorage.getItem('sportsLawReviewColor'); if (ls) return ls; } } catch {}
-      return map[k] || fallbackCourseHsl(name || '');
+      return map[k] || fallbackCourseHsl(raw || '');
     };
   }, [courses]);
 

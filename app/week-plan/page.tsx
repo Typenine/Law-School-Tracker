@@ -81,6 +81,14 @@ function getCourseMpp(course?: string | null): number {
 
 function hueFromString(s: string): number { let h = 0; for (let i=0;i<s.length;i++) { h = (h * 31 + s.charCodeAt(i)) >>> 0; } return h % 360; }
 function courseColor(c?: string | null): string { const key = (c||'').trim().toLowerCase(); if (!key) return 'hsl(215 16% 47%)'; const h = hueFromString(key); return `hsl(${h} 70% 55%)`; }
+function normCourseKey(name?: string | null): string {
+  let x = (name || '').toString().toLowerCase().trim();
+  if (!x) return '';
+  x = x.replace(/&/g, 'and');
+  x = x.replace(/[^a-z0-9]+/g, ' ').trim().replace(/\s+/g, ' ');
+  if (/\blaw$/.test(x)) x = x.replace(/\s*law$/, '');
+  return x;
+}
 
 function loadBacklog(): BacklogItem[] {
   if (typeof window === 'undefined') return [];
@@ -154,15 +162,16 @@ export default function WeekPlanPage() {
   const colorForCourse = useMemo(() => {
     const map: Record<string, string> = {};
     for (const c of (courses||[])) {
-      const key = (c?.title || '').toString().trim().toLowerCase();
+      const key = normCourseKey(c?.title || '');
       const col = (c?.color || '').toString().trim();
       if (key && col) map[key] = col;
     }
     return (name?: string | null) => {
-      const k = (name || '').toString().trim().toLowerCase();
+      const raw = (name || '').toString();
+      const k = normCourseKey(raw);
       try { if (typeof window !== 'undefined' && k === 'internship') { const ls = window.localStorage.getItem('internshipColor'); if (ls) return ls; } } catch {}
       try { if (typeof window !== 'undefined' && k === 'sports law review') { const ls = window.localStorage.getItem('sportsLawReviewColor'); if (ls) return ls; } } catch {}
-      return map[k] || courseColor(name || '');
+      return map[k] || courseColor(raw || '');
     };
   }, [courses]);
 
@@ -451,8 +460,8 @@ export default function WeekPlanPage() {
   const noTasksToPlan = unscheduledSorted.length === 0;
 
   return (
-    <main className="space-y-6">
-      <section className="card p-6 space-y-4">
+    <main className="flex flex-col space-y-6">
+      <section className="card p-6 space-y-4 order-2">
         <div className="flex flex-col gap-2 md:flex-row md:items-center md:justify-between">
           <div className="flex items-center gap-2">
             <button aria-label="Previous week" onClick={()=>shiftWeek(-1)} className="px-2 py-1 rounded border border-[#1b2344] focus-visible:outline focus-visible:outline-2 focus-visible:outline-blue-500">◀</button>
@@ -485,7 +494,7 @@ export default function WeekPlanPage() {
         </div>
       </section>
 
-      <section className="card p-6 space-y-4">
+      <section className="card p-6 space-y-4 order-3">
         <div className="flex items-end justify-between gap-2">
           <h3 className="text-sm font-medium">Tasks to plan (drag to a day)</h3>
           <div className="flex items-center gap-2 text-xs">
@@ -520,7 +529,7 @@ export default function WeekPlanPage() {
         )}
       </section>
 
-      <section className="space-y-3">
+      <section className="space-y-3 order-1">
         <div className="grid grid-cols-1 md:grid-cols-7 gap-2">
           {days.map((d) => {
             const k = ymd(d);
