@@ -1,5 +1,5 @@
 "use client";
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import type { Course, NewTaskInput, Task } from "@/lib/types";
 
 type Props = { onCreated?: () => void };
@@ -47,6 +47,7 @@ export default function AddTaskPanel({ onCreated }: Props) {
   const [range, setRange] = useState<string>('');
   const [title, setTitle] = useState<string>('');
   const [due, setDue] = useState<string>('');
+  const dueRef = useRef<HTMLInputElement>(null);
   const [estimateOrigin, setEstimateOrigin] = useState<'learned'|'default'|'manual'|null>(null);
   const [manualEst, setManualEst] = useState<string>('');
   const [saving, setSaving] = useState(false);
@@ -285,7 +286,14 @@ export default function AddTaskPanel({ onCreated }: Props) {
         </div>
         <div>
           <div className="text-xs text-slate-300/70 mb-1">Due (date & time)</div>
-          <input type="datetime-local" value={due} onChange={e=>setDue(e.target.value)} className="bg-[#0b1020] border border-[#1b2344] rounded px-3 py-2" />
+          <input
+            ref={dueRef}
+            type="datetime-local"
+            value={due}
+            onChange={e=>setDue(e.target.value)}
+            onDoubleClick={() => { try { (dueRef.current as any)?.showPicker?.(); dueRef.current?.focus(); } catch {} }}
+            className="bg-[#0b1020] border border-[#1b2344] rounded px-3 py-2"
+          />
         </div>
         <div className="flex items-center gap-2">
           <button type="button" onClick={quickPickTonight} className="px-2 py-1 rounded border border-[#1b2344] text-xs">Tonight 9p</button>

@@ -53,7 +53,7 @@ export default function FocusTimer() {
   useEffect(() => {
     if (typeof window === 'undefined') return;
     const s = window.localStorage.getItem('defaultFocus');
-    const n = s ? parseInt(s, 10) : NaN;
+    const n = s ? parseFloat(s) : NaN;
     const val = !isNaN(n) && n >= 1 && n <= 10 ? n : 5;
     setDefaultFocus(val);
     setFocus(val);
@@ -127,7 +127,7 @@ export default function FocusTimer() {
         </div>
         <div>
           <label className="block text-sm mb-1">Focus (1-10)</label>
-          <input type="number" min={1} max={10} value={focus} onChange={e => setFocus(parseInt(e.target.value || '1', 10))} className="w-full bg-[#0b1020] border border-[#1b2344] rounded px-3 py-2" />
+          <input type="number" min={1} max={10} step={0.1} value={focus} onChange={e => setFocus(parseFloat(e.target.value || '1'))} className="w-full bg-[#0b1020] border border-[#1b2344] rounded px-3 py-2" />
         </div>
         <div className="flex items-end">
           <div className="text-xs text-slate-300/70">Minutes will be rounded from elapsed time.</div>

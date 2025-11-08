@@ -18,7 +18,7 @@ export async function POST(req: NextRequest) {
     taskId: z.string().min(1).optional().nullable(),
     when: z.string().optional(),
     minutes: z.number().int().positive(),
-    focus: z.number().int().min(1).max(10).optional().nullable(),
+    focus: z.number().min(1).max(10).optional().nullable(),
     notes: z.string().max(1000).optional().nullable(),
     pagesRead: z.number().int().min(0).optional().nullable(),
     outlinePages: z.number().int().min(0).optional().nullable(),

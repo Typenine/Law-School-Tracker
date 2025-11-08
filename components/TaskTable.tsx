@@ -39,6 +39,7 @@ export default function TaskTable() {
   const [editDepends, setEditDepends] = useState<string>('');
   const [editTags, setEditTags] = useState<string>('');
   const courseFilterRef = useRef<HTMLInputElement>(null);
+  const dueInputRef = useRef<HTMLInputElement>(null);
   const [importOpen, setImportOpen] = useState(false);
   const [importFile, setImportFile] = useState<File | null>(null);
   const [importStatus, setImportStatus] = useState('');
@@ -785,9 +786,17 @@ export default function TaskTable() {
                   </td>
                   <td className="py-2 pr-4">{(t.activity||'') ? (t.activity as string) : '-'}</td>
                   <td className="py-2 pr-4">{typeof (t.pagesRead as any) === 'number' ? (t.pagesRead as any) : '-'}</td>
-                  <td className="py-2 pr-4 whitespace-nowrap">
+                  <td
+                    className="py-2 pr-4 whitespace-nowrap"
+                    onDoubleClick={() => {
+                      startEdit(t);
+                      setTimeout(() => {
+                        try { (dueInputRef.current as any)?.showPicker?.(); dueInputRef.current?.focus(); } catch {}
+                      }, 0);
+                    }}
+                  >
                     {editingId === t.id ? (
-                      <input type="datetime-local" value={editDue} onChange={e => setEditDue(e.target.value)} className="bg-[#0b1020] border border-[#1b2344] rounded px-2 py-1" />
+                      <input ref={dueInputRef} type="datetime-local" value={editDue} onChange={e => setEditDue(e.target.value)} className="bg-[#0b1020] border border-[#1b2344] rounded px-2 py-1" />
                     ) : (
                       new Date(t.dueDate).toLocaleString()
                     )}

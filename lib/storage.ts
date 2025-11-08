@@ -398,7 +398,7 @@ export async function ensureSchema() {
         task_id uuid REFERENCES tasks(id) ON DELETE SET NULL,
         when_ts timestamptz NOT NULL DEFAULT now(),
         minutes integer NOT NULL,
-        focus integer,
+        focus double precision,
         notes text,
         pages_read integer,
         outline_pages integer,
@@ -406,6 +406,10 @@ export async function ensureSchema() {
         activity text,
         created_at timestamptz NOT NULL DEFAULT now()
       );
+      -- Ensure focus supports decimals
+      DO $$ BEGIN
+        ALTER TABLE sessions ALTER COLUMN focus TYPE double precision USING focus::double precision;
+      EXCEPTION WHEN others THEN NULL; END $$;
     `);
   } catch (e) {
     console.warn('ensureSchema: Postgres unavailable, continuing with JSON store:', (e as any)?.message || e);
