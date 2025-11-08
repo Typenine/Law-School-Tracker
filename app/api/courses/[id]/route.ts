@@ -26,6 +26,7 @@ export async function PATCH(req: NextRequest, { params }: { params: { id: string
     year: z.number().int().min(2000).max(2100).nullable().optional(),
     overrideEnabled: z.boolean().nullable().optional(),
     overrideMpp: z.number().nullable().optional(),
+    defaultActivity: z.string().trim().min(1).nullable().optional(),
   });
   const parsed = schema.safeParse(await req.json());
   if (!parsed.success) return new Response('Invalid course patch', { status: 400 });

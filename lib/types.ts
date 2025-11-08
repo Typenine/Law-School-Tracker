@@ -10,6 +10,7 @@ export interface Task {
   startTime?: string | null; // optional HH:MM 24h for calendar scheduling
   endTime?: string | null;   // optional HH:MM 24h for calendar scheduling
   estimatedMinutes?: number | null;
+  estimateOrigin?: 'learned' | 'default' | 'manual' | null;
   actualMinutes?: number | null; // logged time when completed
   priority?: number | null; // 1-5
   notes?: string | null;
@@ -50,6 +51,8 @@ export interface Course {
   // Manual override
   overrideEnabled?: boolean | null;
   overrideMpp?: number | null;
+  // Default activity for new tasks in this course
+  defaultActivity?: string | null;
 }
 
 export interface NewCourseInput {
@@ -88,6 +91,7 @@ export interface UpdateCourseInput {
   year?: number | null;
   overrideEnabled?: boolean | null;
   overrideMpp?: number | null;
+  defaultActivity?: string | null;
 }
 
 export interface CourseMeetingBlock {
@@ -105,12 +109,15 @@ export interface NewTaskInput {
   startTime?: string | null; // HH:MM 24h
   endTime?: string | null;   // HH:MM 24h
   estimatedMinutes?: number | null;
+  estimateOrigin?: 'learned' | 'default' | 'manual' | null;
   priority?: number | null;
   notes?: string | null;
   attachments?: string[] | null;
   dependsOn?: string[] | null;
   tags?: string[] | null;
   term?: string | null;
+  pagesRead?: number | null;
+  activity?: string | null;
 }
 
 export interface UpdateTaskInput {
@@ -121,6 +128,7 @@ export interface UpdateTaskInput {
   startTime?: string | null; // HH:MM 24h
   endTime?: string | null;   // HH:MM 24h
   estimatedMinutes?: number | null;
+  estimateOrigin?: 'learned' | 'default' | 'manual' | null;
   actualMinutes?: number | null;
   priority?: number | null;
   notes?: string | null;

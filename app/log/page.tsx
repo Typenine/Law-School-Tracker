@@ -29,7 +29,7 @@ function activityLabel(a?: string | null): string {
   if (x === 'review') return 'Review';
   if (x === 'outline') return 'Outline';
   if (x === 'practice') return 'Practice';
-  if (x === 'internship') return 'Internship';
+  if (x === 'internship') return 'Other';
   if (!x) return 'Other';
   return x[0].toUpperCase() + x.slice(1);
 }
@@ -198,7 +198,6 @@ export default function LogPage() {
               <option value="review">Review</option>
               <option value="outline">Outline</option>
               <option value="practice">Practice</option>
-              <option value="internship">Internship</option>
               <option value="other">Other</option>
             </select>
           </div>

@@ -161,7 +161,9 @@ export default function ReviewPage() {
       const ymd = chicagoYMD(new Date(s.when));
       if (!inYmdRange(ymd, startYMD, endYMD)) continue;
       const task = s.taskId ? tasksById.get(s.taskId) : undefined;
-      const course = (task?.course || extractCourseFromNotes(s.notes) || "Unassigned") as string;
+      const inferredCourse = extractCourseFromNotes(s.notes);
+      const isIntern = (s.activity || '').toLowerCase() === 'internship';
+      const course = (task?.course || (isIntern ? 'Internship' : inferredCourse) || "Unassigned") as string;
       actualByCourse.set(course, (actualByCourse.get(course) || 0) + Math.max(0, Number(s.minutes) || 0));
     }
     const courses = Array.from(new Set([...plannedByCourse.keys(), ...actualByCourse.keys()])).sort((a, b) => (a || "").localeCompare(b || ""));
@@ -212,7 +214,7 @@ export default function ReviewPage() {
     if (x === 'review') return 'Review';
     if (x === 'outline') return 'Outline';
     if (x === 'practice') return 'Practice';
-    if (x === 'internship') return 'Internship';
+    if (x === 'internship') return 'Other';
     if (!x) return 'Other';
     return x[0].toUpperCase() + x.slice(1);
   }
@@ -236,7 +238,9 @@ export default function ReviewPage() {
       const ymd = chicagoYMD(new Date(s.when));
       if (ymd < startYMD30) continue;
       const task = s.taskId ? tasksById.get(s.taskId) : undefined;
-      const course = (task?.course || extractCourseFromNotes(s.notes) || 'Unassigned') as string;
+      const inferredCourse = extractCourseFromNotes(s.notes);
+      const isIntern = (s.activity || '').toLowerCase() === 'internship';
+      const course = (task?.course || (isIntern ? 'Internship' : inferredCourse) || 'Unassigned') as string;
       const entry = map.get(course) || { minutes: 0, sessions: 0, focusSum: 0, focusCount: 0 };
       entry.minutes += Math.max(0, Number(s.minutes) || 0);
       entry.sessions += 1;

@@ -2,6 +2,8 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import type { Task, Course } from '@/lib/types';
 import { courseColorClass } from '@/lib/colors';
+import AddTaskPanel from '@/components/AddTaskPanel';
+import MultiAddDrawer from '@/components/MultiAddDrawer';
 
 function fmtHM(min: number | null | undefined): string {
   const n = Math.max(0, Math.round(Number(min) || 0));
@@ -40,10 +42,11 @@ export default function TaskTable() {
   const [importOpen, setImportOpen] = useState(false);
   const [importFile, setImportFile] = useState<File | null>(null);
   const [importStatus, setImportStatus] = useState('');
-  const [savedViews, setSavedViews] = useState<Array<{ name: string; course: string; status: 'all'|'todo'|'done'; tag?: string }>>([]);
+  const [savedViews, setSavedViews] = useState<Array<{ name: string; course: string; status: 'all'|'todo'|'done'; tag?: string; text?: string }>>([]);
   const [newViewName, setNewViewName] = useState('');
   const [offlineCount, setOfflineCount] = useState<number>(0);
   const [tagFilter, setTagFilter] = useState('');
+  const [textFilter, setTextFilter] = useState('');
   const [currentTerm, setCurrentTerm] = useState<string>('');
   const [tplStart, setTplStart] = useState<string>(''); // yyyy-mm-dd
   const [tplStepDays, setTplStepDays] = useState<string>('1');
@@ -112,21 +115,20 @@ export default function TaskTable() {
       const qCourse = u.searchParams.get('course');
       const qStatus = u.searchParams.get('status') as any;
       const qTag = u.searchParams.get('tag');
+      const qText = u.searchParams.get('text');
       if (typeof qCourse === 'string') setCourseFilter(qCourse);
       if (qStatus === 'all' || qStatus === 'todo' || qStatus === 'done') setStatusFilter(qStatus);
       if (typeof qTag === 'string') setTagFilter(qTag);
+      if (typeof qText === 'string') setTextFilter(qText);
     } catch {}
     // Saved views
     try {
       const s = window.localStorage.getItem('savedTaskViews');
-      let views: Array<{ name: string; course: string; status: 'all'|'todo'|'done'; tag?: string }> = [];
+      let views: Array<{ name: string; course: string; status: 'all'|'todo'|'done'; tag?: string; text?: string }> = [] as any;
       if (s) {
         try { views = JSON.parse(s); } catch { views = []; }
       }
-      // Seed default Inbox view if missing
-      if (!views.some(v => v.name.toLowerCase() === 'inbox')) {
-        views.push({ name: 'Inbox', course: '', status: 'all', tag: 'inbox' });
-      }
+      // No default Inbox view in redesigned Tasks
       setSavedViews(views);
       window.localStorage.setItem('savedTaskViews', JSON.stringify(views));
     } catch {}
@@ -264,13 +266,6 @@ export default function TaskTable() {
     return `/api/export/ics${params.length ? `?${params.join('&')}` : ''}`;
   }, [courseFilter, statusFilter, icsToken]);
 
-  const csvHref = useMemo(() => {
-    const params: string[] = [];
-    if (courseFilter) params.push(`course=${encodeURIComponent(courseFilter)}`);
-    if (statusFilter !== 'all') params.push(`status=${encodeURIComponent(statusFilter)}`);
-    return `/api/tasks/export.csv${params.length ? `?${params.join('&')}` : ''}`;
-  }, [courseFilter, statusFilter]);
-
   type CourseMppEntry = { mpp: number; sample?: number | null; updatedAt?: string | null; overrideEnabled?: boolean | null; overrideMpp?: number | null };
   function clamp(n: number, lo: number, hi: number) { return Math.max(lo, Math.min(hi, n)); }
   const mppByCourseEffective = useMemo(() => {
@@ -307,17 +302,18 @@ export default function TaskTable() {
   function saveCurrentView() {
     const name = newViewName.trim();
     if (!name) return;
-    const view = { name, course: courseFilter, status: statusFilter, tag: tagFilter || undefined };
+    const view = { name, course: courseFilter, status: statusFilter, tag: tagFilter || undefined, text: textFilter || '' } as any;
     const next = savedViews.filter(v => v.name.toLowerCase() !== name.toLowerCase());
     next.push(view);
     setSavedViews(next);
     try { window.localStorage.setItem('savedTaskViews', JSON.stringify(next)); } catch {}
     setNewViewName('');
   }
-  function applyView(v: { name: string; course: string; status: 'all'|'todo'|'done'; tag?: string }) {
+  function applyView(v: { name: string; course: string; status: 'all'|'todo'|'done'; tag?: string; text?: string }) {
     setCourseFilter(v.course || '');
     setStatusFilter(v.status);
     setTagFilter(v.tag || '');
+    setTextFilter((v as any).text || '');
   }
   function deleteView(name: string) {
     const next = savedViews.filter(v => v.name.toLowerCase() !== name.toLowerCase());
@@ -338,8 +334,8 @@ export default function TaskTable() {
       .filter(t => (statusFilter === 'all' || t.status === statusFilter))
       .filter(t => (!courseFilter || (t.course || '').toLowerCase().includes(courseFilter.toLowerCase())))
       .filter(t => (!tagFilter || (t.tags || []).some(tag => tag.toLowerCase().includes(tagFilter.toLowerCase()))))
-      .filter(t => (!currentTerm || (t.term || '') === currentTerm));
-  }, [tasks, statusFilter, courseFilter, tagFilter, currentTerm]);
+      .filter(t => (!textFilter || (t.title || '').toLowerCase().includes(textFilter.toLowerCase())));
+  }, [tasks, statusFilter, courseFilter, tagFilter, textFilter]);
 
   const allSelected = filteredTasks.length > 0 && filteredTasks.every(t => selected.has(t.id));
   function toggleSelect(id: string) {
@@ -412,7 +408,7 @@ export default function TaskTable() {
     if (x === 'review') return 'review';
     if (x === 'outline') return 'outline';
     if (x === 'practice') return 'practice';
-    if (x === 'internship') return 'internship';
+    if (x === 'internship') return 'other';
     return 'other';
   }
 
@@ -601,10 +597,10 @@ export default function TaskTable() {
           }} className="px-2 py-1 rounded border border-[#1b2344]">Sync now</button>
         </div>
       )}
-      {/* Saved Views */}
+      {/* Saved Filters */}
       <div className="mb-3 border border-[#1b2344] rounded p-3 bg-[#0b1020]">
         <div className="flex flex-wrap items-end gap-2">
-          <div className="text-xs text-slate-300/70">Saved Views:</div>
+          <div className="text-xs text-slate-300/70">Saved Filters:</div>
           {savedViews.length === 0 ? (
             <div className="text-xs text-slate-300/60">None yet</div>
           ) : (
@@ -618,27 +614,18 @@ export default function TaskTable() {
           <div className="ml-auto flex items-center gap-2">
             <input value={newViewName} onChange={e=>setNewViewName(e.target.value)} placeholder="Save current as…" className="bg-[#0b1020] border border-[#1b2344] rounded px-2 py-1 text-xs" />
             <button onClick={saveCurrentView} className="px-2 py-1 rounded border border-[#1b2344] text-xs">Save</button>
+            <button onClick={()=>setImportOpen(v=>!v)} className="px-2 py-1 rounded border border-[#1b2344] text-xs">{importOpen ? 'Close Multi-Add' : 'Multi-Add'}</button>
           </div>
         </div>
       </div>
       <div className="mb-3 flex gap-2">
-        <a href={icsHref} className="px-3 py-2 rounded bg-indigo-600 hover:bg-indigo-500">Download .ics</a>
-        <a href={csvHref} className="px-3 py-2 rounded bg-teal-600 hover:bg-teal-500">Export CSV</a>
-        <button type="button" onClick={() => setImportOpen(v => !v)} className="px-3 py-2 rounded bg-amber-600 hover:bg-amber-500">{importOpen ? 'Close Import' : 'Import CSV'}</button>
         <button onClick={refresh} className="px-3 py-2 rounded border border-[#1b2344]">Refresh</button>
-        <button onClick={() => setTagFilter(tagFilter.toLowerCase()==='inbox' ? '' : 'inbox')} className="px-3 py-2 rounded border border-[#1b2344]">{tagFilter.toLowerCase()==='inbox' ? 'Clear Inbox' : 'Inbox'}</button>
         {backlogCount > 0 && (
           <button onClick={migrateBacklogToInbox} className="px-3 py-2 rounded border border-[#1b2344]">Import Backlog ({backlogCount})</button>
         )}
       </div>
-      <div className="mb-3 border border-[#1b2344] rounded p-3 bg-[#0b1020]">
-        <div className="text-xs text-slate-300/70 mb-2">Quick Add (Inbox)</div>
-        <div className="flex items-center gap-2">
-          <input value={qaInput} onChange={e=>setQaInput(e.target.value)} onKeyDown={e=>{ if ((e as any).key==='Enter') addQuick(); }} className="flex-1 bg-[#0b1020] border border-[#1b2344] rounded px-3 py-2" placeholder="T&E: Read 599–622 (24p) – due Fri" />
-          <button onClick={addQuick} className="px-3 py-2 rounded bg-blue-600 hover:bg-blue-500">Add</button>
-        </div>
-        {qaError && <div className="text-xs text-rose-400 mt-1">{qaError}</div>}
-      </div>
+      {/* Add Task Panel */}
+      <AddTaskPanel onCreated={refresh} />
       {/* Course templates (local) */}
       <div className="mb-3 border border-[#1b2344] rounded p-3 bg-[#0b1020]">
         <div className="text-xs text-slate-300/70 mb-2">Templates per course (local). Use a course filter to select course.</div>
@@ -679,16 +666,9 @@ export default function TaskTable() {
         </div>
       </div>
       {importOpen && (
-        <div className="mb-4 border border-[#1b2344] rounded p-3 bg-[#0b1020]">
-          <div className="text-xs text-slate-300/70 mb-2">Choose a CSV with columns: title, dueDate. Optional: course, status, estimatedMinutes, priority, notes.</div>
-          <div className="flex items-center gap-2">
-            <input type="file" accept=".csv,text/csv" onChange={e => setImportFile(e.target.files?.[0] || null)} className="text-sm" />
-            <button type="button" onClick={importCsv} disabled={!importFile} className="px-3 py-2 rounded bg-amber-600 hover:bg-amber-500 disabled:opacity-50">Upload</button>
-            {importStatus && <div className="text-xs text-slate-300/70 ml-2">{importStatus}</div>}
-          </div>
-        </div>
+        <MultiAddDrawer onCreated={refresh} />
       )}
-      <div className="mb-3 grid grid-cols-1 md:grid-cols-3 gap-2">
+      <div className="mb-3 grid grid-cols-1 md:grid-cols-4 gap-2">
         <div>
           <label className="block text-xs text-slate-300/70 mb-1">Status</label>
           <select value={statusFilter} onChange={e => setStatusFilter(e.target.value as any)} className="w-full bg-[#0b1020] border border-[#1b2344] rounded px-3 py-2">
@@ -704,6 +684,10 @@ export default function TaskTable() {
         <div>
           <label className="block text-xs text-slate-300/70 mb-1">Tag contains</label>
           <input value={tagFilter} onChange={e => setTagFilter(e.target.value)} placeholder="e.g., outline" className="w-full bg-[#0b1020] border border-[#1b2344] rounded px-3 py-2" />
+        </div>
+        <div>
+          <label className="block text-xs text-slate-300/70 mb-1">Text search</label>
+          <input value={textFilter} onChange={e => setTextFilter(e.target.value)} placeholder="title contains…" className="w-full bg-[#0b1020] border border-[#1b2344] rounded px-3 py-2" />
         </div>
       </div>
 
@@ -766,15 +750,14 @@ export default function TaskTable() {
             <thead className="text-left text-slate-300/60">
               <tr>
                 <th className="py-2 pr-2"><input type="checkbox" aria-label="Select all" checked={allSelected && filteredTasks.length>0} onChange={toggleSelectAll} /></th>
-                <th className="py-2 pr-4">Due</th>
-                <th className="py-2 pr-4">Title</th>
                 <th className="py-2 pr-4">Course</th>
-                <th className="py-2 pr-4">Est. time</th>
+                <th className="py-2 pr-4">Title</th>
+                <th className="py-2 pr-4">Activity</th>
+                <th className="py-2 pr-4">Pages</th>
+                <th className="py-2 pr-4">Due</th>
+                <th className="py-2 pr-4">Estimate</th>
                 <th className="py-2 pr-4">Pri</th>
-                <th className="py-2 pr-4">Notes</th>
                 <th className="py-2 pr-4">Tags</th>
-                <th className="py-2 pr-4">Links</th>
-                <th className="py-2 pr-4">Deps</th>
                 <th className="py-2 pr-4">Status</th>
                 <th className="py-2 pr-4">Actions</th>
               </tr>
@@ -783,11 +766,14 @@ export default function TaskTable() {
               {filteredTasks.map(t => (
                 <tr key={t.id} className="border-t border-[#1b2344]">
                   <td className="py-2 pr-2"><input type="checkbox" aria-label={`Select ${t.title}`} checked={selected.has(t.id)} onChange={() => toggleSelect(t.id)} /></td>
-                  <td className="py-2 pr-4 whitespace-nowrap">
+                  <td className="py-2 pr-4">
                     {editingId === t.id ? (
-                      <input type="datetime-local" value={editDue} onChange={e => setEditDue(e.target.value)} className="bg-[#0b1020] border border-[#1b2344] rounded px-2 py-1" />
+                      <input value={editCourse} onChange={e => setEditCourse(e.target.value)} className="w-full bg-[#0b1020] border border-[#1b2344] rounded px-2 py-1" />
                     ) : (
-                      new Date(t.dueDate).toLocaleString()
+                      <div className="flex items-center gap-2">
+                        {t.course ? <span className={`inline-block w-2.5 h-2.5 rounded-full ${courseColorClass(t.course, 'bg')}`}></span> : null}
+                        <span>{t.course || '-'}</span>
+                      </div>
                     )}
                   </td>
                   <td className="py-2 pr-4">
@@ -797,14 +783,13 @@ export default function TaskTable() {
                       t.title
                     )}
                   </td>
-                  <td className="py-2 pr-4">
+                  <td className="py-2 pr-4">{(t.activity||'') ? (t.activity as string) : '-'}</td>
+                  <td className="py-2 pr-4">{typeof (t.pagesRead as any) === 'number' ? (t.pagesRead as any) : '-'}</td>
+                  <td className="py-2 pr-4 whitespace-nowrap">
                     {editingId === t.id ? (
-                      <input value={editCourse} onChange={e => setEditCourse(e.target.value)} className="w-full bg-[#0b1020] border border-[#1b2344] rounded px-2 py-1" />
+                      <input type="datetime-local" value={editDue} onChange={e => setEditDue(e.target.value)} className="bg-[#0b1020] border border-[#1b2344] rounded px-2 py-1" />
                     ) : (
-                      <div className="flex items-center gap-2">
-                        {t.course ? <span className={`inline-block w-2.5 h-2.5 rounded-full ${courseColorClass(t.course, 'bg')}`}></span> : null}
-                        <span>{t.course || '-'}</span>
-                      </div>
+                      new Date(t.dueDate).toLocaleString()
                     )}
                   </td>
                   <td className="py-2 pr-4">
@@ -821,13 +806,6 @@ export default function TaskTable() {
                       t.priority ?? '-'
                     )}
                   </td>
-                  <td className="py-2 pr-4 max-w-[280px]">
-                    {editingId === t.id ? (
-                      <input value={editNotes} onChange={e => setEditNotes(e.target.value)} className="w-full bg-[#0b1020] border border-[#1b2344] rounded px-2 py-1" />
-                    ) : (
-                      <span className="truncate inline-block max-w-[260px] align-bottom">{t.notes || '-'}</span>
-                    )}
-                  </td>
                   <td className="py-2 pr-4 max-w-[220px]">
                     {editingId === t.id ? (
                       <input value={editTags} onChange={e => setEditTags(e.target.value)} placeholder="Comma-separated tags" className="w-full bg-[#0b1020] border border-[#1b2344] rounded px-2 py-1" />
@@ -838,28 +816,6 @@ export default function TaskTable() {
                             <span key={i} className="text-[10px] px-1.5 py-0.5 rounded border border-[#1b2344]">{tg}</span>
                           ))}
                         </div>
-                      ) : '-'
-                    )}
-                  </td>
-                  <td className="py-2 pr-4 max-w-[220px]">
-                    {editingId === t.id ? (
-                      <input value={editAttachments} onChange={e => setEditAttachments(e.target.value)} placeholder="Comma-separated URLs" className="w-full bg-[#0b1020] border border-[#1b2344] rounded px-2 py-1" />
-                    ) : (
-                      (t.attachments && t.attachments.length > 0) ? (
-                        <div className="flex gap-1 flex-wrap">
-                          {t.attachments.map((u, i) => (
-                            <a key={i} href={u} target="_blank" className="underline text-xs truncate max-w-[160px]">Link {i+1}</a>
-                          ))}
-                        </div>
-                      ) : '-'
-                    )}
-                  </td>
-                  <td className="py-2 pr-4 max-w-[220px]">
-                    {editingId === t.id ? (
-                      <input value={editDepends} onChange={e => setEditDepends(e.target.value)} placeholder="Comma-separated task IDs" className="w-full bg-[#0b1020] border border-[#1b2344] rounded px-2 py-1" />
-                    ) : (
-                      (t.dependsOn && t.dependsOn.length > 0) ? (
-                        <span className="text-xs">{t.dependsOn.length} deps</span>
                       ) : '-'
                     )}
                   </td>

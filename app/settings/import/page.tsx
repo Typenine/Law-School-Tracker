@@ -99,7 +99,7 @@ function toActivity(taskType: string): string {
     case "Review": return "review";
     case "Outline": return "outline";
     case "Practice": return "practice";
-    case "Internship": return "internship";
+    case "Internship": return "other";
     default: return "other";
   }
 }

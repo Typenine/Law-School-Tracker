@@ -54,9 +54,9 @@ export async function listCourses(): Promise<Course[]> {
         id: string; code: string | null; title: string; instructor: string | null; instructor_email: string | null; room: string | null; location: string | null;
         color: string | null; meeting_days: number[] | null; meeting_start: string | null; meeting_end: string | null; meeting_blocks: any | null;
         start_date: Date | string | null; end_date: Date | string | null; semester: string | null; year: number | null; created_at: Date | string;
-        learned_mpp: number | null; learned_sample: number | null; learned_updated_at: Date | string | null; override_enabled: boolean | null; override_mpp: number | null
+        learned_mpp: number | null; learned_sample: number | null; learned_updated_at: Date | string | null; override_enabled: boolean | null; override_mpp: number | null; default_activity: string | null
       };
-      const res = await p.query(`SELECT id, code, title, instructor, instructor_email, room, location, color, meeting_days, meeting_start, meeting_end, meeting_blocks, start_date, end_date, semester, year, created_at, learned_mpp, learned_sample, learned_updated_at, override_enabled, override_mpp FROM courses ORDER BY title`);
+      const res = await p.query(`SELECT id, code, title, instructor, instructor_email, room, location, color, meeting_days, meeting_start, meeting_end, meeting_blocks, start_date, end_date, semester, year, created_at, learned_mpp, learned_sample, learned_updated_at, override_enabled, override_mpp, default_activity FROM courses ORDER BY title`);
       const rows = res.rows as Row[];
       return rows.map(r => ({
         id: r.id,
@@ -81,6 +81,7 @@ export async function listCourses(): Promise<Course[]> {
         learnedUpdatedAt: r.learned_updated_at ? new Date(r.learned_updated_at as any).toISOString() : null,
         overrideEnabled: (r.override_enabled as any) ?? null,
         overrideMpp: r.override_mpp ?? null,
+        defaultActivity: r.default_activity ?? null,
       }));
     } catch (e) {
       // DB is configured; do not fall back to JSON to avoid split brain
@@ -102,13 +103,15 @@ export async function createCourse(input: NewCourseInput): Promise<Course> {
         `INSERT INTO courses (
            id, code, title, instructor, instructor_email, room, location, color,
            meeting_days, meeting_start, meeting_end, meeting_blocks,
-           start_date, end_date, semester, year, created_at
+           start_date, end_date, semester, year, created_at,
+           learned_mpp, learned_sample, learned_updated_at, override_enabled, override_mpp, default_activity
          ) VALUES (
            $1, $2, $3, $4, $5, $6, $7, $8,
            $9::int[], $10, $11, $12::jsonb,
-           $13::date, $14::date, $15, $16::int, $17
+           $13::date, $14::date, $15, $16::int, $17,
+           $18, $19, $20, $21, $22, $23
          )
-         RETURNING id, code, title, instructor, instructor_email, room, location, color, meeting_days, meeting_start, meeting_end, meeting_blocks, start_date, end_date, semester, year, created_at`,
+         RETURNING id, code, title, instructor, instructor_email, room, location, color, meeting_days, meeting_start, meeting_end, meeting_blocks, start_date, end_date, semester, year, created_at, learned_mpp, learned_sample, learned_updated_at, override_enabled, override_mpp, default_activity`,
         [
           id,
           input.code ?? null,
@@ -134,7 +137,7 @@ export async function createCourse(input: NewCourseInput): Promise<Course> {
         id: r.id, code: r.code, title: r.title, instructor: r.instructor, instructorEmail: r.instructor_email, room: r.room, location: r.location, color: r.color ?? null,
         meetingDays: r.meeting_days ?? null, meetingStart: r.meeting_start, meetingEnd: r.meeting_end, meetingBlocks: r.meeting_blocks ?? null,
         startDate: r.start_date ? new Date(r.start_date).toISOString() : null, endDate: r.end_date ? new Date(r.end_date).toISOString() : null,
-        semester: r.semester ?? null, year: r.year ?? null, createdAt: new Date(r.created_at).toISOString()
+        semester: r.semester ?? null, year: r.year ?? null, createdAt: new Date(r.created_at).toISOString(), defaultActivity: null
       };
     } catch (e) {
       // DB is configured; do not fall back to JSON to avoid split brain
@@ -174,18 +177,19 @@ export async function updateCourse(id: string, patch: UpdateCourseInput): Promis
       if (patch.year !== undefined) push('year', (typeof patch.year === 'number' ? patch.year : (patch.year as any) ?? null), 'int');
       if ((patch as any).overrideEnabled !== undefined) push('override_enabled', (patch as any).overrideEnabled);
       if ((patch as any).overrideMpp !== undefined) push('override_mpp', (patch as any).overrideMpp);
+      if ((patch as any).defaultActivity !== undefined) push('default_activity', (patch as any).defaultActivity);
       if (!fields.length) {
         const cur = await p.query(`SELECT id, code, title, instructor, instructor_email, room, location, color, meeting_days, meeting_start, meeting_end, meeting_blocks, start_date, end_date, semester, year, created_at, learned_mpp, learned_sample, learned_updated_at, override_enabled, override_mpp FROM courses WHERE id=$1`, [id]);
         if (!cur.rowCount) return null;
         const r = cur.rows[0];
-        return { id: r.id, code: r.code, title: r.title, instructor: r.instructor, instructorEmail: r.instructor_email, room: r.room, location: r.location, color: r.color ?? null, meetingDays: r.meeting_days ?? null, meetingStart: r.meeting_start, meetingEnd: r.meeting_end, meetingBlocks: r.meeting_blocks ?? null, startDate: r.start_date ? new Date(r.start_date).toISOString() : null, endDate: r.end_date ? new Date(r.end_date).toISOString() : null, semester: r.semester ?? null, year: r.year ?? null, createdAt: new Date(r.created_at).toISOString(), learnedMpp: r.learned_mpp ?? null, learnedSample: r.learned_sample ?? null, learnedUpdatedAt: r.learned_updated_at ? new Date(r.learned_updated_at).toISOString() : null, overrideEnabled: r.override_enabled ?? null, overrideMpp: r.override_mpp ?? null };
+        return { id: r.id, code: r.code, title: r.title, instructor: r.instructor, instructorEmail: r.instructor_email, room: r.room, location: r.location, color: r.color ?? null, meetingDays: r.meeting_days ?? null, meetingStart: r.meeting_start, meetingEnd: r.meeting_end, meetingBlocks: r.meeting_blocks ?? null, startDate: r.start_date ? new Date(r.start_date).toISOString() : null, endDate: r.end_date ? new Date(r.end_date).toISOString() : null, semester: r.semester ?? null, year: r.year ?? null, createdAt: new Date(r.created_at).toISOString(), learnedMpp: r.learned_mpp ?? null, learnedSample: r.learned_sample ?? null, learnedUpdatedAt: r.learned_updated_at ? new Date(r.learned_updated_at).toISOString() : null, overrideEnabled: r.override_enabled ?? null, overrideMpp: r.override_mpp ?? null, defaultActivity: (r as any).default_activity ?? null };
       }
-      const q = `UPDATE courses SET ${fields.join(', ')} WHERE id = $${idx} RETURNING id, code, title, instructor, instructor_email, room, location, color, meeting_days, meeting_start, meeting_end, meeting_blocks, start_date, end_date, semester, year, created_at, learned_mpp, learned_sample, learned_updated_at, override_enabled, override_mpp`;
+      const q = `UPDATE courses SET ${fields.join(', ')} WHERE id = $${idx} RETURNING id, code, title, instructor, instructor_email, room, location, color, meeting_days, meeting_start, meeting_end, meeting_blocks, start_date, end_date, semester, year, created_at, learned_mpp, learned_sample, learned_updated_at, override_enabled, override_mpp, default_activity`;
       values.push(id);
       const res = await p.query(q, values);
       if (!res.rowCount) return null;
       const r = res.rows[0];
-      return { id: r.id, code: r.code, title: r.title, instructor: r.instructor, instructorEmail: r.instructor_email, room: r.room, location: r.location, color: r.color ?? null, meetingDays: r.meeting_days ?? null, meetingStart: r.meeting_start, meetingEnd: r.meeting_end, meetingBlocks: r.meeting_blocks ?? null, startDate: r.start_date ? new Date(r.start_date).toISOString() : null, endDate: r.end_date ? new Date(r.end_date).toISOString() : null, semester: r.semester ?? null, year: r.year ?? null, createdAt: new Date(r.created_at).toISOString(), learnedMpp: r.learned_mpp ?? null, learnedSample: r.learned_sample ?? null, learnedUpdatedAt: r.learned_updated_at ? new Date(r.learned_updated_at).toISOString() : null, overrideEnabled: r.override_enabled ?? null, overrideMpp: r.override_mpp ?? null };
+      return { id: r.id, code: r.code, title: r.title, instructor: r.instructor, instructorEmail: r.instructor_email, room: r.room, location: r.location, color: r.color ?? null, meetingDays: r.meeting_days ?? null, meetingStart: r.meeting_start, meetingEnd: r.meeting_end, meetingBlocks: r.meeting_blocks ?? null, startDate: r.start_date ? new Date(r.start_date).toISOString() : null, endDate: r.end_date ? new Date(r.end_date).toISOString() : null, semester: r.semester ?? null, year: r.year ?? null, createdAt: new Date(r.created_at).toISOString(), learnedMpp: r.learned_mpp ?? null, learnedSample: r.learned_sample ?? null, learnedUpdatedAt: r.learned_updated_at ? new Date(r.learned_updated_at).toISOString() : null, overrideEnabled: r.override_enabled ?? null, overrideMpp: r.override_mpp ?? null, defaultActivity: (r as any).default_activity ?? null };
     } catch (e) {
       // DB is configured; do not fall back to JSON to avoid split brain
       throw e;
@@ -348,6 +352,7 @@ export async function ensureSchema() {
         created_at timestamptz NOT NULL DEFAULT now()
       );
       ALTER TABLE tasks ADD COLUMN IF NOT EXISTS estimated_minutes integer;
+      ALTER TABLE tasks ADD COLUMN IF NOT EXISTS estimate_origin text;
       ALTER TABLE tasks ADD COLUMN IF NOT EXISTS actual_minutes integer;
       ALTER TABLE tasks ADD COLUMN IF NOT EXISTS priority integer;
       ALTER TABLE tasks ADD COLUMN IF NOT EXISTS notes text;
@@ -387,6 +392,7 @@ export async function ensureSchema() {
       ALTER TABLE courses ADD COLUMN IF NOT EXISTS learned_updated_at timestamptz;
       ALTER TABLE courses ADD COLUMN IF NOT EXISTS override_enabled boolean;
       ALTER TABLE courses ADD COLUMN IF NOT EXISTS override_mpp double precision;
+      ALTER TABLE courses ADD COLUMN IF NOT EXISTS default_activity text;
       CREATE TABLE IF NOT EXISTS sessions (
         id uuid PRIMARY KEY,
         task_id uuid REFERENCES tasks(id) ON DELETE SET NULL,
@@ -543,8 +549,8 @@ async function writeJson(data: { tasks: Task[]; sessions: StudySession[]; course
 export async function listTasks(): Promise<Task[]> {
   if (DB_URL) {
     const p = getPool();
-    type TaskRow = { id: string; title: string; course: string | null; due_date: Date | string; status: 'todo' | 'done'; created_at: Date | string; estimated_minutes: number | null; actual_minutes: number | null; priority: number | null; notes: string | null; attachments: string[] | null; depends_on: string[] | null; tags: string[] | null; term: string | null; completed_at: Date | string | null; focus: number | null; pages_read: number | null; activity: string | null; start_time: string | null; end_time: string | null };
-    const res = await p.query(`SELECT id, title, course, due_date, status, created_at, estimated_minutes, actual_minutes, priority, notes, attachments, depends_on, tags, term, completed_at, focus, pages_read, activity, start_time, end_time FROM tasks ORDER BY due_date ASC, COALESCE(start_time,'99:99') ASC`);
+    type TaskRow = { id: string; title: string; course: string | null; due_date: Date | string; status: 'todo' | 'done'; created_at: Date | string; estimated_minutes: number | null; estimate_origin: string | null; actual_minutes: number | null; priority: number | null; notes: string | null; attachments: string[] | null; depends_on: string[] | null; tags: string[] | null; term: string | null; completed_at: Date | string | null; focus: number | null; pages_read: number | null; activity: string | null; start_time: string | null; end_time: string | null };
+    const res = await p.query(`SELECT id, title, course, due_date, status, created_at, estimated_minutes, estimate_origin, actual_minutes, priority, notes, attachments, depends_on, tags, term, completed_at, focus, pages_read, activity, start_time, end_time FROM tasks ORDER BY due_date ASC, COALESCE(start_time,'99:99') ASC`);
     const rows = res.rows as unknown as TaskRow[];
     return rows.map(r => ({
       id: r.id,
@@ -556,6 +562,7 @@ export async function listTasks(): Promise<Task[]> {
       startTime: r.start_time ?? null,
       endTime: r.end_time ?? null,
       estimatedMinutes: r.estimated_minutes ?? null,
+      estimateOrigin: (r.estimate_origin as any) ?? null,
       actualMinutes: r.actual_minutes ?? null,
       priority: r.priority ?? null,
       notes: r.notes ?? null,
@@ -579,16 +586,16 @@ export async function createTask(input: NewTaskInput): Promise<Task> {
     const p = getPool();
     const id = uuid();
     const res = await p.query(
-      `INSERT INTO tasks (id, title, course, due_date, status, created_at, estimated_minutes, priority, notes, attachments, depends_on, tags, term, start_time, end_time)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15)
-       RETURNING id, title, course, due_date, status, created_at, estimated_minutes, priority, notes, attachments, depends_on, tags, term, start_time, end_time`,
-      [id, input.title, input.course ?? null, new Date(input.dueDate), input.status ?? 'todo', new Date(now), input.estimatedMinutes ?? null, input.priority ?? null, input.notes ?? null, input.attachments ?? null, input.dependsOn ?? null, input.tags ?? null, input.term ?? null, (input as any).startTime ?? null, (input as any).endTime ?? null]
+      `INSERT INTO tasks (id, title, course, due_date, status, created_at, estimated_minutes, estimate_origin, priority, notes, attachments, depends_on, tags, term, start_time, end_time, pages_read, activity)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18)
+       RETURNING id, title, course, due_date, status, created_at, estimated_minutes, estimate_origin, priority, notes, attachments, depends_on, tags, term, start_time, end_time, pages_read, activity`,
+      [id, input.title, input.course ?? null, new Date(input.dueDate), input.status ?? 'todo', new Date(now), input.estimatedMinutes ?? null, (input as any).estimateOrigin ?? null, input.priority ?? null, input.notes ?? null, input.attachments ?? null, input.dependsOn ?? null, input.tags ?? null, input.term ?? null, (input as any).startTime ?? null, (input as any).endTime ?? null, (input as any).pagesRead ?? null, (input as any).activity ?? null]
     );
     const r = res.rows[0];
-    return { id: r.id, title: r.title, course: r.course, dueDate: new Date(r.due_date).toISOString(), status: r.status, createdAt: new Date(r.created_at).toISOString(), startTime: r.start_time ?? null, endTime: r.end_time ?? null, estimatedMinutes: r.estimated_minutes ?? null, priority: r.priority ?? null, notes: r.notes ?? null, attachments: r.attachments ?? null, dependsOn: r.depends_on ?? null, tags: r.tags ?? null, term: r.term ?? null };
+    return { id: r.id, title: r.title, course: r.course, dueDate: new Date(r.due_date).toISOString(), status: r.status, createdAt: new Date(r.created_at).toISOString(), startTime: r.start_time ?? null, endTime: r.end_time ?? null, estimatedMinutes: r.estimated_minutes ?? null, estimateOrigin: (r.estimate_origin as any) ?? null, priority: r.priority ?? null, notes: r.notes ?? null, attachments: r.attachments ?? null, dependsOn: r.depends_on ?? null, tags: r.tags ?? null, term: r.term ?? null, pagesRead: r.pages_read ?? null, activity: r.activity ?? null };
   }
   const db = await readJson();
-  const task: Task = { id: uuid(), title: input.title, course: input.course ?? null, dueDate: input.dueDate, status: input.status ?? 'todo', createdAt: now, startTime: (input as any).startTime ?? null, endTime: (input as any).endTime ?? null, estimatedMinutes: input.estimatedMinutes ?? null, priority: input.priority ?? null, notes: input.notes ?? null, attachments: input.attachments ?? null, dependsOn: input.dependsOn ?? null, tags: input.tags ?? null, term: input.term ?? null };
+  const task: Task = { id: uuid(), title: input.title, course: input.course ?? null, dueDate: input.dueDate, status: input.status ?? 'todo', createdAt: now, startTime: (input as any).startTime ?? null, endTime: (input as any).endTime ?? null, estimatedMinutes: input.estimatedMinutes ?? null, estimateOrigin: (input as any).estimateOrigin ?? null, priority: input.priority ?? null, notes: input.notes ?? null, attachments: input.attachments ?? null, dependsOn: input.dependsOn ?? null, tags: input.tags ?? null, term: input.term ?? null, pagesRead: (input as any).pagesRead ?? null, activity: (input as any).activity ?? null };
   db.tasks.push(task);
   await writeJson(db);
   return task;
@@ -606,26 +613,29 @@ export async function updateTask(id: string, patch: UpdateTaskInput): Promise<Ta
     if (patch.dueDate !== undefined) { fields.push(`due_date = $${idx++}`); values.push(new Date(patch.dueDate)); }
     if (patch.status !== undefined) { fields.push(`status = $${idx++}`); values.push(patch.status); }
     if (patch.estimatedMinutes !== undefined) { fields.push(`estimated_minutes = $${idx++}`); values.push(patch.estimatedMinutes); }
+    if ((patch as any).estimateOrigin !== undefined) { fields.push(`estimate_origin = $${idx++}`); values.push((patch as any).estimateOrigin); }
     if (patch.priority !== undefined) { fields.push(`priority = $${idx++}`); values.push(patch.priority); }
     if (patch.notes !== undefined) { fields.push(`notes = $${idx++}`); values.push(patch.notes); }
     if (patch.attachments !== undefined) { fields.push(`attachments = $${idx++}`); values.push(patch.attachments); }
     if (patch.dependsOn !== undefined) { fields.push(`depends_on = $${idx++}`); values.push(patch.dependsOn); }
     if (patch.tags !== undefined) { fields.push(`tags = $${idx++}`); values.push(patch.tags); }
     if (patch.term !== undefined) { fields.push(`term = $${idx++}`); values.push(patch.term); }
+    if ((patch as any).pagesRead !== undefined) { fields.push(`pages_read = $${idx++}`); values.push((patch as any).pagesRead); }
+    if ((patch as any).activity !== undefined) { fields.push(`activity = $${idx++}`); values.push((patch as any).activity); }
     if ((patch as any).startTime !== undefined) { fields.push(`start_time = $${idx++}`); values.push((patch as any).startTime); }
     if ((patch as any).endTime !== undefined) { fields.push(`end_time = $${idx++}`); values.push((patch as any).endTime); }
     if (!fields.length) {
-      const cur = await p.query(`SELECT id, title, course, due_date, status, created_at, estimated_minutes, priority, notes, attachments, depends_on, tags, term, start_time, end_time FROM tasks WHERE id=$1`, [id]);
+      const cur = await p.query(`SELECT id, title, course, due_date, status, created_at, estimated_minutes, estimate_origin, priority, notes, attachments, depends_on, tags, term, start_time, end_time, pages_read, activity FROM tasks WHERE id=$1`, [id]);
       if (!cur.rowCount) return null;
       const r = cur.rows[0];
-      return { id: r.id, title: r.title, course: r.course, dueDate: new Date(r.due_date).toISOString(), status: r.status, createdAt: new Date(r.created_at).toISOString(), startTime: r.start_time ?? null, endTime: r.end_time ?? null, estimatedMinutes: r.estimated_minutes ?? null, priority: r.priority ?? null, notes: r.notes ?? null, attachments: r.attachments ?? null, dependsOn: r.depends_on ?? null, tags: r.tags ?? null, term: r.term ?? null };
+      return { id: r.id, title: r.title, course: r.course, dueDate: new Date(r.due_date).toISOString(), status: r.status, createdAt: new Date(r.created_at).toISOString(), startTime: r.start_time ?? null, endTime: r.end_time ?? null, estimatedMinutes: r.estimated_minutes ?? null, estimateOrigin: (r.estimate_origin as any) ?? null, priority: r.priority ?? null, notes: r.notes ?? null, attachments: r.attachments ?? null, dependsOn: r.depends_on ?? null, tags: r.tags ?? null, term: r.term ?? null, pagesRead: r.pages_read ?? null, activity: r.activity ?? null };
     }
-    const q = `UPDATE tasks SET ${fields.join(', ')} WHERE id = $${idx} RETURNING id, title, course, due_date, status, created_at, estimated_minutes, priority, notes, attachments, depends_on, tags, term, start_time, end_time`;
+    const q = `UPDATE tasks SET ${fields.join(', ')} WHERE id = $${idx} RETURNING id, title, course, due_date, status, created_at, estimated_minutes, estimate_origin, priority, notes, attachments, depends_on, tags, term, start_time, end_time, pages_read, activity`;
     values.push(id);
     const res = await p.query(q, values);
     if (!res.rowCount) return null;
     const r = res.rows[0];
-    return { id: r.id, title: r.title, course: r.course, dueDate: new Date(r.due_date).toISOString(), status: r.status, createdAt: new Date(r.created_at).toISOString(), startTime: r.start_time ?? null, endTime: r.end_time ?? null, estimatedMinutes: r.estimated_minutes ?? null, priority: r.priority ?? null, notes: r.notes ?? null, attachments: r.attachments ?? null, dependsOn: r.depends_on ?? null, tags: r.tags ?? null, term: r.term ?? null };
+    return { id: r.id, title: r.title, course: r.course, dueDate: new Date(r.due_date).toISOString(), status: r.status, createdAt: new Date(r.created_at).toISOString(), startTime: r.start_time ?? null, endTime: r.end_time ?? null, estimatedMinutes: r.estimated_minutes ?? null, estimateOrigin: (r.estimate_origin as any) ?? null, priority: r.priority ?? null, notes: r.notes ?? null, attachments: r.attachments ?? null, dependsOn: r.depends_on ?? null, tags: r.tags ?? null, term: r.term ?? null, pagesRead: r.pages_read ?? null, activity: r.activity ?? null };
   }
   const db = await readJson();
   const i = db.tasks.findIndex(t => t.id === id);

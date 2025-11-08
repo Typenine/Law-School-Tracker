@@ -194,7 +194,7 @@ export default function BacklogPage() {
     if (x === 'review') return 'review';
     if (x === 'outline') return 'outline';
     if (x === 'practice') return 'practice';
-    if (x === 'internship') return 'internship';
+    if (x === 'internship') return 'other';
     return 'other';
   }
 
