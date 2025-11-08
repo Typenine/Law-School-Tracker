@@ -45,16 +45,18 @@ const LS_AVAIL = "availabilityTemplateV1";
 const LS_SCHEDULE = "weekScheduleV1";
 const LS_GOALS = "weeklyGoalsV1";
 const LS_SHOW_CONFLICTS = "weekPlanShowConflicts";
+const LS_WEEK_START = "weekPlanWeekStartYmd";
+const LS_TWO_WEEKS = "weekPlanTwoWeeksOnly";
 
 type WeeklyGoal = { id: string; scope: 'global'|'course'; weeklyMinutes: number; course?: string | null };
 
 function uid(): string { return Math.random().toString(36).slice(2) + Date.now().toString(36); }
 function loadGoals(): WeeklyGoal[] { if (typeof window==='undefined') return []; try { const raw=window.localStorage.getItem(LS_GOALS); const arr=raw?JSON.parse(raw):[]; return Array.isArray(arr)?arr:[]; } catch { return []; } }
 function chicagoYmd(d: Date): string { const f = new Intl.DateTimeFormat('en-US', { timeZone: 'America/Chicago', year: 'numeric', month: '2-digit', day: '2-digit' }); const parts = f.formatToParts(d); const y=parts.find(p=>p.type==='year')?.value||'0000'; const m=parts.find(p=>p.type==='month')?.value||'01'; const da=parts.find(p=>p.type==='day')?.value||'01'; return `${y}-${m}-${da}`; }
-function mondayOfChicago(d: Date): Date { const ymd = chicagoYmd(d); const [yy,mm,dd]=ymd.split('-').map(x=>parseInt(x,10)); const local = new Date(yy,(mm as number)-1,dd); const dow = local.getDay(); const delta = (dow + 6) % 7; local.setDate(local.getDate()-delta); return local; }
-function weekKeysChicago(d: Date): string[] { const monday = mondayOfChicago(d); return Array.from({length:7},(_,i)=>{const x=new Date(monday); x.setDate(x.getDate()+i); return chicagoYmd(x);}); }
+function mondayOfChicago(d: Date): Date { const ymd = chicagoYmd(d); const [yy,mm,dd]=ymd.split('-').map(x=>parseInt(x,10)); const local = new Date(yy,(mm as number)-1,dd); const dow = local.getDay(); const delta = (dow + 1) % 7; local.setDate(local.getDate()-delta); return local; }
+function weekKeysChicago(d: Date): string[] { const start = mondayOfChicago(d); return Array.from({length:7},(_,i)=>{const x=new Date(start); x.setDate(x.getDate()+i); return chicagoYmd(x);}); }
 function startOfDay(d: Date) { const x = new Date(d); x.setHours(0,0,0,0); return x; }
-function mondayOf(d: Date) { const x = startOfDay(d); const dow = x.getDay(); const delta = (dow + 6) % 7; x.setDate(x.getDate() - delta); return x; }
+function mondayOf(d: Date) { const x = startOfDay(d); const dow = x.getDay(); const delta = (dow + 1) % 7; x.setDate(x.getDate() - delta); return x; }
 function ymd(d: Date) { return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`; }
 function dayLabel(d: Date) { return d.toLocaleDateString(undefined, { weekday: 'short', month: 'short', day: 'numeric' }); }
 function endOfDayIso(ymdStr: string) { const [y,m,da]=ymdStr.split('-').map(n=>parseInt(n,10)); const x=new Date(y,(m as number)-1,da,23,59,59,999); return x.toISOString(); }
@@ -119,7 +121,18 @@ function estimateMinutesFor(item: BacklogItem): { minutes: number; guessed: bool
 export default function WeekPlanPage() {
   const [sortBy, setSortBy] = useState<'due'|'course'|'priority'|'estimate'>('due');
   const [sortDir, setSortDir] = useState<'asc'|'desc'>('asc');
-  const [weekStart, setWeekStart] = useState<Date>(() => mondayOf(new Date()));
+  const [weekStart, setWeekStart] = useState<Date>(() => {
+    if (typeof window === 'undefined') return mondayOf(new Date());
+    try {
+      const s = window.localStorage.getItem(LS_WEEK_START);
+      if (s) {
+        const [y,m,da] = s.split('-').map(x=>parseInt(x,10));
+        const dt = new Date(y,(m as number)-1,da);
+        return mondayOf(dt);
+      }
+    } catch {}
+    return mondayOf(new Date());
+  });
   const [availability, setAvailability] = useState<AvailabilityTemplate>({ 0:120,1:240,2:240,3:240,4:240,5:240,6:120 });
   const [blocks, setBlocks] = useState<ScheduledBlock[]>([]);
   const [backlog, setBacklog] = useState<BacklogItem[]>([]);
@@ -128,6 +141,7 @@ export default function WeekPlanPage() {
   const [goals, setGoals] = useState<WeeklyGoal[]>([]);
   const [courses, setCourses] = useState<any[]>([]);
   const [showConflicts, setShowConflicts] = useState<boolean>(true);
+  const [twoWeeksOnly, setTwoWeeksOnly] = useState<boolean>(false);
   const [undoSnapshot, setUndoSnapshot] = useState<ScheduledBlock[] | null>(null);
   const [showCatchup, setShowCatchup] = useState(false);
   const [catchupPreview, setCatchupPreview] = useState<{
@@ -135,9 +149,69 @@ export default function WeekPlanPage() {
     unschedulable: Array<{ taskId: string; title: string; remaining: number; dueYmd: string }>;
   } | null>(null);
 
-  useEffect(() => { setAvailability(loadAvailability()); setBlocks(loadSchedule()); setBacklog(loadBacklog()); }, []);
+  // Initial load: local first for instant UI, then server, and migrate if server empty
+  useEffect(() => {
+    setAvailability(loadAvailability());
+    setBlocks(loadSchedule());
+    setBacklog(loadBacklog());
+    let canceled = false;
+    (async () => {
+      try {
+        const [schRes, setRes] = await Promise.all([
+          fetch('/api/schedule', { cache: 'no-store' }),
+          fetch('/api/settings?keys=availabilityTemplateV1,weeklyGoalsV1,weekPlanShowConflicts,weekPlanWeekStartYmd,weekPlanTwoWeeksOnly,internshipColor,sportsLawReviewColor', { cache: 'no-store' })
+        ]);
+        if (canceled) return;
+        if (setRes.ok) {
+          const sj = await setRes.json().catch(() => ({ settings: {} }));
+          const settings = (sj?.settings || {}) as Record<string, any>;
+          if (settings.availabilityTemplateV1 && typeof settings.availabilityTemplateV1 === 'object') {
+            setAvailability(settings.availabilityTemplateV1 as any);
+          }
+          if (Array.isArray(settings.weeklyGoalsV1)) setGoals(settings.weeklyGoalsV1 as any[]);
+          if (typeof settings.weekPlanShowConflicts === 'boolean') setShowConflicts(settings.weekPlanShowConflicts as boolean);
+          if (typeof settings.weekPlanTwoWeeksOnly === 'boolean') setTwoWeeksOnly(settings.weekPlanTwoWeeksOnly as boolean);
+          const wk = settings.weekPlanWeekStartYmd;
+          if (typeof wk === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(wk)) {
+            const [y,m,da] = wk.split('-').map(x=>parseInt(x,10));
+            setWeekStart(mondayOf(new Date(y,(m as number)-1,da)));
+          }
+          // Mirror virtual course colors to localStorage so colorForCourse picks them up on all pages
+          try {
+            if (typeof window !== 'undefined') {
+              if (typeof settings.internshipColor === 'string' && settings.internshipColor) window.localStorage.setItem('internshipColor', settings.internshipColor);
+              if (typeof settings.sportsLawReviewColor === 'string' && settings.sportsLawReviewColor) window.localStorage.setItem('sportsLawReviewColor', settings.sportsLawReviewColor);
+            }
+          } catch {}
+        }
+        if (schRes.ok) {
+          const bj = await schRes.json().catch(() => ({ blocks: [] }));
+          const remote = Array.isArray(bj?.blocks) ? bj.blocks : [];
+          const local = loadSchedule();
+          if (remote.length > 0) {
+            setBlocks(remote as any);
+          } else if (local.length > 0) {
+            // Migrate local → server
+            try { await fetch('/api/schedule', { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ blocks: local }) }); } catch {}
+          }
+        }
+      } catch {}
+    })();
+    return () => { canceled = true; };
+  }, []);
+  // Persist changes locally and to server
   useEffect(() => { saveAvailability(availability); }, [availability]);
   useEffect(() => { saveSchedule(blocks); }, [blocks]);
+  // Debounced server save for blocks
+  useEffect(() => {
+    const id = setTimeout(() => {
+      try { void fetch('/api/schedule', { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ blocks }) }); } catch {}
+    }, 400);
+    return () => clearTimeout(id);
+  }, [blocks]);
+  useEffect(() => { try { if (typeof window !== 'undefined') window.localStorage.setItem(LS_WEEK_START, ymd(weekStart)); } catch {} try { void fetch('/api/settings', { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ weekPlanWeekStartYmd: ymd(weekStart) }) }); } catch {} }, [weekStart]);
+  useEffect(() => { try { void fetch('/api/settings', { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ availabilityTemplateV1: availability }) }); } catch {} }, [availability]);
+  useEffect(() => { try { void fetch('/api/settings', { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ weeklyGoalsV1: goals }) }); } catch {} }, [goals]);
 
   // Fetch tasks for Catch-Up
   useEffect(() => {
@@ -150,12 +224,14 @@ export default function WeekPlanPage() {
   useEffect(() => {
     (async () => { try { const r = await fetch('/api/sessions', { cache: 'no-store' }); const d = await r.json(); setSessions(Array.isArray(d?.sessions)?d.sessions:[]); } catch {} })();
   }, []);
-  // Load courses for class times and showConflicts flag
+  // Load courses for class times and initial toggles
   useEffect(() => {
     (async () => { try { const r = await fetch('/api/courses', { cache: 'no-store' }); const d = await r.json(); setCourses(Array.isArray(d?.courses)?d.courses:[]); } catch {} })();
     try { if (typeof window!=='undefined') setShowConflicts((window.localStorage.getItem(LS_SHOW_CONFLICTS)||'true')==='true'); } catch {}
+    try { if (typeof window!=='undefined') setTwoWeeksOnly((window.localStorage.getItem(LS_TWO_WEEKS)||'false')==='true'); } catch {}
   }, []);
-  useEffect(() => { if (typeof window!=='undefined') window.localStorage.setItem(LS_SHOW_CONFLICTS, showConflicts ? 'true':'false'); }, [showConflicts]);
+  useEffect(() => { if (typeof window!=='undefined') window.localStorage.setItem(LS_SHOW_CONFLICTS, showConflicts ? 'true':'false'); try { void fetch('/api/settings', { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ weekPlanShowConflicts: showConflicts }) }); } catch {} }, [showConflicts]);
+  useEffect(() => { if (typeof window!=='undefined') window.localStorage.setItem(LS_TWO_WEEKS, twoWeeksOnly ? 'true':'false'); try { void fetch('/api/settings', { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ weekPlanTwoWeeksOnly: twoWeeksOnly }) }); } catch {} }, [twoWeeksOnly]);
 
   const days = useMemo(() => Array.from({ length: 7 }, (_, i) => { const d = new Date(weekStart); d.setDate(d.getDate()+i); return d; }), [weekStart]);
 
@@ -364,7 +440,13 @@ export default function WeekPlanPage() {
   const scheduledIdsThisWeek = useMemo(() => {
     const keys = new Set(days.map(d => ymd(d))); return new Set(blocks.filter(b => keys.has(b.day)).map(b => b.taskId));
   }, [blocks, days]);
-  const unscheduledTasks = useMemo(() => tasksTodo.filter(t => !scheduledIdsThisWeek.has(t.id)), [tasksTodo, scheduledIdsThisWeek]);
+  const unscheduledTasks = useMemo(() => {
+    const base = tasksTodo.filter(t => !scheduledIdsThisWeek.has(t.id));
+    if (!twoWeeksOnly) return base;
+    const today = ymd(new Date());
+    const end = addDaysYmd(today, 13);
+    return base.filter(t => { const dy = ymdFromISO(t.dueDate); return dy >= today && dy <= end; });
+  }, [tasksTodo, scheduledIdsThisWeek, twoWeeksOnly]);
   function sortValCourse(t: Task) { return displayCourseFor(t).toLowerCase(); }
   function sortValDue(t: Task) { const n = new Date(t.dueDate).getTime(); return isNaN(n) ? Number.MAX_SAFE_INTEGER : n; }
   function sortValPriority(t: Task) { return -(t.priority ?? 0); }
@@ -451,15 +533,26 @@ export default function WeekPlanPage() {
     if (!s) return null;
     const colon = /^(\d{1,3}):(\d{1,2})$/.exec(s);
     if (colon) { const h = parseInt(colon[1],10); const m = parseInt(colon[2],10); if (!isNaN(h) && !isNaN(m)) return Math.max(0, h*60 + m); }
+    const space = /^(\d{1,3})\s+(\d{1,2})$/.exec(s);
+    if (space) { const h = parseInt(space[1],10); const m = parseInt(space[2],10); if (!isNaN(h) && !isNaN(m)) return Math.max(0, h*60 + m); }
     const hr = /([0-9]+(?:\.[0-9]+)?)\s*h/.exec(s); const mr = /([0-9]+)\s*m(?![a-z])/i.exec(s);
     if (hr || mr) { let tot = 0; if (hr) { const h = parseFloat(hr[1]); if (!isNaN(h)) tot += Math.round(h*60); } if (mr) { const m = parseInt(mr[1],10); if (!isNaN(m)) tot += m; } return Math.max(0, tot); }
-    const plain = parseFloat(s); if (!isNaN(plain)) { return Math.max(0, Math.round(plain)); }
+    const plain = parseFloat(s);
+    if (!isNaN(plain)) {
+      if (s.includes('.') || plain <= 10) {
+        return Math.max(0, Math.round(plain * 60));
+      }
+      return Math.max(0, Math.round(plain));
+    }
     return null;
   }
   function setAvailForDow(dow: number, val: string) {
     const parsed = parseAvailFlexible(val);
     const v = parsed == null ? 0 : parsed;
     setAvailability(prev => ({ ...prev, [dow]: v }));
+  }
+  function bumpAvail(dow: number, delta: number) {
+    setAvailability(prev => ({ ...prev, [dow]: Math.max(0, Math.round((prev[dow]||0) + delta)) }));
   }
   function shiftWeek(delta: number) { setWeekStart(prev => { const x = new Date(prev); x.setDate(x.getDate() + delta*7); return mondayOf(x); }); }
   function clearThisWeek() { const keys = new Set(days.map(d => ymd(d))); setBlocks(prev => prev.filter(b => !keys.has(b.day))); }
@@ -502,7 +595,15 @@ export default function WeekPlanPage() {
             {[1,2,3,4,5,6,0].map(dow => (
               <div key={dow} className="rounded border border-[#1b2344] p-2">
                 <label className="block text-xs mb-1" htmlFor={`avail-${dow}`}>{['Sun','Mon','Tue','Wed','Thu','Fri','Sat'][dow]}</label>
-                <input id={`avail-${dow}`} type="text" inputMode="numeric" placeholder="H:MM" value={minutesToHM(availability[dow] ?? 0)} onChange={e=>setAvailForDow(dow, e.target.value)} className="w-full bg-[#0b1020] border border-[#1b2344] rounded px-2 py-1 text-sm focus-visible:outline focus-visible:outline-2 focus-visible:outline-blue-500" />
+                <div className="flex items-center gap-2">
+                  <input id={`avail-${dow}`} type="text" inputMode="numeric" placeholder="H:MM" value={minutesToHM(availability[dow] ?? 0)} onChange={e=>setAvailForDow(dow, e.target.value)} className="flex-1 bg-[#0b1020] border border-[#1b2344] rounded px-2 py-1 text-sm focus-visible:outline focus-visible:outline-2 focus-visible:outline-blue-500" />
+                  <div className="flex items-center gap-1">
+                    <button aria-label="Minus 30 minutes" onClick={()=>bumpAvail(dow,-30)} className="px-2 py-1 rounded border border-[#1b2344] text-xs">-30</button>
+                    <button aria-label="Minus 15 minutes" onClick={()=>bumpAvail(dow,-15)} className="px-2 py-1 rounded border border-[#1b2344] text-xs">-15</button>
+                    <button aria-label="Plus 15 minutes" onClick={()=>bumpAvail(dow,15)} className="px-2 py-1 rounded border border-[#1b2344] text-xs">+15</button>
+                    <button aria-label="Plus 30 minutes" onClick={()=>bumpAvail(dow,30)} className="px-2 py-1 rounded border border-[#1b2344] text-xs">+30</button>
+                  </div>
+                </div>
               </div>
             ))}
           </div>
@@ -523,6 +624,10 @@ export default function WeekPlanPage() {
               </select>
             </label>
             <button onClick={()=>setSortDir(d=>d==='asc'?'desc':'asc')} className="px-2 py-1 rounded border border-[#1b2344]">{sortDir==='asc'?'Asc':'Desc'}</button>
+            <label className="flex items-center gap-1">
+              <input type="checkbox" checked={twoWeeksOnly} onChange={e=>setTwoWeeksOnly(e.target.checked)} />
+              <span>Due next 2 weeks</span>
+            </label>
           </div>
         </div>
         {noTasksToPlan ? (

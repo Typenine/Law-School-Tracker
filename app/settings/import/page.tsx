@@ -88,9 +88,10 @@ function normalizeTaskType(s: string): string {
   if (/review/.test(n)) return "Review";
   if (/outline/.test(n)) return "Outline";
   if (/practice/.test(n)) return "Practice";
+  if (/assign|homework|\bhw\b/.test(n)) return "Assignment";
   if (/intern/.test(n)) return "Internship";
   if (!n) return "Other";
-  return ["reading","review","outline","practice","internship","other"].includes(n) ? n[0].toUpperCase() + n.slice(1) : "Other";
+  return ["reading","review","outline","practice","internship","assignment","other"].includes(n) ? n[0].toUpperCase() + n.slice(1) : "Other";
 }
 
 function toActivity(taskType: string): string {
@@ -99,6 +100,7 @@ function toActivity(taskType: string): string {
     case "Review": return "review";
     case "Outline": return "outline";
     case "Practice": return "practice";
+    case "Assignment": return "assignment";
     case "Internship": return "other";
     default: return "other";
   }
@@ -162,6 +164,7 @@ export default function ImportCsvPage() {
             if (a === 'review') return 'Review';
             if (a === 'outline') return 'Outline';
             if (a === 'practice') return 'Practice';
+            if (a === 'assignment') return 'Assignment';
             if (a === 'internship') return 'Internship';
             return 'Other';
           })();
@@ -367,6 +370,7 @@ export default function ImportCsvPage() {
         if (x === 'review') return 'Review';
         if (x === 'outline') return 'Outline';
         if (x === 'practice') return 'Practice';
+        if (x === 'assignment') return 'Assignment';
         if (x === 'internship') return 'Internship';
         return 'Other';
       };

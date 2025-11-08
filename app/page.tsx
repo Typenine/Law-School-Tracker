@@ -60,6 +60,61 @@ function mondayOfChicago(d: Date): Date { const ymd = chicagoYmd(d); const [yy,m
 function weekKeysChicago(d: Date): string[] { const monday = mondayOfChicago(d); return Array.from({length:7},(_,i)=>{const x=new Date(monday); x.setDate(x.getDate()+i); return chicagoYmd(x);}); }
 function minutesStr(mins: number): string { const h=Math.floor(mins/60), m=mins%60; return `${h>0?`${h}h `:''}${m}m`.trim(); }
 
+function mmss(sec: number): string {
+  const n = Math.max(0, Math.floor(Number(sec) || 0));
+  const m = Math.floor(n / 60);
+  const s = n % 60;
+  return `${String(m).padStart(2,'0')}:${String(s).padStart(2,'0')}`;
+}
+function isUUID(s: string): boolean {
+  return /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(s);
+}
+function uid(): string { return Math.random().toString(36).slice(2) + Date.now().toString(36); }
+
+// Day-level Chicago helpers for countdowns
+function chicagoPartsYMD(d: Date) {
+  const fmt = new Intl.DateTimeFormat('en-CA', { timeZone: 'America/Chicago', year: 'numeric', month: '2-digit', day: '2-digit' });
+  const s = fmt.format(d); // YYYY-MM-DD
+  const [y, m, da] = s.split('-').map(v => parseInt(v, 10));
+  return { y, m, d: da };
+}
+function ymdFromParts(y: number, m: number, d: number) { return `${y}-${String(m).padStart(2,'0')}-${String(d).padStart(2,'0')}`; }
+function cmpYmd(a: string, b: string) { return a === b ? 0 : (a < b ? -1 : 1); }
+function addMonthsYmd(ymd: string, n: number): string {
+  const [y, m, d] = ymd.split('-').map(x=>parseInt(x,10));
+  let Y = y; let M = m + n; while (M > 12) { M -= 12; Y += 1; } while (M < 1) { M += 12; Y -= 1; }
+  const daysInMonth = new Date(Y, M, 0).getDate();
+  const D = Math.min(d, daysInMonth);
+  return ymdFromParts(Y, M, D);
+}
+function addYearsYmd(ymd: string, n: number): string { return addMonthsYmd(ymd, n*12); }
+function daysBetweenYmd(a: string, b: string): number {
+  const [ay,am,ad] = a.split('-').map(x=>parseInt(x,10));
+  const [by,bm,bd] = b.split('-').map(x=>parseInt(x,10));
+  const aDate = new Date(ay, (am as number)-1, ad);
+  const bDate = new Date(by, (bm as number)-1, bd);
+  return Math.max(0, Math.round((bDate.getTime() - aDate.getTime()) / 86400000));
+}
+function diffMonthsWeeksDays(startYmd: string, endYmd: string): { months: number; weeks: number; days: number } {
+  if (cmpYmd(endYmd, startYmd) <= 0) return { months: 0, weeks: 0, days: 0 };
+  let months = 0;
+  while (cmpYmd(addMonthsYmd(startYmd, months+1), endYmd) <= 0) months++;
+  const afterMonths = addMonthsYmd(startYmd, months);
+  const remDays = daysBetweenYmd(afterMonths, endYmd);
+  const weeks = Math.floor(remDays / 7);
+  const days = remDays % 7;
+  return { months, weeks, days };
+}
+function diffYearsMonthsDays(startYmd: string, endYmd: string): { years: number; months: number; days: number } {
+  if (cmpYmd(endYmd, startYmd) <= 0) return { years: 0, months: 0, days: 0 };
+  let years = 0; while (cmpYmd(addYearsYmd(startYmd, years+1), endYmd) <= 0) years++;
+  const afterYears = addYearsYmd(startYmd, years);
+  let months = 0; while (cmpYmd(addMonthsYmd(afterYears, months+1), endYmd) <= 0) months++;
+  const afterMonths = addMonthsYmd(afterYears, months);
+  const days = daysBetweenYmd(afterMonths, endYmd);
+  return { years, months, days };
+}
+
 function chicagoHour(d: Date) {
   const parts = new Intl.DateTimeFormat('en-US', { timeZone: 'America/Chicago', hour: '2-digit', hour12: false }).formatToParts(d);
   const h = parseInt(parts.find(p => p.type === 'hour')?.value || '0', 10);
@@ -86,17 +141,14 @@ export default function TodayPage() {
   const [availability, setAvailability] = useState<Record<number, number>>({ 0:120,1:240,2:240,3:240,4:240,5:240,6:120 });
   const [sessions, setSessions] = useState<any[]>([]);
   const [goals, setGoals] = useState<WeeklyGoal[]>([]);
+  const [tasks, setTasks] = useState<any[]>([]);
+  const [rightMode, setRightMode] = useState<'day'|'week'>('day');
+  const [selectedKey, setSelectedKey] = useState<string>(() => ymdAddDays(chicagoYmd(new Date()), 1));
+  const [activeItemId, setActiveItemId] = useState<string | null>(null);
+  const [itemSeconds, setItemSeconds] = useState<Record<string, number>>({});
+  const itemTickRef = useRef<NodeJS.Timeout|null>(null);
+  const carryoverRef = useRef<boolean>(false);
 
-  // Timer state
-  const [running, setRunning] = useState(false);
-  const [seconds, setSeconds] = useState(0);
-  const tickRef = useRef<NodeJS.Timeout|null>(null);
-  const [logCourse, setLogCourse] = useState("");
-  const [logMinutes, setLogMinutes] = useState(0);
-  const [logFocus, setLogFocus] = useState<number>(5);
-  const [logNotes, setLogNotes] = useState("");
-
-  // Load persisted
   useEffect(() => {
     if (typeof window==='undefined') return;
     try {
@@ -111,9 +163,71 @@ export default function TodayPage() {
         if (t.dateKey === dk) setPlan(t);
       }
     } catch {}
+    let canceled = false;
+    (async () => {
+      try {
+        const [schRes, setRes] = await Promise.all([
+          fetch('/api/schedule', { cache: 'no-store' }),
+          fetch('/api/settings?keys=weeklyGoalsV1,availabilityTemplateV1,todayPlanV1,todayItemTimersV1,nudgesEnabled,nudgesReminderTime,nudgesQuietStart,nudgesQuietEnd,nudgesMaxPerWeek', { cache: 'no-store' })
+        ]);
+        if (canceled) return;
+        if (setRes.ok) {
+          const sj = await setRes.json().catch(() => ({ settings: {} }));
+          const s = (sj?.settings || {}) as Record<string, any>;
+          if (s.availabilityTemplateV1 && typeof s.availabilityTemplateV1 === 'object') setAvailability(s.availabilityTemplateV1 as any);
+          if (Array.isArray(s.weeklyGoalsV1)) setGoals(s.weeklyGoalsV1 as any[]);
+          const tp = s.todayPlanV1 as any;
+          const dk = chicagoYmd(new Date());
+          if (tp && typeof tp === 'object' && tp.dateKey === dk) setPlan(tp as TodayPlan);
+          const ttt = s.todayItemTimersV1 as any;
+          if (ttt && typeof ttt === 'object' && ttt.dateKey === dk) {
+            const sec = (ttt.itemSeconds && typeof ttt.itemSeconds === 'object') ? ttt.itemSeconds as Record<string, number> : {};
+            setItemSeconds(sec);
+            if (typeof ttt.activeItemId === 'string' || ttt.activeItemId === null) setActiveItemId(ttt.activeItemId || null);
+          }
+          try {
+            if (typeof window !== 'undefined') {
+              if (typeof s.nudgesEnabled === 'boolean') window.localStorage.setItem('nudgesEnabled', s.nudgesEnabled ? 'true' : 'false');
+              if (typeof s.nudgesReminderTime === 'string') window.localStorage.setItem('nudgesReminderTime', s.nudgesReminderTime);
+              if (typeof s.nudgesQuietStart === 'string') window.localStorage.setItem('nudgesQuietStart', s.nudgesQuietStart);
+              if (typeof s.nudgesQuietEnd === 'string') window.localStorage.setItem('nudgesQuietEnd', s.nudgesQuietEnd);
+              if (typeof s.nudgesMaxPerWeek !== 'undefined') window.localStorage.setItem('nudgesMaxPerWeek', String(Math.max(0, parseInt(String(s.nudgesMaxPerWeek),10)||3)));
+            }
+          } catch {}
+        }
+        if (schRes.ok) {
+          const bj = await schRes.json().catch(() => ({ blocks: [] }));
+          const remote = Array.isArray(bj?.blocks) ? bj.blocks : [];
+          const local = (() => { try { const raw = window.localStorage.getItem(LS_SCHEDULE); return raw ? JSON.parse(raw) : []; } catch { return []; } })();
+          if (remote.length > 0) setSchedule(remote as any);
+          else if (local.length > 0) { try { await fetch('/api/schedule', { method:'PUT', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ blocks: local }) }); } catch {} }
+        }
+      } catch {}
+    })();
+    return () => { canceled = true; };
   }, []);
   useEffect(() => { if (typeof window!=='undefined') window.localStorage.setItem(LS_TODAY, JSON.stringify(plan)); }, [plan]);
   useEffect(() => { saveGoals(goals); }, [goals]);
+  useEffect(() => {
+    const id = setTimeout(() => {
+      try { void fetch('/api/settings', { method:'PATCH', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ todayPlanV1: plan }) }); } catch {}
+    }, 400);
+    return () => clearTimeout(id);
+  }, [plan]);
+  useEffect(() => {
+    const id = setTimeout(() => {
+      try { void fetch('/api/settings', { method:'PATCH', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ weeklyGoalsV1: goals }) }); } catch {}
+    }, 400);
+    return () => clearTimeout(id);
+  }, [goals]);
+
+  // Persist per-item timers to server (debounced)
+  useEffect(() => {
+    const id = setTimeout(() => {
+      try { void fetch('/api/settings', { method:'PATCH', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ todayItemTimersV1: { dateKey, itemSeconds, activeItemId } }) }); } catch {}
+    }, 1500);
+    return () => clearTimeout(id);
+  }, [itemSeconds, activeItemId, dateKey]);
 
   // Sessions fetch for KPIs
   useEffect(() => {
@@ -124,9 +238,95 @@ export default function TodayPage() {
     })();
     return () => { mounted = false; };
   }, [dateKey]);
+  // Tasks for tomorrow preview
+  useEffect(() => {
+    let mounted = true;
+    (async () => {
+      try { const r = await fetch('/api/tasks', { cache: 'no-store' }); const d = await r.json(); if (mounted) setTasks(Array.isArray(d.tasks)?d.tasks:[]); } catch {}
+    })();
+    return () => { mounted = false; };
+  }, []);
 
   // Compute today's scheduled blocks (from weekly schedule)
   const todaysBlocks = useMemo(() => (schedule || []).filter(b => b.day === dateKey), [schedule, dateKey]);
+  // Right-side view: selected day/week
+  const selectedBlocks = useMemo(() => (schedule || []).filter(b => b.day === selectedKey), [schedule, selectedKey]);
+  const tasksDueSelected = useMemo(() => (tasks || []).filter((t:any) => (t.status === 'todo') && chicagoYmd(new Date(t.dueDate)) === selectedKey), [tasks, selectedKey]);
+  const selectedWeekKeys = useMemo(() => {
+    const [y,m,da] = selectedKey.split('-').map(x=>parseInt(x,10));
+    const dt = new Date(y,(m as number)-1,da);
+    return weekKeysChicago(dt);
+  }, [selectedKey]);
+  const weekBlocks = useMemo(() => (schedule || []).filter(b => selectedWeekKeys.includes(b.day)), [schedule, selectedWeekKeys]);
+  const weekDueTasks = useMemo(() => (tasks || []).filter((t:any) => (t.status==='todo') && selectedWeekKeys.includes(chicagoYmd(new Date(t.dueDate)))), [tasks, selectedWeekKeys]);
+
+  // Auto-carryover unfinished items from an older plan to the next day (or next day with availability)
+  useEffect(() => {
+    if (carryoverRef.current) return;
+    const today = chicagoYmd(new Date());
+    if (!plan?.dateKey || plan.dateKey >= today) return;
+    const leftovers = (plan?.items || []).filter(it => (Number(it.minutes)||0) > 0);
+    if (leftovers.length === 0) return;
+    // Build planned minutes by day
+    const planned = new Map<string, number>();
+    for (const b of (schedule || [])) planned.set(b.day, (planned.get(b.day)||0) + Math.max(0, Number(b.plannedMinutes)||0));
+    // Availability by DOW
+    const avail: Record<number, number> = (() => { try { return (typeof window!=='undefined' ? (JSON.parse(window.localStorage.getItem('availabilityTemplateV1')||'{}')||{}) : {}) as any; } catch { return {} as any; } })();
+    const capFor = (ymdStr: string) => { const [y,m,da] = ymdStr.split('-').map(x=>parseInt(x,10)); const d=new Date(y,(m as number)-1,da); return Math.max(0, Number(avail[d.getDay()]||0)); };
+    const ALLOWED_OVERAGE_MIN = 60; // allow up to 60m over capacity
+    const TRY_DAYS = 21;
+    const additions: any[] = [];
+    const startBase = new Date(plan.dateKey);
+    for (const it of leftovers) {
+      let rem = Math.max(1, Math.round(Number(it.minutes)||0));
+      // Overdue if linked task has dueDate < today
+      const t = (tasks || []).find((x:any) => isUUID(it.id) && x.id === it.id);
+      const isOverdue = !!(t && chicagoYmd(new Date(t.dueDate)) < today);
+      // If overdue, drop entire remainder on the next day regardless of capacity
+      if (isOverdue) {
+        const d = new Date(startBase); d.setDate(d.getDate()+1);
+        const k = `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`;
+        additions.push({ id: uid(), taskId: (isUUID(it.id)? it.id : uid()), day: k, plannedMinutes: rem, guessed: true, title: it.title, course: it.course || '', pages: null, priority: null });
+        planned.set(k, (planned.get(k)||0) + rem);
+        continue;
+      }
+      // Otherwise, try to split across next days within capacity + overage
+      for (let i=1;i<=TRY_DAYS && rem>0;i++) {
+        const d = new Date(startBase); d.setDate(d.getDate()+i);
+        const k = `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`;
+        const cap = capFor(k);
+        const used = planned.get(k) || 0;
+        const allow = Math.max(0, (cap - used) + ALLOWED_OVERAGE_MIN);
+        if (allow <= 0) continue;
+        const chunk = Math.max(1, Math.min(rem, allow));
+        additions.push({ id: uid(), taskId: (isUUID(it.id)? it.id : uid()), day: k, plannedMinutes: chunk, guessed: true, title: it.title, course: it.course || '', pages: null, priority: null });
+        planned.set(k, used + chunk);
+        rem -= chunk;
+      }
+      if (rem > 0) {
+        // fallback: put remaining on the day with most capacity (even if exceeding)
+        let bestK = '';
+        let bestRem = -Infinity;
+        for (let i=1;i<=TRY_DAYS;i++) {
+          const d = new Date(startBase); d.setDate(d.getDate()+i);
+          const k = `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`;
+          const cap = capFor(k); const used = planned.get(k)||0; const left = cap - used;
+          if (left > bestRem) { bestRem = left; bestK = k; }
+        }
+        const k = bestK || today;
+        additions.push({ id: uid(), taskId: (isUUID(it.id)? it.id : uid()), day: k, plannedMinutes: rem, guessed: true, title: it.title, course: it.course || '', pages: null, priority: null });
+        planned.set(k, (planned.get(k)||0) + rem);
+      }
+    }
+    if (additions.length) {
+      const nextBlocks = [...(schedule||[]), ...additions];
+      setSchedule(nextBlocks);
+      try { void fetch('/api/schedule', { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ blocks: nextBlocks }) }); } catch {}
+    }
+    // Reset today's plan for new day
+    setPlan({ dateKey: today, locked: false, items: [] });
+    carryoverRef.current = true;
+  }, [plan.dateKey, plan.items, schedule]);
 
   // Backlog suggestions: top by due asc then priority, limit 5
   const backlogSorted = useMemo(() => {
@@ -167,24 +367,72 @@ export default function TodayPage() {
   }
   function lockPlan() { setPlan(p => ({ ...p, locked: true, lockedAt: new Date().toISOString() })); setStep(3); }
 
-  // Timer logic
+  // Per-item timer tick (for plan items)
+  
   useEffect(() => {
-    if (running) {
-      tickRef.current = setInterval(() => setSeconds(s => s + 1), 1000) as any;
-    } else if (tickRef.current) {
-      clearInterval(tickRef.current); tickRef.current = null;
+    if (activeItemId) {
+      itemTickRef.current = setInterval(() => {
+        setItemSeconds(prev => ({ ...prev, [activeItemId]: Math.max(0, (prev[activeItemId] || 0) + 1) }));
+      }, 1000) as any;
+    } else if (itemTickRef.current) {
+      clearInterval(itemTickRef.current); itemTickRef.current = null;
     }
-    return () => { if (tickRef.current) { clearInterval(tickRef.current); tickRef.current = null; } };
-  }, [running]);
-  useEffect(() => { setLogMinutes(Math.max(0, Math.floor(seconds/60))); }, [seconds]);
-  function resetTimer() { setRunning(false); setSeconds(0); }
+    return () => { if (itemTickRef.current) { clearInterval(itemTickRef.current); itemTickRef.current = null; } };
+  }, [activeItemId]);
 
-  async function quickLog() {
-    const mins = Math.max(1, logMinutes || Math.floor(seconds/60) || 0);
-    const body: any = { when: new Date().toISOString(), minutes: mins, focus: Math.min(10, Math.max(1, Number(logFocus)||5)), notes: logNotes || null, activity: 'other' };
-    if (logCourse.trim()) body.notes = body.notes ? `[${logCourse.trim()}] ${body.notes}` : `[${logCourse.trim()}]`;
-    try { const r = await fetch('/api/sessions', { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify(body) }); if (r.ok) { resetTimer(); setLogMinutes(0); setLogNotes(""); setLogCourse(""); /* refresh */ const g=await fetch('/api/sessions',{cache:'no-store'}); const d=await g.json(); setSessions(Array.isArray(d.sessions)?d.sessions:[]); } else { if (typeof window!=='undefined') window.alert('Failed to log'); } } catch {}
+  async function refreshSessionsNow() {
+    try { const r = await fetch('/api/sessions', { cache: 'no-store' }); const d = await r.json(); setSessions(Array.isArray(d.sessions)?d.sessions:[]); } catch {}
   }
+
+  async function logSessionForItem(it: TodayPlanItem, minutes: number) {
+    const body: any = { taskId: isUUID(it.id) ? it.id : null, when: new Date().toISOString(), minutes: Math.max(1, Math.round(minutes||0)), focus: null, notes: null, activity: null };
+    try { await fetch('/api/sessions', { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify(body) }); } catch {}
+    await refreshSessionsNow();
+  }
+
+  async function handleFinishItem(id: string) {
+    const it = plan.items.find(x => x.id === id); if (!it) return;
+    const secs = Math.max(0, Number(itemSeconds[id] || 0));
+    const minsFromTimer = Math.floor(secs / 60);
+    const def = Math.max(1, minsFromTimer || (Number(it.minutes)||0));
+    let minutes = def;
+    try {
+      if (typeof window !== 'undefined') {
+        const resp = window.prompt('Minutes to log for this task', String(def));
+        if (resp != null && resp.trim() !== '') {
+          const v = parseInt(resp, 10); if (!isNaN(v) && v > 0) minutes = v;
+        }
+      }
+    } catch {}
+    await logSessionForItem(it, minutes);
+    if (isUUID(id)) { try { await fetch(`/api/tasks/${id}`, { method:'PATCH', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ status: 'done' }) }); } catch {} }
+    setPlan(p => ({ ...p, items: p.items.filter(x => x.id !== id) }));
+    setItemSeconds(prev => ({ ...prev, [id]: 0 }));
+    if (activeItemId === id) setActiveItemId(null);
+  }
+
+  async function handlePartialItem(id: string) {
+    const it = plan.items.find(x => x.id === id); if (!it) return;
+    const secs = Math.max(0, Number(itemSeconds[id] || 0));
+    const minsFromTimer = Math.floor(secs / 60);
+    const def = Math.max(1, minsFromTimer || Math.max(1, Math.round((Number(it.minutes)||0) / 2)));
+    let minutes = def;
+    try {
+      if (typeof window !== 'undefined') {
+        const resp = window.prompt('Minutes to log as partial completion', String(def));
+        if (resp != null && resp.trim() !== '') {
+          const v = parseInt(resp, 10); if (!isNaN(v) && v > 0) minutes = v;
+        }
+      }
+    } catch {}
+    minutes = Math.min(minutes, Math.max(1, Number(it.minutes)||0));
+    await logSessionForItem(it, minutes);
+    setPlan(p => ({ ...p, items: p.items.map(x => x.id === id ? { ...x, minutes: Math.max(0, (Number(x.minutes)||0) - minutes) } : x) }));
+    setItemSeconds(prev => ({ ...prev, [id]: 0 }));
+    if (activeItemId === id) setActiveItemId(null);
+  }
+
+  // no global quick log; logging occurs via per-item Finish/Partial actions
 
   // KPIs & Goals
   const plannedToday = useMemo(() => plan.items.reduce((s,it)=>s+(Number(it.minutes)||0),0), [plan.items]);
@@ -397,6 +645,31 @@ export default function TodayPage() {
   // UI
   return (
     <main className="space-y-6">
+      {/* Countdown widget */}
+      <section className="card p-4">
+        {(() => {
+          const todayYmd = chicagoYmd(new Date());
+          // Finals list (fixed)
+          const finals = [
+            { ymd: '2025-12-12', label: 'Final — Amateur Sports Law' },
+            { ymd: '2025-12-17', label: 'Final — Intellectual Property' },
+          ];
+          const nextFinal = finals.find(f => f.ymd >= todayYmd);
+          const gradYmd = '2027-05-15';
+          const fLine = nextFinal ? (() => {
+            const d = diffMonthsWeeksDays(todayYmd, nextFinal.ymd);
+            return `Next Final: ${d.months} ${d.months===1?'month':'months'}, ${d.weeks} ${d.weeks===1?'week':'weeks'}, ${d.days} ${d.days===1?'day':'days'}`;
+          })() : null;
+          const g = diffYearsMonthsDays(todayYmd, gradYmd);
+          const gLine = `Graduation: ${g.years} ${g.years===1?'year':'years'}, ${g.months} ${g.months===1?'month':'months'}, ${g.days} ${g.days===1?'day':'days'}`;
+          return (
+            <div className="text-sm leading-5">
+              {fLine ? <div className="text-slate-200">{fLine}</div> : null}
+              <div className="text-slate-300/80">{gLine}</div>
+            </div>
+          );
+        })()}
+      </section>
       <section className="card p-6 space-y-4">
         <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
           <div>
@@ -480,44 +753,8 @@ export default function TodayPage() {
           </div>
         )}
 
-        {/* Timer & Quick Log */}
+        {/* Plan + Tomorrow preview */}
         <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
-          <div className="rounded border border-[#1b2344] p-4">
-            <h3 className="text-sm font-medium mb-2">Focus Timer</h3>
-            <div className="text-3xl font-semibold mb-2" aria-live="polite">{String(Math.floor(seconds/60)).padStart(2,'0')}:{String(seconds%60).padStart(2,'0')}</div>
-            <div className="flex items-center gap-2 mb-2">
-              {!running ? (
-                <button aria-label="Start timer" onClick={()=>setRunning(true)} className="px-3 py-2 rounded bg-blue-600 hover:bg-blue-500 text-sm focus-visible:outline focus-visible:outline-2 focus-visible:outline-blue-500">Start</button>
-              ) : (
-                <button aria-label="Pause timer" onClick={()=>setRunning(false)} className="px-3 py-2 rounded border border-[#1b2344] text-sm focus-visible:outline focus-visible:outline-2 focus-visible:outline-blue-500">Pause</button>
-              )}
-              <button aria-label="Reset timer" onClick={resetTimer} className="px-3 py-2 rounded border border-[#1b2344] text-sm focus-visible:outline focus-visible:outline-2 focus-visible:outline-blue-500">Reset</button>
-            </div>
-            <div className="space-y-2">
-              <div>
-                <label className="block text-xs mb-1" htmlFor="log-course">Course</label>
-                <input id="log-course" value={logCourse} onChange={e=>setLogCourse(e.target.value)} className="w-full bg-[#0b1020] border border-[#1b2344] rounded px-3 py-2 focus-visible:outline focus-visible:outline-2 focus-visible:outline-blue-500" />
-              </div>
-              <div className="grid grid-cols-3 gap-2 items-end">
-                <div>
-                  <label className="block text-xs mb-1" htmlFor="log-minutes">Minutes</label>
-                  <input id="log-minutes" type="number" min={0} step={1} value={logMinutes} onChange={e=>setLogMinutes(parseInt(e.target.value||'0',10)||0)} className="w-full bg-[#0b1020] border border-[#1b2344] rounded px-3 py-2 focus-visible:outline focus-visible:outline-2 focus-visible:outline-blue-500" />
-                </div>
-                <div>
-                  <label className="block text-xs mb-1" htmlFor="log-focus">Focus (1–10)</label>
-                  <input id="log-focus" type="number" min={1} max={10} step={1} value={logFocus} onChange={e=>setLogFocus(Math.min(10, Math.max(1, parseInt(e.target.value||'5',10))))} className="w-full bg-[#0b1020] border border-[#1b2344] rounded px-3 py-2 focus-visible:outline focus-visible:outline-2 focus-visible:outline-blue-500" />
-                </div>
-                <div>
-                  <label className="block text-xs mb-1" htmlFor="quick-log">&nbsp;</label>
-                  <button id="quick-log" onClick={quickLog} className="w-full px-3 py-2 rounded bg-emerald-600 hover:bg-emerald-500 text-sm focus-visible:outline focus-visible:outline-2 focus-visible:outline-blue-500">Quick Log</button>
-                </div>
-              </div>
-              <div>
-                <label className="block text-xs mb-1" htmlFor="log-notes">Notes</label>
-                <textarea id="log-notes" value={logNotes} onChange={e=>setLogNotes(e.target.value)} className="w-full bg-[#0b1020] border border-[#1b2344] rounded px-3 py-2 focus-visible:outline focus-visible:outline-2 focus-visible:outline-blue-500" rows={3} />
-              </div>
-            </div>
-          </div>
           <div className="rounded border border-[#1b2344] p-4 min-h-[140px]">
             <h3 className="text-sm font-medium mb-2">Today’s Plan</h3>
             {plan.items.length===0 ? (
@@ -527,13 +764,112 @@ export default function TodayPage() {
                 {plan.items.map((it, i) => (
                   <li key={it.id} className="flex items-center justify-between">
                     <span className="truncate">{i+1}. {it.course ? `${it.course}: `:''}{it.title}</span>
-                    <span className="text-slate-300/70">{it.minutes}m</span>
+                    <div className="flex items-center gap-2 shrink-0">
+                      <span className="text-slate-300/70">{it.minutes}m</span>
+                      <span className="text-slate-300/60 tabular-nums">{mmss(itemSeconds[it.id] || 0)}</span>
+                      {activeItemId === it.id ? (
+                        <button aria-label="Pause item timer" onClick={()=>setActiveItemId(null)} className="px-2 py-1 rounded border border-[#1b2344] text-xs focus-visible:outline focus-visible:outline-2 focus-visible:outline-blue-500">Pause</button>
+                      ) : (
+                        <button aria-label="Start item timer" onClick={()=>setActiveItemId(it.id)} className="px-2 py-1 rounded border border-[#1b2344] text-xs focus-visible:outline focus-visible:outline-2 focus-visible:outline-blue-500">Start</button>
+                      )}
+                      <button aria-label="Partial complete" onClick={()=>handlePartialItem(it.id)} className="px-2 py-1 rounded border border-[#1b2344] text-xs focus-visible:outline focus-visible:outline-2 focus-visible:outline-blue-500">Partial</button>
+                      <button aria-label="Finish task" onClick={()=>handleFinishItem(it.id)} className="px-2 py-1 rounded bg-emerald-600 hover:bg-emerald-500 text-xs focus-visible:outline focus-visible:outline-2 focus-visible:outline-blue-500">Finish</button>
+                    </div>
                   </li>
                 ))}
               </ul>
             )}
             {plan.locked && (
               <div className="text-xs text-slate-300/70 mt-2">Locked · Total {totalPlannedLabel}</div>
+            )}
+          </div>
+          <div className="rounded border border-[#1b2344] p-4 min-h-[140px]">
+            <div className="flex items-center justify-between mb-2">
+              <h3 className="text-sm font-medium">Preview</h3>
+              <div className="flex items-center gap-2 text-xs">
+                <div className="inline-flex rounded border border-[#1b2344] overflow-hidden">
+                  <button onClick={()=>setRightMode('day')} className={`px-2 py-1 ${rightMode==='day'?'bg-blue-600':'bg-transparent'}`}>Day</button>
+                  <button onClick={()=>setRightMode('week')} className={`px-2 py-1 ${rightMode==='week'?'bg-blue-600':'bg-transparent'}`}>Week</button>
+                </div>
+                <div className="inline-flex items-center gap-1">
+                  <button onClick={()=>{ setSelectedKey(k=>ymdAddDays(k, rightMode==='day'? -1 : -7)); }} className="px-2 py-1 rounded border border-[#1b2344]">◀</button>
+                  <button onClick={()=>{ setSelectedKey(k=>ymdAddDays(k, rightMode==='day'? 1 : 7)); }} className="px-2 py-1 rounded border border-[#1b2344]">▶</button>
+                  <button onClick={()=>{ const today = chicagoYmd(new Date()); setSelectedKey(today); }} className="px-2 py-1 rounded border border-[#1b2344]">Today</button>
+                </div>
+              </div>
+            </div>
+            {rightMode==='day' ? (
+              <>
+                <div className="text-xs text-slate-300/70 mb-2">{selectedKey}</div>
+                <div className="space-y-3">
+                  <div>
+                    <div className="text-xs text-slate-300/70 mb-1">Scheduled</div>
+                    {selectedBlocks.length===0 ? (
+                      <div className="text-[11px] text-slate-300/60">—</div>
+                    ) : (
+                      <ul className="text-sm space-y-1">
+                        {selectedBlocks.map(b => (
+                          <li key={b.id} className="flex items-center justify-between">
+                            <span className="truncate">{b.course ? `${b.course}: ` : ''}{b.title}</span>
+                            <span className="text-slate-300/70">{b.plannedMinutes}m</span>
+                          </li>
+                        ))}
+                      </ul>
+                    )}
+                  </div>
+                  <div>
+                    <div className="text-xs text-slate-300/70 mb-1">Due</div>
+                    {tasksDueSelected.length===0 ? (
+                      <div className="text-[11px] text-slate-300/60">—</div>
+                    ) : (
+                      <ul className="text-sm space-y-1">
+                        {tasksDueSelected.map((t:any) => (
+                          <li key={t.id} className="flex items-center justify-between">
+                            <span className="truncate">{t.course ? `${t.course}: `:''}{t.title}</span>
+                            {typeof t.estimatedMinutes === 'number' ? <span className="text-slate-300/70">{t.estimatedMinutes}m</span> : null}
+                          </li>
+                        ))}
+                      </ul>
+                    )}
+                  </div>
+                </div>
+              </>
+            ) : (
+              <>
+                <div className="text-xs text-slate-300/70 mb-2">Week of {selectedWeekKeys[0]}—{selectedWeekKeys[6]}</div>
+                <div className="space-y-3">
+                  <div>
+                    <div className="text-xs text-slate-300/70 mb-1">Scheduled (Week)</div>
+                    {weekBlocks.length===0 ? (
+                      <div className="text-[11px] text-slate-300/60">—</div>
+                    ) : (
+                      <ul className="text-sm space-y-1">
+                        {weekBlocks.map(b => (
+                          <li key={b.id} className="flex items-center justify-between">
+                            <span className="truncate">{b.day} · {b.course ? `${b.course}: ` : ''}{b.title}</span>
+                            <span className="text-slate-300/70">{b.plannedMinutes}m</span>
+                          </li>
+                        ))}
+                      </ul>
+                    )}
+                  </div>
+                  <div>
+                    <div className="text-xs text-slate-300/70 mb-1">Due (Week)</div>
+                    {weekDueTasks.length===0 ? (
+                      <div className="text-[11px] text-slate-300/60">—</div>
+                    ) : (
+                      <ul className="text-sm space-y-1">
+                        {weekDueTasks.map((t:any) => (
+                          <li key={t.id} className="flex items-center justify-between">
+                            <span className="truncate">{chicagoYmd(new Date(t.dueDate))} · {t.course ? `${t.course}: `:''}{t.title}</span>
+                            {typeof t.estimatedMinutes === 'number' ? <span className="text-slate-300/70">{t.estimatedMinutes}m</span> : null}
+                          </li>
+                        ))}
+                      </ul>
+                    )}
+                  </div>
+                </div>
+              </>
             )}
           </div>
         </div>

@@ -1,4 +1,4 @@
-﻿"use client";
+"use client";
 import { useEffect, useMemo, useState } from 'react';
 import { Task } from '@/lib/types';
 import { courseColorClass } from '@/lib/colors';
@@ -7,6 +7,10 @@ import TimePickerField from '@/components/TimePickerField';
 export const dynamic = 'force-dynamic';
 
 function startOfDay(d: Date) { const x = new Date(d); x.setHours(0,0,0,0); return x; }
+
+// Fallback course color as HSL string for left stripe
+function hueFromString(s: string): number { let h = 0; for (let i=0;i<s.length;i++) { h = (h * 31 + s.charCodeAt(i)) >>> 0; } return h % 360; }
+function fallbackCourseHsl(name?: string | null): string { const key=(name||'').toString().trim().toLowerCase(); if (!key) return 'hsl(215 16% 47%)'; const h=hueFromString(key); return `hsl(${h} 70% 55%)`; }
 function fmtYmd(d: Date) {
   const yyyy = d.getFullYear();
   const mm = String(d.getMonth()+1).padStart(2,'0');
@@ -115,6 +119,8 @@ export default function CalendarPage() {
   const [showClasses, setShowClasses] = useState<boolean>(true);
   const [timedIcs, setTimedIcs] = useState<boolean>(false);
   const [icsToken, setIcsToken] = useState<string>('');
+  const [density, setDensity] = useState<'comfortable'|'compact'>('comfortable');
+  const [expandedDays, setExpandedDays] = useState<Set<string>>(new Set());
 
   // Edit modal state
   const [editOpen, setEditOpen] = useState(false);
@@ -145,11 +151,19 @@ export default function CalendarPage() {
       const v = window.localStorage.getItem('calendarShowClasses');
       setShowClasses(v === null ? true : v === 'true');
       setIcsToken(window.localStorage.getItem('icsToken') || '');
+      const d = window.localStorage.getItem('calendarDensity');
+      if (d === 'comfortable' || d === 'compact') setDensity(d);
     }
   }, []);
+  // Server-backed density setting
+  useEffect(() => { (async () => { try { const r = await fetch('/api/settings?keys=calendarDensity', { cache: 'no-store' }); if (!r.ok) return; const j = await r.json(); const s = (j?.settings||{}) as Record<string,any>; const d = s.calendarDensity; if (d === 'comfortable' || d === 'compact') setDensity(d); } catch {} })(); }, []);
   useEffect(() => {
     if (typeof window !== 'undefined') window.localStorage.setItem('calendarShowClasses', String(showClasses));
   }, [showClasses]);
+  useEffect(() => {
+    if (typeof window !== 'undefined') window.localStorage.setItem('calendarDensity', density);
+    try { void fetch('/api/settings', { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ calendarDensity: density }) }); } catch {}
+  }, [density]);
 
   const first = new Date(year, month, 1);
   const firstDow = first.getDay(); // 0 Sun
@@ -246,6 +260,21 @@ export default function CalendarPage() {
     }
     return m;
   }, [courses, weeks, year, month, courseFilter]);
+
+  // Finals as calendar-only events (not tasks)
+  const finalsByDay = useMemo(() => {
+    type FinalItem = { title: string; time: string };
+    const m: Record<string, FinalItem[]> = {};
+    const finals: Array<{ iso: string; title: string }> = [
+      { iso: '2025-12-12T09:00:00-06:00', title: 'Final — Amateur Sports Law' },
+      { iso: '2025-12-17T09:00:00-06:00', title: 'Final — Intellectual Property' },
+    ];
+    for (const f of finals) {
+      const dayKey = f.iso.slice(0, 10); // YYYY-MM-DD Chicago date
+      (m[dayKey] ||= []).push({ title: f.title, time: fmt12('09:00') });
+    }
+    return m;
+  }, []);
 
   const courseColors = useMemo(() => {
     const map: Record<string, string | null> = {};
@@ -532,6 +561,13 @@ export default function CalendarPage() {
           <div className="flex items-center gap-4">
             <label className="inline-flex items-center gap-2 text-sm"><input type="checkbox" checked={showClasses} onChange={e => setShowClasses(e.target.checked)} /> Show class times</label>
             <label className="inline-flex items-center gap-2 text-sm"><input type="checkbox" checked={timedIcs} onChange={e => setTimedIcs(e.target.checked)} /> Timed blocks (.ics)</label>
+            <label className="inline-flex items-center gap-2 text-sm">
+              Density
+              <select value={density} onChange={e=>setDensity(e.target.value as any)} className="bg-[#0b1020] border border-[#1b2344] rounded px-2 py-1">
+                <option value="comfortable">Comfortable</option>
+                <option value="compact">Compact</option>
+              </select>
+            </label>
           </div>
         </div>
       </div>
@@ -547,7 +583,7 @@ export default function CalendarPage() {
           return (
             <div key={idx} className={`border border-[#1b2344] rounded p-3 min-h-[160px] sm:min-h-[180px] md:min-h-[220px] ${monthClass}`} onClick={() => setSelectedDayKey(k)} onDragOver={(e) => e.preventDefault()} onDrop={(e) => onDropDay(e, d)}>
               <div className="text-xs text-slate-300/70 mb-1 flex items-center justify-between">
-                <span>{d.getDate()}</span>
+                <span className={`${fmtYmd(new Date())===k ? 'text-slate-200 font-semibold' : ''}`}>{d.getDate()}</span>
                 {selectedDayKey === k && <span className="text-[10px] text-slate-300/60">Agenda</span>}
               </div>
               {/* Class meetings */}
@@ -563,40 +599,68 @@ export default function CalendarPage() {
                   ))}
                 </ul>
               )}
+              {/* Finals (calendar-only) */}
+              {(finalsByDay[k] && finalsByDay[k].length > 0) && (
+                <ul className="space-y-1 mb-1">
+                  {finalsByDay[k].map((ev, idx) => (
+                    <li key={idx} className="text-[11px] rounded border border-amber-600/60 bg-[#0b1020] px-2 py-1.5" style={{ borderLeft: '3px solid #f59e0b' }}>
+                      <div className="min-w-0 flex flex-wrap items-center gap-2">
+                        <span className="text-slate-200">{ev.title}</span>
+                        <span className="text-slate-300/70">· {ev.time} CT</span>
+                      </div>
+                    </li>
+                  ))}
+                </ul>
+              )}
               {/* Tasks */}
               {list.length === 0 ? (
                 <div className="text-[11px] text-slate-300/50">—</div>
               ) : (
                 <ul className="space-y-1">
-                  {list.map(t => (
-                    <li key={t.id} className="text-[11px] flex items-start gap-1 cursor-pointer" draggable onDragStart={(e) => onDragStart(e, t)} onClick={(e) => { e.stopPropagation(); openEdit(t); }}>
-                      <div className="min-w-0">
-                        <div className="flex flex-wrap items-center gap-2 break-words leading-tight">
-                          {t.course ? (
-                            <span
-                              className={`inline-block w-2 h-2 rounded-full ${courseColors[(t.course || '').toLowerCase()] ? '' : courseColorClass(t.course, 'bg')}`}
-                              style={courseColors[(t.course || '').toLowerCase()] ? { backgroundColor: courseColors[(t.course || '').toLowerCase()] as any } : undefined}
-                            ></span>
-                          ) : null}
-                          <span className="text-slate-200">{t.title}</span>
-                          {((t as any).startTime || (t as any).endTime) ? (
-                            <span className="text-slate-300/60">
-                              · {((t as any).startTime ? fmt12((t as any).startTime as any) : '')}{((t as any).startTime && (t as any).endTime) ? '–' : ''}{((t as any).endTime ? fmt12((t as any).endTime as any) : '')}
-                            </span>
-                          ) : null}
-                          {t.course ? <span className="text-slate-300/60"> · {t.course}</span> : null}
-                          {typeof t.estimatedMinutes === 'number' ? <span className="text-slate-300/60"> · {t.estimatedMinutes}m</span> : null}
-                        </div>
-                        {(t.tags && t.tags.length > 0) && (
-                          <div className="flex flex-wrap gap-1 mt-0.5">
-                            {t.tags.map((tg, i) => (
-                              <span key={i} className="text-[10px] px-1 py-0.5 rounded border border-[#1b2344]">{tg}</span>
-                            ))}
-                          </div>
+                  {(() => {
+                    const maxVisible = density === 'compact' ? 6 : 4;
+                    const isExpanded = expandedDays.has(k);
+                    const visible = isExpanded ? list : list.slice(0, maxVisible);
+                    const hidden = list.length - visible.length;
+                    return (
+                      <>
+                        {visible.map(t => {
+                          const key = (t.course || '').toLowerCase();
+                          const stripe = courseColors[key] || fallbackCourseHsl(t.course || '');
+                          return (
+                            <li key={t.id} className="text-[11px] cursor-pointer rounded border border-[#2a3b6e] bg-[#0b1020] px-2 py-1.5" style={{ borderLeft: `3px solid ${stripe}` }} draggable onDragStart={(e) => onDragStart(e, t)} onClick={(e) => { e.stopPropagation(); openEdit(t); }}>
+                              <div className="min-w-0">
+                                <div className="flex flex-wrap items-center gap-2 break-words leading-tight">
+                                  <span className="text-slate-200">{t.title}</span>
+                                  {((t as any).startTime || (t as any).endTime) ? (
+                                    <span className="text-slate-300/70">
+                                      {((t as any).startTime ? fmt12((t as any).startTime as any) : '')}{((t as any).startTime && (t as any).endTime) ? '–' : ''}{((t as any).endTime ? fmt12((t as any).endTime as any) : '')}
+                                    </span>
+                                  ) : null}
+                                  {t.course ? <span className="text-slate-300/70">· {t.course}</span> : null}
+                                  {typeof t.estimatedMinutes === 'number' ? <span className="text-slate-300/70">· {t.estimatedMinutes}m</span> : null}
+                                </div>
+                                {(t.tags && t.tags.length > 0) && (
+                                  <div className="flex flex-wrap gap-1 mt-0.5">
+                                    {t.tags.map((tg, i) => (
+                                      <span key={i} className="text-[10px] px-1 py-0.5 rounded border border-[#2a3b6e]">{tg}</span>
+                                    ))}
+                                  </div>
+                                )}
+                              </div>
+                            </li>
+                          );
+                        })}
+                        {hidden > 0 && (
+                          <li>
+                            <button className="text-[11px] underline" onClick={(e) => { e.stopPropagation(); setExpandedDays(prev => { const n = new Set(prev); if (n.has(k)) n.delete(k); else n.add(k); return n; }); }}>
+                              {isExpanded ? 'Show less' : `+${hidden} more`}
+                            </button>
+                          </li>
                         )}
-                      </div>
-                    </li>
-                  ))}
+                      </>
+                    );
+                  })()}
                 </ul>
               )}
             </div>

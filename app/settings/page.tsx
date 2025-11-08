@@ -42,6 +42,29 @@ export default function SettingsPage() {
       const mx = window.localStorage.getItem('nudgesMaxPerWeek'); if (mx) setMaxNudgesPerWeek(String(Math.max(0, parseInt(mx,10)||3)));
     } catch {}
   }, []);
+  // Server settings load (override local if present)
+  useEffect(() => {
+    (async () => {
+      try {
+        const r = await fetch('/api/settings', { cache: 'no-store' });
+        if (!r.ok) return;
+        const j = await r.json();
+        const s = (j?.settings || {}) as Record<string, any>;
+        if (typeof s.remindersEnabled === 'boolean') setRemindersEnabled(!!s.remindersEnabled);
+        if (typeof s.remindersLeadHours !== 'undefined') setRemindersLeadHours(String(Math.max(1, parseFloat(String(s.remindersLeadHours)) || 24)));
+        if (typeof s.minutesPerPage !== 'undefined') setMinutesPerPage(String(Math.max(1, Math.round(parseFloat(String(s.minutesPerPage)) || 3))));
+        if (typeof s.defaultFocus !== 'undefined') setDefaultFocus(String(Math.min(10, Math.max(1, Math.round(parseFloat(String(s.defaultFocus)) || 5)))));
+        if (typeof s.icsToken === 'string') setIcsToken(s.icsToken);
+        if (typeof s.nudgesEnabled === 'boolean') setNudgesEnabled(!!s.nudgesEnabled);
+        if (typeof s.nudgesReminderTime === 'string' && /^\d{2}:\d{2}$/.test(s.nudgesReminderTime)) setDailyReminderTime(s.nudgesReminderTime);
+        if (typeof s.nudgesQuietStart === 'string' && /^\d{2}:\d{2}$/.test(s.nudgesQuietStart)) setQuietStart(s.nudgesQuietStart);
+        if (typeof s.nudgesQuietEnd === 'string' && /^\d{2}:\d{2}$/.test(s.nudgesQuietEnd)) setQuietEnd(s.nudgesQuietEnd);
+        if (typeof s.nudgesMaxPerWeek !== 'undefined') setMaxNudgesPerWeek(String(Math.max(0, parseInt(String(s.nudgesMaxPerWeek),10)||3)));
+        if (typeof s.internshipColor === 'string') setInternshipColor(s.internshipColor);
+        if (typeof s.sportsLawReviewColor === 'string') setSportsLawReviewColor(s.sportsLawReviewColor);
+      } catch {}
+    })();
+  }, []);
 
   useEffect(() => {
     (async () => {
@@ -65,25 +88,30 @@ export default function SettingsPage() {
     if (typeof window === "undefined") return;
     window.localStorage.setItem("remindersEnabled", remindersEnabled ? "true" : "false");
   }, [remindersEnabled]);
+  useEffect(() => { try { void fetch('/api/settings', { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ remindersEnabled }) }); } catch {} }, [remindersEnabled]);
   useEffect(() => {
     if (typeof window === "undefined") return;
     const n = Math.max(1, parseFloat(remindersLeadHours || "24") || 24);
     window.localStorage.setItem("remindersLeadHours", String(n));
   }, [remindersLeadHours]);
+  useEffect(() => { const n = Math.max(1, parseFloat(remindersLeadHours || '24') || 24); try { void fetch('/api/settings', { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ remindersLeadHours: n }) }); } catch {} }, [remindersLeadHours]);
   useEffect(() => {
     if (typeof window === "undefined") return;
     const n = Math.max(1, Math.round(parseFloat(minutesPerPage || "3") || 3));
     window.localStorage.setItem("minutesPerPage", String(n));
   }, [minutesPerPage]);
+  useEffect(() => { const n = Math.max(1, Math.round(parseFloat(minutesPerPage || '3') || 3)); try { void fetch('/api/settings', { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ minutesPerPage: n }) }); } catch {} }, [minutesPerPage]);
   useEffect(() => {
     if (typeof window === "undefined") return;
     const n = Math.min(10, Math.max(1, Math.round(parseFloat(defaultFocus || "5") || 5)));
     window.localStorage.setItem("defaultFocus", String(n));
   }, [defaultFocus]);
+  useEffect(() => { const n = Math.min(10, Math.max(1, Math.round(parseFloat(defaultFocus || '5') || 5))); try { void fetch('/api/settings', { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ defaultFocus: n }) }); } catch {} }, [defaultFocus]);
   useEffect(() => {
     if (typeof window === "undefined") return;
     window.localStorage.setItem("icsToken", icsToken || "");
   }, [icsToken]);
+  useEffect(() => { try { void fetch('/api/settings', { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ icsToken: icsToken || '' }) }); } catch {} }, [icsToken]);
   async function saveCourseColor(id: string, color: string) {
     try { setSavingId(id); const r = await fetch(`/api/courses/${id}`, { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ color }) }); if (r.ok) { const d = await r.json(); const updated = d?.course; if (updated) { setCourses(prev => prev.map((c:any)=>c.id===id?updated:c)); } } } finally { setSavingId(null); }
   }
@@ -92,9 +120,12 @@ export default function SettingsPage() {
     try { setSavingId(id); const r = await fetch(`/api/courses/${id}`, { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ color: null }) }); if (r.ok) { const d = await r.json(); const updated = d?.course; if (updated) { setCourses(prev => prev.map((c:any)=>c.id===id?updated:c)); setLocalColors(prev => ({ ...prev, [id]: fallbackHex(title) })); } } } finally { setSavingId(null); }
   }
   function saveInternColor() { try { if (typeof window !== 'undefined') window.localStorage.setItem('internshipColor', internshipColor || fallbackHex('Internship')); } catch {} }
-  function resetInternColor() { const def = fallbackHex('Internship'); setInternshipColor(def); try { if (typeof window !== 'undefined') window.localStorage.removeItem('internshipColor'); } catch {} }
-  function saveSlrColor() { try { if (typeof window !== 'undefined') window.localStorage.setItem('sportsLawReviewColor', sportsLawReviewColor || fallbackHex('Sports Law Review')); } catch {} }
-  function resetSlrColor() { const def = fallbackHex('Sports Law Review'); setSportsLawReviewColor(def); try { if (typeof window !== 'undefined') window.localStorage.removeItem('sportsLawReviewColor'); } catch {} }
+  function resetInternColor() { const def = fallbackHex('Internship'); setInternshipColor(def); try { if (typeof window !== 'undefined') window.localStorage.removeItem('internshipColor'); } catch {} try { void fetch('/api/settings', { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ internshipColor: null }) }); } catch {} }
+  function saveSlrColor() { try { if (typeof window !== 'undefined') window.localStorage.setItem('sportsLawReviewColor', sportsLawReviewColor || fallbackHex('Sports Law Review')); } catch {} try { void fetch('/api/settings', { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ sportsLawReviewColor: sportsLawReviewColor || fallbackHex('Sports Law Review') }) }); } catch {} }
+  function resetSlrColor() { const def = fallbackHex('Sports Law Review'); setSportsLawReviewColor(def); try { if (typeof window !== 'undefined') window.localStorage.removeItem('sportsLawReviewColor'); } catch {} try { void fetch('/api/settings', { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ sportsLawReviewColor: null }) }); } catch {} }
+  // Persist internship color to server on change via Save button
+  useEffect(() => { /* mirror to server only when value is changed via color input + Save */ }, [internshipColor]);
+  function saveInternColorServer() { try { if (typeof window !== 'undefined') window.localStorage.setItem('internshipColor', internshipColor || fallbackHex('Internship')); } catch {} try { void fetch('/api/settings', { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ internshipColor: internshipColor || fallbackHex('Internship') }) }); } catch {} }
   // Save Nudges
   useEffect(() => { if (typeof window!== 'undefined') window.localStorage.setItem('nudgesEnabled', nudgesEnabled ? 'true':'false'); }, [nudgesEnabled]);
   useEffect(() => { if (typeof window!== 'undefined' && /^(\d{2}):(\d{2})$/.test(dailyReminderTime||'')) window.localStorage.setItem('nudgesReminderTime', dailyReminderTime); }, [dailyReminderTime]);
@@ -179,7 +210,7 @@ export default function SettingsPage() {
                 <span className="inline-block w-3 h-3 rounded-full" style={{ backgroundColor: (internshipColor && /^#?[0-9a-fA-F]{6}$/.test(internshipColor) ? (internshipColor.startsWith('#')? internshipColor : `#${internshipColor}`) : fallbackHex('Internship')) }} />
                 <div className="flex-1 truncate text-sm">Internship</div>
                 <input type="color" value={/^#?[0-9a-fA-F]{6}$/.test(internshipColor||'') ? (internshipColor.startsWith('#')? internshipColor : `#${internshipColor}`) : fallbackHex('Internship')} onChange={e=>setInternshipColor(e.target.value)} className="h-7 w-12 bg-[#0b1020] border border-[#1b2344] rounded" />
-                <button onClick={saveInternColor} className="px-2 py-1 rounded border border-[#1b2344] text-xs">Save</button>
+                <button onClick={saveInternColorServer} className="px-2 py-1 rounded border border-[#1b2344] text-xs">Save</button>
                 <button onClick={resetInternColor} className="px-2 py-1 rounded border border-[#1b2344] text-xs">Reset</button>
               </div>
               <div className="flex items-center gap-3">

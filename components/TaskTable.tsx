@@ -134,13 +134,54 @@ export default function TaskTable() {
     refreshSessions();
   }, []);
 
+  // Mirror core settings from server to local for cross-device consistency
+  useEffect(() => {
+    (async () => {
+      try {
+        const r = await fetch('/api/settings?keys=minutesPerPage,internshipColor,sportsLawReviewColor,icsToken', { cache: 'no-store' });
+        if (!r.ok) return;
+        const j = await r.json();
+        const s = (j?.settings || {}) as Record<string, any>;
+        try {
+          if (typeof s.minutesPerPage !== 'undefined' && typeof window !== 'undefined') {
+            const n = Math.max(1, Math.round(parseFloat(String(s.minutesPerPage)) || 3));
+            window.localStorage.setItem('minutesPerPage', String(n));
+          }
+          if (typeof s.internshipColor === 'string' && typeof window !== 'undefined') window.localStorage.setItem('internshipColor', s.internshipColor);
+          if (typeof s.sportsLawReviewColor === 'string' && typeof window !== 'undefined') window.localStorage.setItem('sportsLawReviewColor', s.sportsLawReviewColor);
+          if (typeof s.icsToken === 'string') setIcsToken(s.icsToken);
+        } catch {}
+      } catch {}
+    })();
+  }, []);
+
   useEffect(() => {
     if (typeof window === 'undefined') return;
     try { const raw = window.localStorage.getItem('taskTimersV1') || '{}'; const obj = JSON.parse(raw) || {}; setTimers(obj); } catch {}
   }, []);
+  // Load task timers from server if available
+  useEffect(() => {
+    (async () => {
+      try {
+        const r = await fetch('/api/settings?keys=taskTimersV1', { cache: 'no-store' });
+        if (!r.ok) return;
+        const j = await r.json();
+        const s = (j?.settings || {}) as Record<string, any>;
+        const tt = s.taskTimersV1;
+        if (tt && typeof tt === 'object') setTimers(tt as any);
+      } catch {}
+    })();
+  }, []);
   useEffect(() => {
     if (typeof window === 'undefined') return;
     try { window.localStorage.setItem('taskTimersV1', JSON.stringify(timers)); } catch {}
+  }, [timers]);
+  // Debounced persist of timers to server
+  useEffect(() => {
+    const id = setTimeout(() => {
+      try { void fetch('/api/settings', { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ taskTimersV1: timers }) }); } catch {}
+    }, 1000);
+    return () => clearTimeout(id);
   }, [timers]);
   useEffect(() => {
     const id = setInterval(() => setTimerTick(x => x + 1), 1000);

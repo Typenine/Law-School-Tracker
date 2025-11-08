@@ -399,6 +399,25 @@ export async function ensureSchema() {
       ALTER TABLE courses ADD COLUMN IF NOT EXISTS override_enabled boolean;
       ALTER TABLE courses ADD COLUMN IF NOT EXISTS override_mpp double precision;
       ALTER TABLE courses ADD COLUMN IF NOT EXISTS default_activity text;
+      -- Settings key/value store (single-user)
+      CREATE TABLE IF NOT EXISTS settings (
+        key text PRIMARY KEY,
+        value jsonb NOT NULL
+      );
+      -- Week Plan schedule blocks
+      CREATE TABLE IF NOT EXISTS schedule_blocks (
+        id uuid PRIMARY KEY,
+        task_id uuid REFERENCES tasks(id) ON DELETE SET NULL,
+        day date NOT NULL,
+        planned_minutes integer NOT NULL,
+        guessed boolean,
+        title text NOT NULL,
+        course text,
+        pages integer,
+        priority integer,
+        catchup boolean,
+        created_at timestamptz NOT NULL DEFAULT now()
+      );
       CREATE TABLE IF NOT EXISTS sessions (
         id uuid PRIMARY KEY,
         task_id uuid REFERENCES tasks(id) ON DELETE SET NULL,
@@ -426,7 +445,9 @@ function uuid() {
   return (globalThis as any).crypto?.randomUUID?.() || nodeRandomUUID();
 }
 
-async function readJson(): Promise<{ tasks: Task[]; sessions: StudySession[]; courses: Course[] }> {
+type JsonStore = { tasks: Task[]; sessions: StudySession[]; courses: Course[]; scheduleBlocks?: Array<{ id: string; taskId: string; day: string; plannedMinutes: number; guessed?: boolean; title: string; course: string; pages?: number | null; priority?: number | null; catchup?: boolean }>; settings?: Record<string, any> };
+
+async function readJson(): Promise<JsonStore> {
   // On Vercel without DB, we REQUIRE Blob store. No local fallback.
   if (IS_VERCEL && !HAS_DB) {
     if (!HAS_BLOB) {
@@ -445,6 +466,8 @@ async function readJson(): Promise<{ tasks: Task[]; sessions: StudySession[]; co
         if (!('courses' in data)) data.courses = [];
         if (!('tasks' in data)) data.tasks = [];
         if (!('sessions' in data)) data.sessions = [];
+        if (!('scheduleBlocks' in data)) data.scheduleBlocks = [];
+        if (!('settings' in data)) data.settings = {};
         return data;
       }
       // Next, any path ending with '/db.json'
@@ -471,10 +494,12 @@ async function readJson(): Promise<{ tasks: Task[]; sessions: StudySession[]; co
         if (!('courses' in data)) data.courses = [];
         if (!('tasks' in data)) data.tasks = [];
         if (!('sessions' in data)) data.sessions = [];
+        if (!('scheduleBlocks' in data)) data.scheduleBlocks = [];
+        if (!('settings' in data)) data.settings = {};
         return data;
       }
       // Initialize if no existing blob
-      const empty = { tasks: [], sessions: [], courses: [] };
+      const empty: JsonStore = { tasks: [], sessions: [], courses: [], scheduleBlocks: [], settings: {} };
       await writeJson(empty);
       return empty;
     } catch (err) {
@@ -491,10 +516,12 @@ async function readJson(): Promise<{ tasks: Task[]; sessions: StudySession[]; co
     if (!('courses' in data)) data.courses = [];
     if (!('tasks' in data)) data.tasks = [];
     if (!('sessions' in data)) data.sessions = [];
-    return data;
+    if (!('scheduleBlocks' in data)) data.scheduleBlocks = [];
+    if (!('settings' in data)) data.settings = {};
+    return data as JsonStore;
   } catch (e: any) {
     if (e.code === 'ENOENT') {
-      const empty = { tasks: [], sessions: [], courses: [] };
+      const empty: JsonStore = { tasks: [], sessions: [], courses: [], scheduleBlocks: [], settings: {} };
       await fs.mkdir(path.dirname(DATA_FILE), { recursive: true });
       await fs.writeFile(DATA_FILE, JSON.stringify(empty, null, 2), 'utf8');
       return empty;
@@ -503,7 +530,7 @@ async function readJson(): Promise<{ tasks: Task[]; sessions: StudySession[]; co
   }
 }
 
-async function writeJson(data: { tasks: Task[]; sessions: StudySession[]; courses: Course[] }) {
+async function writeJson(data: JsonStore) {
   // On Vercel without DB, we REQUIRE Blob store. No local fallback.
   if (IS_VERCEL && !HAS_DB) {
     if (!HAS_BLOB) {
@@ -511,7 +538,7 @@ async function writeJson(data: { tasks: Task[]; sessions: StudySession[]; course
     }
     try {
       const rev = Date.now();
-      const payload = { ...data, __rev: rev } as any;
+      const payload = { tasks: data.tasks || [], sessions: data.sessions || [], courses: data.courses || [], scheduleBlocks: data.scheduleBlocks || [], settings: data.settings || {}, __rev: rev } as any;
       await put('db.json', JSON.stringify(payload, null, 2), {
         access: 'public',
         contentType: 'application/json',
@@ -551,8 +578,81 @@ async function writeJson(data: { tasks: Task[]; sessions: StudySession[]; course
   }
   // Local file storage (development or fallback)
   await fs.mkdir(path.dirname(DATA_FILE), { recursive: true });
-  const payload = { ...data, __rev: Date.now() } as any;
+  const payload = { tasks: data.tasks || [], sessions: data.sessions || [], courses: data.courses || [], scheduleBlocks: data.scheduleBlocks || [], settings: data.settings || {}, __rev: Date.now() } as any;
   await fs.writeFile(DATA_FILE, JSON.stringify(payload, null, 2), 'utf8');
+}
+
+// Settings helpers
+export async function getSettings(keys?: string[]): Promise<Record<string, any>> {
+  if (DB_URL) {
+    const p = getPool();
+    if (keys && keys.length) {
+      const res = await p.query(`SELECT key, value FROM settings WHERE key = ANY($1::text[])`, [keys]);
+      const out: Record<string, any> = {};
+      for (const row of res.rows as any[]) out[row.key] = row.value;
+      return out;
+    }
+    const res = await p.query(`SELECT key, value FROM settings`);
+    const out: Record<string, any> = {};
+    for (const row of res.rows as any[]) out[row.key] = row.value;
+    return out;
+  }
+  const db = await readJson();
+  return db.settings || {};
+}
+
+export async function patchSettings(patch: Record<string, any>): Promise<void> {
+  if (!patch || typeof patch !== 'object') return;
+  if (DB_URL) {
+    const p = getPool();
+    for (const [k, v] of Object.entries(patch)) {
+      await p.query(`INSERT INTO settings(key, value) VALUES ($1,$2::jsonb)
+                     ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value`, [k, JSON.stringify(v)]);
+    }
+    return;
+  }
+  const db = await readJson();
+  db.settings = { ...(db.settings || {}), ...patch };
+  await writeJson(db);
+}
+
+// Week Plan schedule blocks helpers
+export type ScheduleBlockRow = { id: string; taskId: string; day: string; plannedMinutes: number; guessed?: boolean; title: string; course: string; pages?: number | null; priority?: number | null; catchup?: boolean };
+
+export async function listScheduleBlocks(): Promise<ScheduleBlockRow[]> {
+  if (DB_URL) {
+    const p = getPool();
+    const res = await p.query(`SELECT id, task_id, day, planned_minutes, guessed, title, course, pages, priority, catchup FROM schedule_blocks ORDER BY day ASC, title ASC`);
+    return (res.rows as any[]).map(r => ({ id: r.id, taskId: r.task_id, day: (r.day instanceof Date ? (r.day as Date).toISOString().slice(0,10) : r.day), plannedMinutes: r.planned_minutes, guessed: r.guessed ?? undefined, title: r.title, course: r.course ?? '', pages: r.pages ?? null, priority: r.priority ?? null, catchup: r.catchup ?? undefined }));
+  }
+  const db = await readJson();
+  return (db.scheduleBlocks || []) as ScheduleBlockRow[];
+}
+
+export async function replaceAllScheduleBlocks(blocks: ScheduleBlockRow[]): Promise<void> {
+  if (DB_URL) {
+    const p = getPool();
+    await p.query('BEGIN');
+    try {
+      await p.query('DELETE FROM schedule_blocks');
+      for (const b of (blocks || [])) {
+        await p.query(
+          `INSERT INTO schedule_blocks (id, task_id, day, planned_minutes, guessed, title, course, pages, priority, catchup, created_at)
+           VALUES ($1,$2,$3::date,$4,$5,$6,$7,$8,$9,$10, now())
+           ON CONFLICT (id) DO UPDATE SET task_id=EXCLUDED.task_id, day=EXCLUDED.day, planned_minutes=EXCLUDED.planned_minutes, guessed=EXCLUDED.guessed, title=EXCLUDED.title, course=EXCLUDED.course, pages=EXCLUDED.pages, priority=EXCLUDED.priority, catchup=EXCLUDED.catchup`,
+          [b.id, b.taskId || null, b.day, b.plannedMinutes, b.guessed ?? null, b.title, b.course || null, b.pages ?? null, b.priority ?? null, b.catchup ?? null]
+        );
+      }
+      await p.query('COMMIT');
+    } catch (e) {
+      await p.query('ROLLBACK');
+      throw e;
+    }
+    return;
+  }
+  const db = await readJson();
+  db.scheduleBlocks = (blocks || []).slice();
+  await writeJson(db);
 }
 
 // Tasks
