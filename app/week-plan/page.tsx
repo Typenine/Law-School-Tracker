@@ -63,6 +63,22 @@ function ymd(d: Date) { return `${d.getFullYear()}-${String(d.getMonth()+1).padS
 function dayLabel(d: Date) { return d.toLocaleDateString(undefined, { weekday: 'short', month: 'short', day: 'numeric' }); }
 function endOfDayIso(ymdStr: string) { const [y,m,da]=ymdStr.split('-').map(n=>parseInt(n,10)); const x=new Date(y,(m as number)-1,da,23,59,59,999); return x.toISOString(); }
 function minutesPerPage(): number { if (typeof window==='undefined') return 3; const s=window.localStorage.getItem('minutesPerPage'); const n=s?parseFloat(s):NaN; return !isNaN(n)&&n>0?n:3; }
+function normHHMM(s?: string | null): string | null {
+  const raw = (s||'').trim().toLowerCase(); if (!raw) return null;
+  const m = /^(\d{1,2})(?::?(\d{2}))?\s*([ap]m)?$/.exec(raw);
+  if (!m) return null; let hh = parseInt(m[1],10); const mm = Math.min(59, Math.max(0, parseInt(m[2]||'0',10)));
+  const ap = (m[3]||'').toLowerCase(); if (ap) { if (hh === 12) hh = 0; if (ap==='pm') hh += 12; }
+  if (hh<0||hh>23) return null; return `${String(hh).padStart(2,'0')}:${String(mm).padStart(2,'0')}`;
+}
+function fmt12Input(s?: string | null): string {
+  const n = normHHMM(s || '');
+  if (!n) return (s || '');
+  const [hStr, mStr] = n.split(':');
+  let h = parseInt(hStr, 10);
+  const ap = h >= 12 ? 'PM' : 'AM';
+  let h12 = h % 12; if (h12 === 0) h12 = 12;
+  return `${h12}:${mStr} ${ap}`;
+}
 function minutesToHM(min: number): string { const n = Math.max(0, Math.round(Number(min)||0)); const h = Math.floor(n/60); const m = n % 60; return `${h}:${String(m).padStart(2,'0')}`; }
 
 // Learned MPP support (local-only): courseMppMap in localStorage
@@ -147,8 +163,8 @@ export default function WeekPlanPage() {
   const [twoWeeksOnly, setTwoWeeksOnly] = useState<boolean>(false);
   const [undoSnapshot, setUndoSnapshot] = useState<ScheduledBlock[] | null>(null);
   const [showCatchup, setShowCatchup] = useState(false);
-  const [availStartHHMM, setAvailStartHHMM] = useState<string>('');
-  const [availEndHHMM, setAvailEndHHMM] = useState<string>('');
+  const [availStartByDow, setAvailStartByDow] = useState<Record<number, string>>({ 0:'',1:'',2:'',3:'',4:'',5:'',6:'' });
+  const [availEndByDow, setAvailEndByDow] = useState<Record<number, string>>({ 0:'',1:'',2:'',3:'',4:'',5:'',6:'' });
   const [catchupPreview, setCatchupPreview] = useState<{
     days: Array<{ day: string; total: number; usedBefore: number; usedAfter: number; items: Array<{ taskId: string; title: string; course: string; minutes: number; guessed: boolean }> }>;
     unschedulable: Array<{ taskId: string; title: string; remaining: number; dueYmd: string }>;
@@ -159,7 +175,20 @@ export default function WeekPlanPage() {
     setAvailability(loadAvailability());
     setBlocks(loadSchedule());
     setBacklog(loadBacklog());
-    try { if (typeof window!=='undefined') { const s=window.localStorage.getItem(LS_AVAIL_START)||''; const e=window.localStorage.getItem(LS_AVAIL_END)||''; if (s) setAvailStartHHMM(s); if (e) setAvailEndHHMM(e); } } catch {}
+    try {
+      if (typeof window!=='undefined') {
+        const s = window.localStorage.getItem(LS_AVAIL_START)||'';
+        const e = window.localStorage.getItem(LS_AVAIL_END)||'';
+        let startObj: Record<number,string> | null = null;
+        let endObj: Record<number,string> | null = null;
+        try { const js = JSON.parse(s); if (js && typeof js==='object') startObj = js; } catch {}
+        try { const je = JSON.parse(e); if (je && typeof je==='object') endObj = je; } catch {}
+        if (!startObj && s) startObj = {0:s,1:s,2:s,3:s,4:s,5:s,6:s};
+        if (!endObj && e) endObj = {0:e,1:e,2:e,3:e,4:e,5:e,6:e};
+        if (startObj) setAvailStartByDow(startObj);
+        if (endObj) setAvailEndByDow(endObj);
+      }
+    } catch {}
     let canceled = false;
     (async () => {
       try {
@@ -182,8 +211,12 @@ export default function WeekPlanPage() {
             const [y,m,da] = wk.split('-').map(x=>parseInt(x,10));
             setWeekStart(mondayOf(new Date(y,(m as number)-1,da)));
           }
-          if (typeof settings.availabilityStartHHMM === 'string') setAvailStartHHMM(settings.availabilityStartHHMM);
-          if (typeof settings.availabilityEndHHMM === 'string') setAvailEndHHMM(settings.availabilityEndHHMM);
+          const sStart: any = (settings as any).availabilityStartHHMM;
+          const sEnd: any = (settings as any).availabilityEndHHMM;
+          if (sStart && typeof sStart === 'object') setAvailStartByDow(sStart as Record<number,string>);
+          else if (typeof sStart === 'string') setAvailStartByDow({0:sStart,1:sStart,2:sStart,3:sStart,4:sStart,5:sStart,6:sStart});
+          if (sEnd && typeof sEnd === 'object') setAvailEndByDow(sEnd as Record<number,string>);
+          else if (typeof sEnd === 'string') setAvailEndByDow({0:sEnd,1:sEnd,2:sEnd,3:sEnd,4:sEnd,5:sEnd,6:sEnd});
           // Mirror virtual course colors to localStorage so colorForCourse picks them up on all pages
           try {
             if (typeof window !== 'undefined') {
@@ -220,8 +253,8 @@ export default function WeekPlanPage() {
   useEffect(() => { try { if (typeof window !== 'undefined') window.localStorage.setItem(LS_WEEK_START, ymd(weekStart)); } catch {} try { void fetch('/api/settings', { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ weekPlanWeekStartYmd: ymd(weekStart) }) }); } catch {} }, [weekStart]);
   useEffect(() => { try { void fetch('/api/settings', { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ availabilityTemplateV1: availability }) }); } catch {} }, [availability]);
   useEffect(() => { try { void fetch('/api/settings', { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ weeklyGoalsV1: goals }) }); } catch {} }, [goals]);
-  useEffect(() => { try { if (typeof window!=='undefined') window.localStorage.setItem(LS_AVAIL_START, availStartHHMM||''); void fetch('/api/settings', { method:'PATCH', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ availabilityStartHHMM: availStartHHMM||null }) }); } catch {} }, [availStartHHMM]);
-  useEffect(() => { try { if (typeof window!=='undefined') window.localStorage.setItem(LS_AVAIL_END, availEndHHMM||''); void fetch('/api/settings', { method:'PATCH', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ availabilityEndHHMM: availEndHHMM||null }) }); } catch {} }, [availEndHHMM]);
+  useEffect(() => { try { if (typeof window!=='undefined') window.localStorage.setItem(LS_AVAIL_START, JSON.stringify(availStartByDow)); void fetch('/api/settings', { method:'PATCH', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ availabilityStartHHMM: availStartByDow }) }); } catch {} }, [availStartByDow]);
+  useEffect(() => { try { if (typeof window!=='undefined') window.localStorage.setItem(LS_AVAIL_END, JSON.stringify(availEndByDow)); void fetch('/api/settings', { method:'PATCH', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ availabilityEndHHMM: availEndByDow }) }); } catch {} }, [availEndByDow]);
 
   // Fetch tasks for Catch-Up
   useEffect(() => {
@@ -328,20 +361,20 @@ export default function WeekPlanPage() {
 
   const effectiveCapByKey = useMemo(() => {
     const m: Record<string, number> = {};
-    const s = normHHMM(availStartHHMM); const e = normHHMM(availEndHHMM);
-    const sMin = toMin(s); const eMin = toMin(e);
-    const winStart = sMin!=null ? sMin : 0; const winEnd = eMin!=null ? eMin : 1440;
-    const baseLen = Math.max(0, winEnd - winStart);
     for (const d of days) {
       const k = ymd(d);
       const req = availability[d.getDay()] || 0;
+      const s = normHHMM(availStartByDow[d.getDay()]||''); const e = normHHMM(availEndByDow[d.getDay()]||'');
+      const sMin = toMin(s); const eMin = toMin(e);
+      const winStart = sMin!=null ? sMin : 0; const winEnd = eMin!=null ? eMin : 1440;
+      const baseLen = Math.max(0, winEnd - winStart);
       let busyOverlap = 0;
       for (const ev of (busyByDay.items[k] || [])) busyOverlap += overlap(winStart, winEnd, (ev as any).sMin ?? null, (ev as any).eMin ?? null);
       const windowCap = Math.max(0, baseLen - busyOverlap);
       m[k] = Math.min(req, windowCap);
     }
     return m;
-  }, [days, availability, availStartHHMM, availEndHHMM, busyByDay]);
+  }, [days, availability, availStartByDow, availEndByDow, busyByDay]);
 
   function dayHasConflict(k: string, dow: number): boolean {
     if (!showConflicts) return false;
@@ -372,8 +405,7 @@ export default function WeekPlanPage() {
     for (let i=1;i<=tryDays;i++) {
       const d = new Date(base); d.setDate(d.getDate()+i);
       const k = ymd(d); const dow = d.getDay();
-      const s = normHHMM(availStartHHMM); const e = normHHMM(availEndHHMM);
-      const sMin = toMin(s); const eMin = toMin(e);
+      const sMin = toMin(normHHMM(availStartByDow[dow]||'')); const eMin = toMin(normHHMM(availEndByDow[dow]||''));
       const winStart = sMin!=null ? sMin : 0; const winEnd = eMin!=null ? eMin : 1440; const baseLen = Math.max(0, winEnd - winStart);
       let over = 0; for (const ev of (busyByDay.items[k] || [])) over += overlap(winStart, winEnd, (ev as any).sMin ?? null, (ev as any).eMin ?? null);
       const effCap = Math.min(availability[dow] || 0, Math.max(0, baseLen - over));
@@ -531,7 +563,8 @@ export default function WeekPlanPage() {
       const t = tasksTodo.find(x => x.id === tid);
       if (!t) return;
       const { minutes, guessed } = estimateMinutesForTask(t);
-      const block: ScheduledBlock = { id: uid(), taskId: t.id, day: ymd(d), plannedMinutes: minutes, guessed, title: t.title, course: displayCourseFor(t) || '', pages: null, priority: t.priority ?? null };
+      const p = (typeof (t as any).pagesRead==='number' && (t as any).pagesRead>0) ? (t as any).pagesRead : null;
+      const block: ScheduledBlock = { id: uid(), taskId: t.id, day: ymd(d), plannedMinutes: minutes, guessed, title: t.title, course: displayCourseFor(t) || '', pages: p, priority: t.priority ?? null };
       setBlocks(prev => [...prev, block]);
       return;
     }
@@ -547,7 +580,7 @@ export default function WeekPlanPage() {
     const keys = new Set(days.map(d => ymd(d)));
     const existing = blocks.filter(b => keys.has(b.day));
     const planned = new Map<string, number>(); for (const d of days) planned.set(ymd(d), existing.filter(b => b.day===ymd(d)).reduce((s,b)=>s+b.plannedMinutes,0));
-    const eff = (d: Date) => effectiveCapByKey[ymd(d)] ?? Math.min(availability[d.getDay()] ?? 0, (() => { const s=toMin(normHHMM(availStartHHMM))??0; const e=toMin(normHHMM(availEndHHMM))??1440; return Math.max(0,e-s); })());
+    const eff = (d: Date) => effectiveCapByKey[ymd(d)] ?? Math.min(availability[d.getDay()] ?? 0, (() => { const s=toMin(normHHMM(availStartByDow[d.getDay()]||''))??0; const e=toMin(normHHMM(availEndByDow[d.getDay()]||''))??1440; return Math.max(0,e-s); })());
     const unscheduled = unscheduledSorted.filter(t => !existing.some(b => b.taskId === t.id));
     const nextBlocks: ScheduledBlock[] = [];
     for (const t of unscheduled) {
@@ -555,25 +588,18 @@ export default function WeekPlanPage() {
       let placed = false;
       for (const d of days) {
         const k = ymd(d); const cap = eff(d); const cur = planned.get(k)!;
-        if (cur + minutes <= cap) { nextBlocks.push({ id: uid(), taskId: t.id, day: k, plannedMinutes: minutes, guessed, title: t.title, course: t.course || '', pages: null, priority: t.priority ?? null }); planned.set(k, cur + minutes); placed = true; break; }
+        if (cur + minutes <= cap) { nextBlocks.push({ id: uid(), taskId: t.id, day: k, plannedMinutes: minutes, guessed, title: t.title, course: t.course || '', pages: (typeof (t as any).pagesRead==='number' && (t as any).pagesRead>0)? (t as any).pagesRead : null, priority: t.priority ?? null }); planned.set(k, cur + minutes); placed = true; break; }
       }
       if (!placed) {
         let bestDay = days[0]; let bestRem = -Infinity;
         for (const d of days) { const k = ymd(d); const cap = eff(d); const cur = planned.get(k)!; const rem = cap - cur; if (rem > bestRem) { bestRem = rem; bestDay = d; } }
         const k = ymd(bestDay);
-        nextBlocks.push({ id: uid(), taskId: t.id, day: k, plannedMinutes: minutes, guessed, title: t.title, course: t.course || '', pages: null, priority: t.priority ?? null });
+        nextBlocks.push({ id: uid(), taskId: t.id, day: k, plannedMinutes: minutes, guessed, title: t.title, course: t.course || '', pages: (typeof (t as any).pagesRead==='number' && (t as any).pagesRead>0)? (t as any).pagesRead : null, priority: t.priority ?? null });
         planned.set(k, planned.get(k)! + minutes);
       }
     }
     if (nextBlocks.length) setBlocks(prev => [...prev, ...nextBlocks]);
   }
-function normHHMM(s?: string | null): string | null {
-  const raw = (s||'').trim().toLowerCase(); if (!raw) return null;
-  const m = /^(\d{1,2})(?::?(\d{2}))?\s*([ap]m)?$/.exec(raw);
-  if (!m) return null; let hh = parseInt(m[1],10); const mm = Math.min(59, Math.max(0, parseInt(m[2]||'0',10)));
-  const ap = (m[3]||'').toLowerCase(); if (ap) { if (hh === 12) hh = 0; if (ap==='pm') hh += 12; }
-  if (hh<0||hh>23) return null; return `${String(hh).padStart(2,'0')}:${String(mm).padStart(2,'0')}`;
-}
 function toMin(hhmm?: string | null): number | null { if (!hhmm) return null; const m=/^(\d{2}):(\d{2})$/.exec(hhmm); if(!m) return null; const h=parseInt(m[1],10), mi=parseInt(m[2],10); if(isNaN(h)||isNaN(mi)) return null; return h*60+mi; }
 function overlap(a0:number,a1:number,b0:number|null,b1:number|null): number { if(b0==null||b1==null) return 0; const s=Math.max(a0,b0), e=Math.min(a1,b1); return Math.max(0, e-s); }
   function parseAvailFlexible(input: string): number | null {
@@ -639,16 +665,6 @@ function overlap(a0:number,a1:number,b0:number|null,b1:number|null): number { if
         </div>
         <div className="space-y-2">
           <div className="text-xs text-slate-300/70">Availability (hours:minutes per weekday)</div>
-          <div className="grid grid-cols-2 md:grid-cols-4 gap-2">
-            <div className="rounded border border-[#1b2344] p-2">
-              <label className="block text-xs mb-1" htmlFor="avail-start">Start (Chicago)</label>
-              <input id="avail-start" type="text" placeholder="07:00" value={availStartHHMM} onChange={e=>setAvailStartHHMM(e.target.value)} onBlur={e=>{ const n = normHHMM(e.target.value); if (n!=null) setAvailStartHHMM(n); }} className="w-full bg-[#0b1020] border border-[#1b2344] rounded px-2 py-1 text-sm focus-visible:outline focus-visible:outline-2 focus-visible:outline-blue-500" />
-            </div>
-            <div className="rounded border border-[#1b2344] p-2">
-              <label className="block text-xs mb-1" htmlFor="avail-end">End (Chicago)</label>
-              <input id="avail-end" type="text" placeholder="17:00" value={availEndHHMM} onChange={e=>setAvailEndHHMM(e.target.value)} onBlur={e=>{ const n = normHHMM(e.target.value); if (n!=null) setAvailEndHHMM(n); }} className="w-full bg-[#0b1020] border border-[#1b2344] rounded px-2 py-1 text-sm focus-visible:outline focus-visible:outline-2 focus-visible:outline-blue-500" />
-            </div>
-          </div>
           <div className="grid grid-cols-2 sm:grid-cols-4 md:grid-cols-7 gap-2">
             {[1,2,3,4,5,6,0].map(dow => (
               <div key={dow} className="rounded border border-[#1b2344] p-2">
@@ -660,6 +676,16 @@ function overlap(a0:number,a1:number,b0:number|null,b1:number|null): number { if
                     <button aria-label="Minus 15 minutes" onClick={()=>bumpAvail(dow,-15)} className="px-2 py-1 rounded border border-[#1b2344] text-xs">-15</button>
                     <button aria-label="Plus 15 minutes" onClick={()=>bumpAvail(dow,15)} className="px-2 py-1 rounded border border-[#1b2344] text-xs">+15</button>
                     <button aria-label="Plus 30 minutes" onClick={()=>bumpAvail(dow,30)} className="px-2 py-1 rounded border border-[#1b2344] text-xs">+30</button>
+                  </div>
+                </div>
+                <div className="grid grid-cols-2 gap-2 mt-2">
+                  <div>
+                    <label className="block text-[10px] mb-1" htmlFor={`start-${dow}`}>Start</label>
+                    <input id={`start-${dow}`} type="text" placeholder="7:00 AM" value={fmt12Input(availStartByDow[dow]||'')} onChange={e=>setAvailStartByDow(prev=>({ ...prev, [dow]: e.target.value }))} onBlur={e=>setAvailStartByDow(prev=>({ ...prev, [dow]: fmt12Input(e.target.value) }))} className="w-full bg-[#0b1020] border border-[#1b2344] rounded px-2 py-1 text-sm focus-visible:outline focus-visible:outline-2 focus-visible:outline-blue-500" />
+                  </div>
+                  <div>
+                    <label className="block text-[10px] mb-1" htmlFor={`end-${dow}`}>End</label>
+                    <input id={`end-${dow}`} type="text" placeholder="5:00 PM" value={fmt12Input(availEndByDow[dow]||'')} onChange={e=>setAvailEndByDow(prev=>({ ...prev, [dow]: e.target.value }))} onBlur={e=>setAvailEndByDow(prev=>({ ...prev, [dow]: fmt12Input(e.target.value) }))} className="w-full bg-[#0b1020] border border-[#1b2344] rounded px-2 py-1 text-sm focus-visible:outline focus-visible:outline-2 focus-visible:outline-blue-500" />
                   </div>
                 </div>
               </div>
@@ -757,7 +783,7 @@ function overlap(a0:number,a1:number,b0:number|null,b1:number|null): number { if
                       <div className="flex-1 min-w-0">
                         <div className="text-slate-200 truncate">{b.course ? `${b.course}: ` : ''}{b.title}</div>
                         <div className="text-slate-300/70 flex items-center gap-2">
-                          <span>{b.plannedMinutes}m{b.guessed ? <span className="ml-1 inline-block px-1 rounded border border-amber-500 text-amber-400">guessed</span> : null}</span>
+                          <span>{b.plannedMinutes}m{b.guessed ? <span className="ml-1 inline-block px-1 rounded border border-amber-500 text-amber-400">guessed</span> : null}{typeof b.pages==='number' && b.pages>0 ? <span className="ml-2">· {b.pages}p</span> : null}</span>
                           {dayHasConflict(k, d.getDay()) && showConflicts && (
                             <span className="inline-flex items-center gap-1">
                               <span className="px-1 rounded border border-rose-600 text-rose-400" title={(busyByDay.items[k]||[]).map(x=>`${x.label}${x.time?` · ${x.time}`:''}`).join('\n')}>conflict</span>

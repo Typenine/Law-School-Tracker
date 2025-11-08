@@ -49,12 +49,7 @@ function estimateMinutes(it: BacklogItem): { minutes: number; guessed: boolean }
 }
 
 function chicagoYmd(d: Date): string {
-  const f = new Intl.DateTimeFormat('en-US', { timeZone: 'America/Chicago', year: 'numeric', month: '2-digit', day: '2-digit' });
-  const parts = f.formatToParts(d);
-  const y = parts.find(p=>p.type==='year')?.value || '0000';
-  const m = parts.find(p=>p.type==='month')?.value || '01';
-  const da = parts.find(p=>p.type==='day')?.value || '01';
-  return `${y}-${m}-${da}`;
+  return new Intl.DateTimeFormat('en-CA', { timeZone: 'America/Chicago', year: 'numeric', month: '2-digit', day: '2-digit' }).format(d);
 }
 function mondayOfChicago(d: Date): Date { const ymd = chicagoYmd(d); const [yy,mm,dd]=ymd.split('-').map(x=>parseInt(x,10)); const local = new Date(yy,(mm as number)-1,dd); const dow = local.getDay(); const delta = (dow + 1) % 7; local.setDate(local.getDate()-delta); return local; }
 function weekKeysChicago(d: Date): string[] { const monday = mondayOfChicago(d); return Array.from({length:7},(_,i)=>{const x=new Date(monday); x.setDate(x.getDate()+i); return chicagoYmd(x);}); }
