@@ -1,5 +1,9 @@
 "use client";
 import { useEffect, useState } from "react";
+function hueFromString(s: string): number { let h = 0; for (let i=0;i<s.length;i++) { h = (h * 31 + s.charCodeAt(i)) >>> 0; } return h % 360; }
+function fallbackCourseHsl(name?: string | null): string { const key=(name||'').toString().trim().toLowerCase(); if (!key) return 'hsl(215 16% 47%)'; const h=hueFromString(key); return `hsl(${h} 70% 55%)`; }
+function hslToHex(h: number, s: number, l: number): string { s/=100; l/=100; const c=(1-Math.abs(2*l-1))*s; const x=c*(1-Math.abs(((h/60)%2)-1)); const m=l-c/2; let r=0,g=0,b=0; if (0<=h&&h<60){r=c;g=x;b=0;} else if (60<=h&&h<120){r=x;g=c;b=0;} else if (120<=h&&h<180){r=0;g=c;b=x;} else if (180<=h&&h<240){r=0;g=x;b=c;} else if (240<=h&&h<300){r=x;g=0;b=c;} else {r=c;g=0;b=x;} const R=Math.round((r+m)*255); const G=Math.round((g+m)*255); const B=Math.round((b+m)*255); const toHex=(n:number)=>n.toString(16).padStart(2,'0'); return `#${toHex(R)}${toHex(G)}${toHex(B)}`; }
+function fallbackHex(name?: string | null): string { const hsl=fallbackCourseHsl(name); const m=hsl.match(/hsl\((\d+)\s+(\d+)%\s+(\d+)%\)/i); if (!m) return '#6b7280'; const h=parseInt(m[1],10), s=parseInt(m[2],10), l=parseInt(m[3],10); return hslToHex(h,s,l); }
 
 export default function SettingsPage() {
   const [remindersEnabled, setRemindersEnabled] = useState<boolean>(false);
@@ -13,6 +17,9 @@ export default function SettingsPage() {
   const [quietStart, setQuietStart] = useState<string>("22:00");
   const [quietEnd, setQuietEnd] = useState<string>("07:00");
   const [maxNudgesPerWeek, setMaxNudgesPerWeek] = useState<string>("3");
+  const [courses, setCourses] = useState<any[]>([]);
+  const [localColors, setLocalColors] = useState<Record<string,string>>({});
+  const [savingId, setSavingId] = useState<string | null>(null);
 
   useEffect(() => {
     if (typeof window === "undefined") return;
@@ -32,6 +39,12 @@ export default function SettingsPage() {
       const qe = window.localStorage.getItem('nudgesQuietEnd'); if (qe && /^(\d{2}):(\d{2})$/.test(qe)) setQuietEnd(qe);
       const mx = window.localStorage.getItem('nudgesMaxPerWeek'); if (mx) setMaxNudgesPerWeek(String(Math.max(0, parseInt(mx,10)||3)));
     } catch {}
+  }, []);
+
+  useEffect(() => {
+    (async () => {
+      try { const r = await fetch('/api/courses', { cache: 'no-store' }); const d = await r.json(); const list = Array.isArray(d?.courses) ? d.courses : []; setCourses(list); const init: Record<string,string> = {}; for (const c of list) init[c.id] = c.color || fallbackHex(c.title); setLocalColors(init); } catch {}
+    })();
   }, []);
 
   useEffect(() => {
@@ -57,6 +70,13 @@ export default function SettingsPage() {
     if (typeof window === "undefined") return;
     window.localStorage.setItem("icsToken", icsToken || "");
   }, [icsToken]);
+  async function saveCourseColor(id: string, color: string) {
+    try { setSavingId(id); const r = await fetch(`/api/courses/${id}`, { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ color }) }); if (r.ok) { const d = await r.json(); const updated = d?.course; if (updated) { setCourses(prev => prev.map((c:any)=>c.id===id?updated:c)); } } } finally { setSavingId(null); }
+  }
+  async function resetCourseColor(id: string) {
+    const c = courses.find((x:any)=>x.id===id); const title = c?.title || '';
+    try { setSavingId(id); const r = await fetch(`/api/courses/${id}`, { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ color: null }) }); if (r.ok) { const d = await r.json(); const updated = d?.course; if (updated) { setCourses(prev => prev.map((c:any)=>c.id===id?updated:c)); setLocalColors(prev => ({ ...prev, [id]: fallbackHex(title) })); } } } finally { setSavingId(null); }
+  }
   // Save Nudges
   useEffect(() => { if (typeof window!== 'undefined') window.localStorage.setItem('nudgesEnabled', nudgesEnabled ? 'true':'false'); }, [nudgesEnabled]);
   useEffect(() => { if (typeof window!== 'undefined' && /^(\d{2}):(\d{2})$/.test(dailyReminderTime||'')) window.localStorage.setItem('nudgesReminderTime', dailyReminderTime); }, [dailyReminderTime]);
@@ -131,6 +151,23 @@ export default function SettingsPage() {
               </div>
             </div>
             <div className="text-xs text-slate-300/70">In-app banner only; no emails/notifications. Honor code: you control this.</div>
+          </div>
+          <div className="rounded border border-[#1b2344] p-4 space-y-2 md:col-span-2">
+            <h3 className="text-sm font-medium">Course Colors</h3>
+            <div className="text-xs text-slate-300/70">Pick custom colors per course. Reset to use the automatic color.</div>
+            <div className="space-y-2">
+              {courses.length === 0 ? (
+                <div className="text-xs text-slate-300/60">No courses found.</div>
+              ) : courses.map((c:any) => (
+                <div key={c.id} className="flex items-center gap-3">
+                  <span className="inline-block w-3 h-3 rounded-full" style={{ backgroundColor: fallbackCourseHsl(c.title) }} />
+                  <div className="flex-1 truncate text-sm">{c.title}</div>
+                  <input type="color" value={localColors[c.id] || c.color || fallbackHex(c.title)} onChange={e=>setLocalColors(prev=>({ ...prev, [c.id]: e.target.value }))} className="h-7 w-12 bg-[#0b1020] border border-[#1b2344] rounded" />
+                  <button onClick={()=>saveCourseColor(c.id, localColors[c.id] || c.color || fallbackHex(c.title))} className="px-2 py-1 rounded border border-[#1b2344] text-xs" disabled={savingId===c.id}>Save</button>
+                  <button onClick={()=>resetCourseColor(c.id)} className="px-2 py-1 rounded border border-[#1b2344] text-xs" disabled={savingId===c.id}>Reset</button>
+                </div>
+              ))}
+            </div>
           </div>
         </div>
         <div>

@@ -77,6 +77,9 @@ function getCourseMpp(course?: string | null): number {
   } catch { return fallback; }
 }
 
+function hueFromString(s: string): number { let h = 0; for (let i=0;i<s.length;i++) { h = (h * 31 + s.charCodeAt(i)) >>> 0; } return h % 360; }
+function courseColor(c?: string | null): string { const key = (c||'').trim().toLowerCase(); if (!key) return 'hsl(215 16% 47%)'; const h = hueFromString(key); return `hsl(${h} 70% 55%)`; }
+
 function loadBacklog(): BacklogItem[] {
   if (typeof window === 'undefined') return [];
   try { const raw = window.localStorage.getItem(LS_BACKLOG); const arr = raw ? JSON.parse(raw) : []; return Array.isArray(arr) ? arr : []; } catch { return []; }
@@ -145,6 +148,19 @@ export default function WeekPlanPage() {
   useEffect(() => { if (typeof window!=='undefined') window.localStorage.setItem(LS_SHOW_CONFLICTS, showConflicts ? 'true':'false'); }, [showConflicts]);
 
   const days = useMemo(() => Array.from({ length: 7 }, (_, i) => { const d = new Date(weekStart); d.setDate(d.getDate()+i); return d; }), [weekStart]);
+
+  const colorForCourse = useMemo(() => {
+    const map: Record<string, string> = {};
+    for (const c of (courses||[])) {
+      const key = (c?.title || '').toString().trim().toLowerCase();
+      const col = (c?.color || '').toString().trim();
+      if (key && col) map[key] = col;
+    }
+    return (name?: string | null) => {
+      const k = (name || '').toString().trim().toLowerCase();
+      return map[k] || courseColor(name || '');
+    };
+  }, [courses]);
 
   const plannedByDay = useMemo(() => {
     const m: Record<string, number> = {}; for (const d of days) m[ymd(d)] = 0;
@@ -478,7 +494,7 @@ export default function WeekPlanPage() {
         ) : (
           <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-2">
             {unscheduledSorted.map(t => (
-              <div key={t.id} draggable onDragStart={(e)=>onDragStartTask(e,t)} className={`p-2 rounded border focus-within:outline focus-within:outline-2 focus-within:outline-blue-500 ${scheduledIdsThisWeek.has(t.id)?'border-emerald-700 bg-emerald-900/10':'border-[#1b2344]'}`} aria-grabbed="false">
+              <div key={t.id} draggable onDragStart={(e)=>onDragStartTask(e,t)} className={`p-2 pl-3 rounded border focus-within:outline focus-within:outline-2 focus-within:outline-blue-500 ${scheduledIdsThisWeek.has(t.id)?'border-emerald-700 bg-emerald-900/10':'border-[#1b2344]'}`} aria-grabbed="false" style={{ borderLeft: `3px solid ${colorForCourse(t.course || '')}` }}>
                 <div className="text-sm text-slate-200 truncate">{t.course ? `${t.course}: ` : ''}{t.title}</div>
                 <div className="text-xs text-slate-300/70 flex items-center gap-2 mt-1">
                   <span>due {ymdFromISO(t.dueDate)}</span>
@@ -521,6 +537,7 @@ export default function WeekPlanPage() {
                     <li className="text-[11px] text-slate-300/50">Drop tasks here</li>
                   ) : dayBlocks.map(b => (
                     <li key={b.id} className="text-[11px] flex items-start gap-2">
+                      <span className="mt-1 w-2 h-2 rounded-full flex-shrink-0" style={{ backgroundColor: colorForCourse(b.course) }} />
                       <div className="flex-1 min-w-0">
                         <div className="text-slate-200 truncate">{b.course ? `${b.course}: ` : ''}{b.title}</div>
                         <div className="text-slate-300/70 flex items-center gap-2">
@@ -562,7 +579,10 @@ export default function WeekPlanPage() {
                     <ul className="text-xs space-y-1">
                       {d.items.map((it, i) => (
                         <li key={i} className="flex items-center justify-between">
-                          <span className="truncate mr-2">{it.course ? `${it.course}: `: ''}{it.title}</span>
+                          <div className="flex items-center min-w-0">
+                            <span className="inline-block w-2 h-2 rounded-full mr-2 flex-shrink-0" style={{ backgroundColor: colorForCourse(it.course) }} />
+                            <span className="truncate mr-2">{it.course ? `${it.course}: `: ''}{it.title}</span>
+                          </div>
                           <span>{it.minutes}m{it.guessed ? <span className="ml-1 inline-block px-1 rounded border border-amber-500 text-amber-400">guessed</span> : null}</span>
                         </li>
                       ))}
