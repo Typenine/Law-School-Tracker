@@ -56,7 +56,7 @@ function chicagoYmd(d: Date): string {
   const da = parts.find(p=>p.type==='day')?.value || '01';
   return `${y}-${m}-${da}`;
 }
-function mondayOfChicago(d: Date): Date { const ymd = chicagoYmd(d); const [yy,mm,dd]=ymd.split('-').map(x=>parseInt(x,10)); const local = new Date(yy,(mm as number)-1,dd); const dow = local.getDay(); const delta = (dow + 6) % 7; local.setDate(local.getDate()-delta); return local; }
+function mondayOfChicago(d: Date): Date { const ymd = chicagoYmd(d); const [yy,mm,dd]=ymd.split('-').map(x=>parseInt(x,10)); const local = new Date(yy,(mm as number)-1,dd); const dow = local.getDay(); const delta = (dow + 1) % 7; local.setDate(local.getDate()-delta); return local; }
 function weekKeysChicago(d: Date): string[] { const monday = mondayOfChicago(d); return Array.from({length:7},(_,i)=>{const x=new Date(monday); x.setDate(x.getDate()+i); return chicagoYmd(x);}); }
 function minutesStr(mins: number): string { const h=Math.floor(mins/60), m=mins%60; return `${h>0?`${h}h `:''}${m}m`.trim(); }
 
@@ -65,6 +65,15 @@ function mmss(sec: number): string {
   const m = Math.floor(n / 60);
   const s = n % 60;
   return `${String(m).padStart(2,'0')}:${String(s).padStart(2,'0')}`;
+}
+// Extract page ranges from a title like "p. 449–486, 505–520"
+function extractPageRanges(title: string): string[] {
+  try {
+    const m = title.match(/p(?:ages?)?\.?\s*([0-9,\s–-]+(?:\s*,\s*[0-9–-]+)*)/i);
+    if (!m) return [];
+    const raw = m[1] || '';
+    return raw.split(/\s*,\s*/).map(x => x.replace(/-/g, '–').trim()).filter(x => /\d/.test(x));
+  } catch { return []; }
 }
 function isUUID(s: string): boolean {
   return /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(s);
@@ -458,6 +467,7 @@ export default function TodayPage() {
 
   // Availability & capacity
   const availabilityByDow = useMemo(() => (typeof window!=='undefined' ? (JSON.parse(window.localStorage.getItem(LS_AVAIL)||'{}')||{}) : {}) as Record<number,number>, [plan.items]);
+  const availabilityWeekTotal = useMemo(() => Object.values(availabilityByDow).reduce((s,v)=>s+Math.max(0, Number(v)||0), 0), [availabilityByDow]);
   const todayDow = useMemo(() => { const [y,m,da] = dateKey.split('-').map(x=>parseInt(x,10)); return new Date(y,(m as number)-1,da).getDay(); }, [dateKey]);
   const todayCapacity = useMemo(() => Math.max(0, Number(availabilityByDow[todayDow]||0)), [availabilityByDow, todayDow]);
   const remainingTodayCapacity = useMemo(() => Math.max(0, todayCapacity - plannedToday), [todayCapacity, plannedToday]);
@@ -474,22 +484,23 @@ export default function TodayPage() {
   }, [dateKey, weekKeys, availabilityByDow, remainingTodayCapacity]);
 
   const globalGoalMinutes = useMemo(() => (goals.find(g => g.scope==='global')?.weeklyMinutes || 0), [goals]);
+  const effectiveGoalMinutes = useMemo(() => (globalGoalMinutes>0 ? globalGoalMinutes : availabilityWeekTotal), [globalGoalMinutes, availabilityWeekTotal]);
   const loggedToDate = useMemo(() => {
     const todayIdx = weekKeys.indexOf(dateKey);
     return (sessions||[]).filter((s:any) => { const k = chicagoYmd(new Date(s.when)); const i = weekKeys.indexOf(k); return i !== -1 && i <= todayIdx; }).reduce((sum:number, s:any)=>sum+(s.minutes||0),0);
   }, [sessions, weekKeys, dateKey]);
-  const weeklyNeeded = useMemo(() => Math.max(0, globalGoalMinutes - loggedToDate), [globalGoalMinutes, loggedToDate]);
+  const weeklyNeeded = useMemo(() => Math.max(0, effectiveGoalMinutes - loggedToDate), [effectiveGoalMinutes, loggedToDate]);
   const dailyQuota = useMemo(() => Math.ceil(weeklyNeeded / Math.max(workdaysLeft, 1)), [weeklyNeeded, workdaysLeft]);
   const hoursPerDayNeeded = useMemo(() => {
-    if (globalGoalMinutes <= 0) return 0;
-    const remaining = Math.max(0, globalGoalMinutes - loggedToDate);
+    if (effectiveGoalMinutes <= 0) return 0;
+    const remaining = Math.max(0, effectiveGoalMinutes - loggedToDate);
     const daysLeft = Math.max(1, workdaysLeft);
     return Math.max(0, remaining / daysLeft) / 60;
-  }, [globalGoalMinutes, loggedToDate, workdaysLeft]);
+  }, [effectiveGoalMinutes, loggedToDate, workdaysLeft]);
   const globalProgressPct = useMemo(() => {
-    if (globalGoalMinutes <= 0) return 0;
-    return Math.min(1, loggedWeek / globalGoalMinutes);
-  }, [loggedWeek, globalGoalMinutes]);
+    if (effectiveGoalMinutes <= 0) return 0;
+    return Math.min(1, loggedWeek / effectiveGoalMinutes);
+  }, [loggedWeek, effectiveGoalMinutes]);
 
   // Focus Insights (rolling averages and best window)
   const startYMD30 = useMemo(() => {
@@ -800,7 +811,21 @@ export default function TodayPage() {
             </div>
             {rightMode==='day' ? (
               <>
-                <div className="text-xs text-slate-300/70 mb-2">{selectedKey}</div>
+                <div className="text-xs text-slate-300/70 mb-2">
+                  {(() => {
+                    const [y,m,da] = selectedKey.split('-').map(x=>parseInt(x,10));
+                    const d = new Date(y,(m as number)-1,da);
+                    const w = d.toLocaleDateString(undefined, { weekday: 'long' });
+                    const md = d.toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: 'numeric' });
+                    const isToday = selectedKey === chicagoYmd(new Date());
+                    return (
+                      <span>
+                        <span className="text-slate-200 font-medium">{w}</span> · {md}
+                        {isToday ? <span className="ml-2 text-[10px] px-1.5 py-0.5 rounded bg-blue-600/30 border border-blue-600/60 text-blue-300">Today</span> : null}
+                      </span>
+                    );
+                  })()}
+                </div>
                 <div className="space-y-3">
                   <div>
                     <div className="text-xs text-slate-300/70 mb-1">Scheduled</div>
@@ -822,11 +847,19 @@ export default function TodayPage() {
                     {tasksDueSelected.length===0 ? (
                       <div className="text-[11px] text-slate-300/60">—</div>
                     ) : (
-                      <ul className="text-sm space-y-1">
+                      <ul className="text-sm space-y-2">
                         {tasksDueSelected.map((t:any) => (
-                          <li key={t.id} className="flex items-center justify-between">
-                            <span className="truncate">{t.course ? `${t.course}: `:''}{t.title}</span>
-                            {typeof t.estimatedMinutes === 'number' ? <span className="text-slate-300/70">{t.estimatedMinutes}m</span> : null}
+                          <li key={t.id} className="space-y-0.5">
+                            <div className="text-slate-200 break-words whitespace-pre-wrap">
+                              {t.course ? <span className="mr-2 inline-flex items-center text-[11px] px-1.5 py-0.5 rounded border border-[#1b2344] text-slate-300/80">{t.course}</span> : null}
+                              {(() => { const raw = String(t.title || ''); const c = String(t.course||''); const lc = c.toLowerCase(); const lraw = raw.toLowerCase(); if (lc && (lraw.startsWith(lc+':') || lraw.startsWith(lc+' -') || lraw.startsWith(lc+' —') || lraw.startsWith(lc+' –'))) { return raw.slice(c.length+1).trimStart(); } return raw; })()}
+                            </div>
+                            {(() => { const chips = (() => { const arr = extractPageRanges(String(t.title||'')); if (arr.length===0 && typeof t.pagesRead==='number' && t.pagesRead>0) return [String(t.pagesRead)+'p']; return arr; })(); return chips.length ? (
+                              <div className="flex flex-wrap gap-1 text-[11px] text-slate-300/80">
+                                {chips.map((ch:string, i:number) => (<span key={i} className="px-1.5 py-0.5 rounded border border-[#1b2344]">{ch}</span>))}
+                              </div>
+                            ) : null; })()}
+                            {typeof t.estimatedMinutes === 'number' ? <div className="text-xs text-slate-300/70">{t.estimatedMinutes}m</div> : null}
                           </li>
                         ))}
                       </ul>
@@ -858,11 +891,20 @@ export default function TodayPage() {
                     {weekDueTasks.length===0 ? (
                       <div className="text-[11px] text-slate-300/60">—</div>
                     ) : (
-                      <ul className="text-sm space-y-1">
+                      <ul className="text-sm space-y-2">
                         {weekDueTasks.map((t:any) => (
-                          <li key={t.id} className="flex items-center justify-between">
-                            <span className="truncate">{chicagoYmd(new Date(t.dueDate))} · {t.course ? `${t.course}: `:''}{t.title}</span>
-                            {typeof t.estimatedMinutes === 'number' ? <span className="text-slate-300/70">{t.estimatedMinutes}m</span> : null}
+                          <li key={t.id} className="space-y-0.5">
+                            <div className="text-slate-200 break-words whitespace-pre-wrap">
+                              <span className="mr-2 text-xs text-slate-300/70">{chicagoYmd(new Date(t.dueDate))}</span>
+                              {t.course ? <span className="mr-2 inline-flex items-center text-[11px] px-1.5 py-0.5 rounded border border-[#1b2344] text-slate-300/80">{t.course}</span> : null}
+                              {(() => { const raw = String(t.title || ''); const c = String(t.course||''); const lc = c.toLowerCase(); const lraw = raw.toLowerCase(); if (lc && (lraw.startsWith(lc+':') || lraw.startsWith(lc+' -') || lraw.startsWith(lc+' —') || lraw.startsWith(lc+' –'))) { return raw.slice(c.length+1).trimStart(); } return raw; })()}
+                            </div>
+                            {(() => { const chips = (() => { const arr = extractPageRanges(String(t.title||'')); if (arr.length===0 && typeof t.pagesRead==='number' && t.pagesRead>0) return [String(t.pagesRead)+'p']; return arr; })(); return chips.length ? (
+                              <div className="flex flex-wrap gap-1 text-[11px] text-slate-300/80">
+                                {chips.map((ch:string, i:number) => (<span key={i} className="px-1.5 py-0.5 rounded border border-[#1b2344]">{ch}</span>))}
+                              </div>
+                            ) : null; })()}
+                            {typeof t.estimatedMinutes === 'number' ? <div className="text-xs text-slate-300/70">{t.estimatedMinutes}m</div> : null}
                           </li>
                         ))}
                       </ul>
@@ -885,7 +927,11 @@ export default function TodayPage() {
             <div className="h-3 bg-[#0c1328] rounded mt-3 overflow-hidden border border-[#1b2344]" aria-label="Global goal progress" role="progressbar" aria-valuemin={0} aria-valuemax={100} aria-valuenow={Math.round(globalProgressPct*100)}>
               <div className="h-full bg-blue-600" style={{ width: `${Math.round(globalProgressPct*100)}%` }}></div>
             </div>
-            <div className="text-xs text-slate-300/70 mt-2">{minutesStr(loggedWeek)} of {minutesStr(globalGoalMinutes)} · Hours/day needed: {hoursPerDayNeeded.toFixed(1)}</div>
+            <div className="text-xs text-slate-300/70 mt-2">
+              {minutesStr(loggedWeek)} of {minutesStr(effectiveGoalMinutes)}
+              {globalGoalMinutes<=0 ? <span className="text-slate-300/60"> · using availability</span> : null}
+              · Hours/day needed: {hoursPerDayNeeded.toFixed(1)}
+            </div>
           </div>
           <div className="rounded border border-[#1b2344] p-4">
             <div className="text-xs uppercase tracking-wide text-slate-300/60">Today Planned vs Done</div>

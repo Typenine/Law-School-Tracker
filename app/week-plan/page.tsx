@@ -47,6 +47,8 @@ const LS_GOALS = "weeklyGoalsV1";
 const LS_SHOW_CONFLICTS = "weekPlanShowConflicts";
 const LS_WEEK_START = "weekPlanWeekStartYmd";
 const LS_TWO_WEEKS = "weekPlanTwoWeeksOnly";
+const LS_AVAIL_START = "availabilityStartHHMM";
+const LS_AVAIL_END = "availabilityEndHHMM";
 
 type WeeklyGoal = { id: string; scope: 'global'|'course'; weeklyMinutes: number; course?: string | null };
 
@@ -61,6 +63,7 @@ function ymd(d: Date) { return `${d.getFullYear()}-${String(d.getMonth()+1).padS
 function dayLabel(d: Date) { return d.toLocaleDateString(undefined, { weekday: 'short', month: 'short', day: 'numeric' }); }
 function endOfDayIso(ymdStr: string) { const [y,m,da]=ymdStr.split('-').map(n=>parseInt(n,10)); const x=new Date(y,(m as number)-1,da,23,59,59,999); return x.toISOString(); }
 function minutesPerPage(): number { if (typeof window==='undefined') return 3; const s=window.localStorage.getItem('minutesPerPage'); const n=s?parseFloat(s):NaN; return !isNaN(n)&&n>0?n:3; }
+function minutesToHM(min: number): string { const n = Math.max(0, Math.round(Number(min)||0)); const h = Math.floor(n/60); const m = n % 60; return `${h}:${String(m).padStart(2,'0')}`; }
 
 // Learned MPP support (local-only): courseMppMap in localStorage
 type CourseMppEntry = { mpp: number; sample?: number; updatedAt?: string; overrideEnabled?: boolean; overrideMpp?: number | null };
@@ -144,6 +147,8 @@ export default function WeekPlanPage() {
   const [twoWeeksOnly, setTwoWeeksOnly] = useState<boolean>(false);
   const [undoSnapshot, setUndoSnapshot] = useState<ScheduledBlock[] | null>(null);
   const [showCatchup, setShowCatchup] = useState(false);
+  const [availStartHHMM, setAvailStartHHMM] = useState<string>('');
+  const [availEndHHMM, setAvailEndHHMM] = useState<string>('');
   const [catchupPreview, setCatchupPreview] = useState<{
     days: Array<{ day: string; total: number; usedBefore: number; usedAfter: number; items: Array<{ taskId: string; title: string; course: string; minutes: number; guessed: boolean }> }>;
     unschedulable: Array<{ taskId: string; title: string; remaining: number; dueYmd: string }>;
@@ -154,12 +159,13 @@ export default function WeekPlanPage() {
     setAvailability(loadAvailability());
     setBlocks(loadSchedule());
     setBacklog(loadBacklog());
+    try { if (typeof window!=='undefined') { const s=window.localStorage.getItem(LS_AVAIL_START)||''; const e=window.localStorage.getItem(LS_AVAIL_END)||''; if (s) setAvailStartHHMM(s); if (e) setAvailEndHHMM(e); } } catch {}
     let canceled = false;
     (async () => {
       try {
         const [schRes, setRes] = await Promise.all([
           fetch('/api/schedule', { cache: 'no-store' }),
-          fetch('/api/settings?keys=availabilityTemplateV1,weeklyGoalsV1,weekPlanShowConflicts,weekPlanWeekStartYmd,weekPlanTwoWeeksOnly,internshipColor,sportsLawReviewColor', { cache: 'no-store' })
+          fetch('/api/settings?keys=availabilityTemplateV1,weeklyGoalsV1,weekPlanShowConflicts,weekPlanWeekStartYmd,weekPlanTwoWeeksOnly,internshipColor,sportsLawReviewColor,availabilityStartHHMM,availabilityEndHHMM', { cache: 'no-store' })
         ]);
         if (canceled) return;
         if (setRes.ok) {
@@ -176,6 +182,8 @@ export default function WeekPlanPage() {
             const [y,m,da] = wk.split('-').map(x=>parseInt(x,10));
             setWeekStart(mondayOf(new Date(y,(m as number)-1,da)));
           }
+          if (typeof settings.availabilityStartHHMM === 'string') setAvailStartHHMM(settings.availabilityStartHHMM);
+          if (typeof settings.availabilityEndHHMM === 'string') setAvailEndHHMM(settings.availabilityEndHHMM);
           // Mirror virtual course colors to localStorage so colorForCourse picks them up on all pages
           try {
             if (typeof window !== 'undefined') {
@@ -212,6 +220,8 @@ export default function WeekPlanPage() {
   useEffect(() => { try { if (typeof window !== 'undefined') window.localStorage.setItem(LS_WEEK_START, ymd(weekStart)); } catch {} try { void fetch('/api/settings', { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ weekPlanWeekStartYmd: ymd(weekStart) }) }); } catch {} }, [weekStart]);
   useEffect(() => { try { void fetch('/api/settings', { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ availabilityTemplateV1: availability }) }); } catch {} }, [availability]);
   useEffect(() => { try { void fetch('/api/settings', { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ weeklyGoalsV1: goals }) }); } catch {} }, [goals]);
+  useEffect(() => { try { if (typeof window!=='undefined') window.localStorage.setItem(LS_AVAIL_START, availStartHHMM||''); void fetch('/api/settings', { method:'PATCH', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ availabilityStartHHMM: availStartHHMM||null }) }); } catch {} }, [availStartHHMM]);
+  useEffect(() => { try { if (typeof window!=='undefined') window.localStorage.setItem(LS_AVAIL_END, availEndHHMM||''); void fetch('/api/settings', { method:'PATCH', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ availabilityEndHHMM: availEndHHMM||null }) }); } catch {} }, [availEndHHMM]);
 
   // Fetch tasks for Catch-Up
   useEffect(() => {
@@ -260,7 +270,7 @@ export default function WeekPlanPage() {
   // Build busy minutes and overlappers per day from classes and timed events
   const busyByDay = useMemo(() => {
     const map: Record<string, number> = {};
-    const items: Record<string, Array<{ label: string; time?: string }>> = {};
+    const items: Record<string, Array<{ label: string; time?: string; sMin?: number; eMin?: number }>> = {};
     const keyOf = (dt: Date) => `${dt.getFullYear()}-${String(dt.getMonth()+1).padStart(2,'0')}-${String(dt.getDate()).padStart(2,'0')}`;
     const fmt12 = (hhmm?: string | null) => {
       if (!hhmm || !/^\d{2}:\d{2}$/.test(hhmm)) return '';
@@ -268,10 +278,7 @@ export default function WeekPlanPage() {
       const h12 = ((h + 11) % 12) + 1; const ampm = h < 12 ? 'AM' : 'PM';
       return `${h12}:${String(m).padStart(2,'0')} ${ampm}`;
     };
-    const toMin = (hhmm?: string | null) => {
-      if (!hhmm || !/^\d{2}:\d{2}$/.test(hhmm)) return null;
-      const [h, mi] = hhmm.split(':').map(x=>parseInt(x,10)); return h*60+mi;
-    };
+    const toMinLocal = (hhmm?: string | null) => { return toMin(hhmm); };
     // init keys
     for (const d of days) { const k = keyOf(d); map[k] = 0; items[k] = []; }
     // Classes
@@ -288,9 +295,9 @@ export default function WeekPlanPage() {
         for (const b of blocksArr) {
           if (!Array.isArray(b.days)) continue;
           if (b.days.includes(d.getDay())) {
-            const sMin = toMin((b as any).start); const eMin = toMin((b as any).end);
+            const sMin = toMinLocal((b as any).start); const eMin = toMinLocal((b as any).end);
             const dur = (sMin!=null && eMin!=null && eMin>sMin) ? (eMin - sMin) : 0;
-            const k = keyOf(d); map[k] += dur; items[k].push({ label: c.title || c.code || 'Class', time: ((b as any).start && (b as any).end) ? `${fmt12((b as any).start)}–${fmt12((b as any).end)}` : undefined });
+            const k = keyOf(d); map[k] += dur; items[k].push({ label: c.title || c.code || 'Class', time: ((b as any).start && (b as any).end) ? `${fmt12((b as any).start)}–${fmt12((b as any).end)}` : undefined, sMin: sMin==null?undefined:sMin, eMin: eMin==null?undefined:eMin });
           }
         }
       }
@@ -299,27 +306,56 @@ export default function WeekPlanPage() {
     for (const t of (tasks||[])) {
       const k = keyOf(new Date(t.dueDate));
       if (!(k in map)) continue;
-      const sMin = toMin((t as any).startTime); const eMin = toMin((t as any).endTime);
+      const sMin = toMinLocal((t as any).startTime); const eMin = toMinLocal((t as any).endTime);
       const dur = (sMin!=null && eMin!=null && eMin>sMin) ? (eMin - sMin) : 0;
-      if (dur > 0) { map[k] += dur; items[k].push({ label: t.title, time: ((t as any).startTime && (t as any).endTime) ? `${fmt12((t as any).startTime)}–${fmt12((t as any).endTime)}` : undefined }); }
+      if (dur > 0) { map[k] += dur; items[k].push({ label: t.title, time: ((t as any).startTime && (t as any).endTime) ? `${fmt12((t as any).startTime)}–${fmt12((t as any).endTime)}` : undefined, sMin: sMin==null?undefined:sMin, eMin: eMin==null?undefined:eMin }); }
+    }
+    // Finals (calendar-only)
+    const finals: Array<{ iso: string; title: string }> = [
+      { iso: '2025-12-12T09:00:00-06:00', title: 'Final — Amateur Sports Law' },
+      { iso: '2025-12-17T09:00:00-06:00', title: 'Final — Intellectual Property' },
+    ];
+    for (const f of finals) {
+      const k = f.iso.slice(0,10);
+      if (k in map) {
+        const s = toMinLocal('09:00'); const e = s!=null ? s+180 : null;
+        map[k] += 180;
+        items[k].push({ label: f.title, time: `${fmt12('09:00')}–${fmt12('12:00')}`, sMin: s==null?undefined:s, eMin: e==null?undefined:e! });
+      }
     }
     return { minutes: map, items };
   }, [courses, tasks, days]);
 
+  const effectiveCapByKey = useMemo(() => {
+    const m: Record<string, number> = {};
+    const s = normHHMM(availStartHHMM); const e = normHHMM(availEndHHMM);
+    const sMin = toMin(s); const eMin = toMin(e);
+    const winStart = sMin!=null ? sMin : 0; const winEnd = eMin!=null ? eMin : 1440;
+    const baseLen = Math.max(0, winEnd - winStart);
+    for (const d of days) {
+      const k = ymd(d);
+      const req = availability[d.getDay()] || 0;
+      let busyOverlap = 0;
+      for (const ev of (busyByDay.items[k] || [])) busyOverlap += overlap(winStart, winEnd, (ev as any).sMin ?? null, (ev as any).eMin ?? null);
+      const windowCap = Math.max(0, baseLen - busyOverlap);
+      m[k] = Math.min(req, windowCap);
+    }
+    return m;
+  }, [days, availability, availStartHHMM, availEndHHMM, busyByDay]);
+
   function dayHasConflict(k: string, dow: number): boolean {
     if (!showConflicts) return false;
-    const busy = busyByDay.minutes[k] || 0;
-    const cap = availability[dow] || 0;
+    const capEff = effectiveCapByKey[k] || 0;
     const plan = plannedByDay[k] || 0;
-    return (plan + busy) > cap;
+    return plan > capEff;
   }
 
   function moveBlockLaterToday(b: ScheduledBlock) {
     // Just reorder to end if same-day slack allows (cap - busy - others >= minutes); else no-op
-    const k = b.day; const dow = new Date(`${k}T12:00:00`).getDay();
-    const cap = availability[dow] || 0; const busy = busyByDay.minutes[k] || 0;
+    const k = b.day;
+    const effCap = effectiveCapByKey[k] || 0;
     const others = (plannedByDay[k] || 0) - b.plannedMinutes;
-    const slack = cap - busy - others;
+    const slack = effCap - others;
     if (slack < b.plannedMinutes) return; // insufficient space today
     setBlocks(prev => {
       const sameDay = prev.filter(x => x.day === k && x.id !== b.id);
@@ -336,8 +372,13 @@ export default function WeekPlanPage() {
     for (let i=1;i<=tryDays;i++) {
       const d = new Date(base); d.setDate(d.getDate()+i);
       const k = ymd(d); const dow = d.getDay();
-      const cap = availability[dow] || 0; const busy = busyByDay.minutes[k] || 0; const planned = withoutThis.get(k) || 0;
-      if (planned + busy + b.plannedMinutes <= cap) {
+      const s = normHHMM(availStartHHMM); const e = normHHMM(availEndHHMM);
+      const sMin = toMin(s); const eMin = toMin(e);
+      const winStart = sMin!=null ? sMin : 0; const winEnd = eMin!=null ? eMin : 1440; const baseLen = Math.max(0, winEnd - winStart);
+      let over = 0; for (const ev of (busyByDay.items[k] || [])) over += overlap(winStart, winEnd, (ev as any).sMin ?? null, (ev as any).eMin ?? null);
+      const effCap = Math.min(availability[dow] || 0, Math.max(0, baseLen - over));
+      const planned = withoutThis.get(k) || 0;
+      if (planned + b.plannedMinutes <= effCap) {
         setBlocks(prev => prev.map(x => x.id === b.id ? { ...x, day: k } : x));
         return;
       }
@@ -506,19 +547,19 @@ export default function WeekPlanPage() {
     const keys = new Set(days.map(d => ymd(d)));
     const existing = blocks.filter(b => keys.has(b.day));
     const planned = new Map<string, number>(); for (const d of days) planned.set(ymd(d), existing.filter(b => b.day===ymd(d)).reduce((s,b)=>s+b.plannedMinutes,0));
-    const avail = (d: Date) => availability[d.getDay()] ?? 0;
+    const eff = (d: Date) => effectiveCapByKey[ymd(d)] ?? Math.min(availability[d.getDay()] ?? 0, (() => { const s=toMin(normHHMM(availStartHHMM))??0; const e=toMin(normHHMM(availEndHHMM))??1440; return Math.max(0,e-s); })());
     const unscheduled = unscheduledSorted.filter(t => !existing.some(b => b.taskId === t.id));
     const nextBlocks: ScheduledBlock[] = [];
     for (const t of unscheduled) {
       const { minutes, guessed } = estimateMinutesForTask(t);
       let placed = false;
       for (const d of days) {
-        const k = ymd(d); const cap = avail(d); const cur = planned.get(k)!;
+        const k = ymd(d); const cap = eff(d); const cur = planned.get(k)!;
         if (cur + minutes <= cap) { nextBlocks.push({ id: uid(), taskId: t.id, day: k, plannedMinutes: minutes, guessed, title: t.title, course: t.course || '', pages: null, priority: t.priority ?? null }); planned.set(k, cur + minutes); placed = true; break; }
       }
       if (!placed) {
         let bestDay = days[0]; let bestRem = -Infinity;
-        for (const d of days) { const k = ymd(d); const cap = avail(d); const cur = planned.get(k)!; const rem = cap - cur; if (rem > bestRem) { bestRem = rem; bestDay = d; } }
+        for (const d of days) { const k = ymd(d); const cap = eff(d); const cur = planned.get(k)!; const rem = cap - cur; if (rem > bestRem) { bestRem = rem; bestDay = d; } }
         const k = ymd(bestDay);
         nextBlocks.push({ id: uid(), taskId: t.id, day: k, plannedMinutes: minutes, guessed, title: t.title, course: t.course || '', pages: null, priority: t.priority ?? null });
         planned.set(k, planned.get(k)! + minutes);
@@ -526,8 +567,15 @@ export default function WeekPlanPage() {
     }
     if (nextBlocks.length) setBlocks(prev => [...prev, ...nextBlocks]);
   }
-
-  function minutesToHM(min: number): string { const n = Math.max(0, Math.round(Number(min)||0)); const h = Math.floor(n/60); const m = n % 60; return `${h}:${String(m).padStart(2,'0')}`; }
+function normHHMM(s?: string | null): string | null {
+  const raw = (s||'').trim().toLowerCase(); if (!raw) return null;
+  const m = /^(\d{1,2})(?::?(\d{2}))?\s*([ap]m)?$/.exec(raw);
+  if (!m) return null; let hh = parseInt(m[1],10); const mm = Math.min(59, Math.max(0, parseInt(m[2]||'0',10)));
+  const ap = (m[3]||'').toLowerCase(); if (ap) { if (hh === 12) hh = 0; if (ap==='pm') hh += 12; }
+  if (hh<0||hh>23) return null; return `${String(hh).padStart(2,'0')}:${String(mm).padStart(2,'0')}`;
+}
+function toMin(hhmm?: string | null): number | null { if (!hhmm) return null; const m=/^(\d{2}):(\d{2})$/.exec(hhmm); if(!m) return null; const h=parseInt(m[1],10), mi=parseInt(m[2],10); if(isNaN(h)||isNaN(mi)) return null; return h*60+mi; }
+function overlap(a0:number,a1:number,b0:number|null,b1:number|null): number { if(b0==null||b1==null) return 0; const s=Math.max(a0,b0), e=Math.min(a1,b1); return Math.max(0, e-s); }
   function parseAvailFlexible(input: string): number | null {
     const s = (input||'').trim().toLowerCase();
     if (!s) return null;
@@ -569,7 +617,7 @@ export default function WeekPlanPage() {
 
   return (
     <main className="flex flex-col space-y-6">
-      <section className="card p-6 space-y-4 order-2">
+      <section className="card p-6 space-y-4 order-1">
         <div className="flex flex-col gap-2 md:flex-row md:items-center md:justify-between">
           <div className="flex items-center gap-2">
             <button aria-label="Previous week" onClick={()=>shiftWeek(-1)} className="px-2 py-1 rounded border border-[#1b2344] focus-visible:outline focus-visible:outline-2 focus-visible:outline-blue-500">◀</button>
@@ -591,6 +639,16 @@ export default function WeekPlanPage() {
         </div>
         <div className="space-y-2">
           <div className="text-xs text-slate-300/70">Availability (hours:minutes per weekday)</div>
+          <div className="grid grid-cols-2 md:grid-cols-4 gap-2">
+            <div className="rounded border border-[#1b2344] p-2">
+              <label className="block text-xs mb-1" htmlFor="avail-start">Start (Chicago)</label>
+              <input id="avail-start" type="text" placeholder="07:00" value={availStartHHMM} onChange={e=>setAvailStartHHMM(e.target.value)} onBlur={e=>{ const n = normHHMM(e.target.value); if (n!=null) setAvailStartHHMM(n); }} className="w-full bg-[#0b1020] border border-[#1b2344] rounded px-2 py-1 text-sm focus-visible:outline focus-visible:outline-2 focus-visible:outline-blue-500" />
+            </div>
+            <div className="rounded border border-[#1b2344] p-2">
+              <label className="block text-xs mb-1" htmlFor="avail-end">End (Chicago)</label>
+              <input id="avail-end" type="text" placeholder="17:00" value={availEndHHMM} onChange={e=>setAvailEndHHMM(e.target.value)} onBlur={e=>{ const n = normHHMM(e.target.value); if (n!=null) setAvailEndHHMM(n); }} className="w-full bg-[#0b1020] border border-[#1b2344] rounded px-2 py-1 text-sm focus-visible:outline focus-visible:outline-2 focus-visible:outline-blue-500" />
+            </div>
+          </div>
           <div className="grid grid-cols-2 sm:grid-cols-4 md:grid-cols-7 gap-2">
             {[1,2,3,4,5,6,0].map(dow => (
               <div key={dow} className="rounded border border-[#1b2344] p-2">
@@ -649,12 +707,12 @@ export default function WeekPlanPage() {
         )}
       </section>
 
-      <section className="space-y-3 order-1">
+      <section className="space-y-3 order-2">
         <div className="grid grid-cols-1 md:grid-cols-7 gap-2">
           {days.map((d) => {
             const k = ymd(d);
             const planned = plannedByDay[k] || 0;
-            const cap = availability[d.getDay()] ?? 0;
+            const cap = effectiveCapByKey[k] ?? (availability[d.getDay()] ?? 0);
             const overBy = Math.max(0, planned - cap);
             const pct = cap>0 ? Math.min(100, Math.round((planned/cap)*100)) : (planned>0?100:0);
             const dayBlocks = blocks.filter(b => b.day === k);
@@ -673,6 +731,23 @@ export default function WeekPlanPage() {
                   <div className={`${overBy>0?'bg-rose-600':'bg-blue-600'}`} style={{ width: `${pct}%`, height: '100%' }} />
                 </div>
                 {overBy>0 ? <div className="text-[11px] text-rose-400 mb-2">Over by {minutesToHM(overBy)}</div> : null}
+                <div className="mb-2">
+                  <div className="text-xs text-slate-300/70 mb-1">Events</div>
+                  {(() => { const evs = (busyByDay.items[k] || []); return evs.length===0 ? (
+                    <div className="text-[11px] text-slate-300/50">—</div>
+                  ) : (
+                    <ul className="text-[11px] space-y-1">
+                      {evs.map((ev, i) => (
+                        <li key={i} className="flex flex-wrap items-center gap-2">
+                          <span className="inline-block w-2 h-2 rounded-full bg-slate-400/70" />
+                          <span className="text-slate-200 break-words whitespace-pre-wrap">{ev.label}</span>
+                          {ev.time ? <span className="text-slate-300/70">· {ev.time}</span> : null}
+                        </li>
+                      ))}
+                    </ul>
+                  ); })()}
+                </div>
+                <div className="text-xs text-slate-300/70 mb-1">Planned</div>
                 <ul className="space-y-1">
                   {dayBlocks.length===0 ? (
                     <li className="text-[11px] text-slate-300/50">Drop tasks here</li>
