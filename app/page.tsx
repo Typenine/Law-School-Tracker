@@ -181,9 +181,11 @@ export default function TodayPage() {
   const [selectedKey, setSelectedKey] = useState<string>(() => ymdAddDays(chicagoYmd(new Date()), 1));
   const [activeItemId, setActiveItemId] = useState<string | null>(null);
   const [itemSeconds, setItemSeconds] = useState<Record<string, number>>({});
+  const [itemStartAt, setItemStartAt] = useState<Record<string, number>>({});
   const itemTickRef = useRef<NodeJS.Timeout|null>(null);
   const carryoverRef = useRef<boolean>(false);
   const [ctNow, setCtNow] = useState<string>(() => new Intl.DateTimeFormat('en-US',{ timeZone:'America/Chicago', hour:'numeric', minute:'2-digit', hour12:true }).format(new Date()));
+  const [nowTs, setNowTs] = useState<number>(() => Date.now());
   const [logModal, setLogModal] = useState<{ mode: 'partial'|'finish'; itemId: string } | null>(null);
   const [logForm, setLogForm] = useState<{ minutes: string; focus: string; notes: string; pages: string; portion: string }>({ minutes: '', focus: '5', notes: '', pages: '', portion: '' });
   useEffect(() => {
@@ -228,7 +230,9 @@ export default function TodayPage() {
           const ttt = s.todayItemTimersV1 as any;
           if (ttt && typeof ttt === 'object' && ttt.dateKey === dk) {
             const sec = (ttt.itemSeconds && typeof ttt.itemSeconds === 'object') ? ttt.itemSeconds as Record<string, number> : {};
+            const st = (ttt.itemStartAt && typeof ttt.itemStartAt === 'object') ? ttt.itemStartAt as Record<string, number> : {};
             setItemSeconds(sec);
+            setItemStartAt(st);
             if (typeof ttt.activeItemId === 'string' || ttt.activeItemId === null) setActiveItemId(ttt.activeItemId || null);
           }
           try {
@@ -270,10 +274,10 @@ export default function TodayPage() {
   // Persist per-item timers to server (debounced)
   useEffect(() => {
     const id = setTimeout(() => {
-      try { void fetch('/api/settings', { method:'PATCH', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ todayItemTimersV1: { dateKey, itemSeconds, activeItemId } }) }); } catch {}
+      try { void fetch('/api/settings', { method:'PATCH', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ todayItemTimersV1: { dateKey, itemSeconds, itemStartAt, activeItemId } }) }); } catch {}
     }, 1500);
     return () => clearTimeout(id);
-  }, [itemSeconds, activeItemId, dateKey]);
+  }, [itemSeconds, itemStartAt, activeItemId, dateKey]);
 
   // Sessions fetch for KPIs
   useEffect(() => {
@@ -434,18 +438,38 @@ export default function TodayPage() {
   }
   function lockPlan() { setPlan(p => ({ ...p, locked: true, lockedAt: new Date().toISOString() })); setStep(3); }
 
-  // Per-item timer tick (for plan items)
-  
+  // Per-item timer tick (display refresh only; elapsed computed by wall-clock)
   useEffect(() => {
     if (activeItemId) {
-      itemTickRef.current = setInterval(() => {
-        setItemSeconds(prev => ({ ...prev, [activeItemId]: Math.max(0, (prev[activeItemId] || 0) + 1) }));
-      }, 1000) as any;
+      itemTickRef.current = setInterval(() => { setNowTs(Date.now()); }, 1000) as any;
     } else if (itemTickRef.current) {
       clearInterval(itemTickRef.current); itemTickRef.current = null;
     }
     return () => { if (itemTickRef.current) { clearInterval(itemTickRef.current); itemTickRef.current = null; } };
   }, [activeItemId]);
+
+  function startItemTimer(id: string) {
+    // Accumulate previous active before switching
+    setActiveItemId(prev => {
+      if (prev && itemStartAt[prev]) {
+        const delta = Math.max(0, Math.floor((Date.now() - (itemStartAt[prev] || 0)) / 1000));
+        if (delta > 0) setItemSeconds(s => ({ ...s, [prev]: Math.max(0, (s[prev] || 0) + delta) }));
+        setItemStartAt(st => ({ ...st, [prev]: 0 }));
+      }
+      return id;
+    });
+    setItemStartAt(st => ({ ...st, [id]: Date.now() }));
+  }
+  function pauseItemTimer() {
+    setActiveItemId(prev => {
+      if (prev && itemStartAt[prev]) {
+        const delta = Math.max(0, Math.floor((Date.now() - (itemStartAt[prev] || 0)) / 1000));
+        if (delta > 0) setItemSeconds(s => ({ ...s, [prev]: Math.max(0, (s[prev] || 0) + delta) }));
+        setItemStartAt(st => ({ ...st, [prev]: 0 }));
+      }
+      return null;
+    });
+  }
 
   async function refreshSessionsNow() {
     try { const r = await fetch('/api/sessions', { cache: 'no-store' }); const d = await r.json(); setSessions(Array.isArray(d.sessions)?d.sessions:[]); } catch {}
@@ -877,13 +901,13 @@ export default function TodayPage() {
                       </span>
                       <div className="flex items-center gap-2 shrink-0">
                         <span className="text-slate-300/70">{minutesToHM(it.minutes)}</span>
-                        <span className="text-slate-300/60 tabular-nums">{mmss(itemSeconds[it.id] || 0)}</span>
+                        <span className="text-slate-300/60 tabular-nums">{(() => { const base = Math.max(0, Number(itemSeconds[it.id]||0)); const live = (activeItemId===it.id && itemStartAt[it.id]) ? Math.max(0, Math.floor((nowTs - itemStartAt[it.id]) / 1000)) : 0; return mmss(base + live); })()}</span>
                         {activeItemId === it.id ? (
-                          <button aria-label="Pause item timer" onClick={()=>setActiveItemId(null)} className="px-2 py-1 rounded border border-[#1b2344] text-xs focus-visible:outline focus-visible:outline-2 focus-visible:outline-blue-500">Pause</button>
+                          <button aria-label="Pause item timer" onClick={pauseItemTimer} className="px-2 py-1 rounded border border-[#1b2344] text-xs focus-visible:outline focus-visible:outline-2 focus-visible:outline-blue-500">Pause</button>
                         ) : (
-                          <button aria-label="Start item timer" onClick={()=>setActiveItemId(it.id)} className="px-2 py-1 rounded border border-[#1b2344] text-xs focus-visible:outline focus-visible:outline-2 focus-visible:outline-blue-500">Start</button>
+                          <button aria-label="Start item timer" onClick={()=>startItemTimer(it.id)} className="px-2 py-1 rounded border border-[#1b2344] text-xs focus-visible:outline focus-visible:outline-2 focus-visible:outline-blue-500">Start</button>
                         )}
-                        <button aria-label="Reset timer" onClick={()=>setItemSeconds(prev=>({ ...prev, [it.id]: 0 }))} className="px-2 py-1 rounded border border-[#1b2344] text-xs">Reset</button>
+                        <button aria-label="Reset timer" onClick={() => { setItemSeconds(prev=>({ ...prev, [it.id]: 0 })); setItemStartAt(prev=>({ ...prev, [it.id]: 0 })); if (activeItemId===it.id) setActiveItemId(null); }} className="px-2 py-1 rounded border border-[#1b2344] text-xs">Reset</button>
                         <button aria-label="Partial complete" onClick={()=>openLogFor(it.id,'partial')} className="px-2 py-1 rounded border border-[#1b2344] text-xs focus-visible:outline focus-visible:outline-2 focus-visible:outline-blue-500">Partial</button>
                         <button aria-label="Finish task" onClick={()=>openLogFor(it.id,'finish')} className="px-2 py-1 rounded bg-emerald-600 hover:bg-emerald-500 text-xs focus-visible:outline focus-visible:outline-2 focus-visible:outline-blue-500">Finish</button>
                       </div>
