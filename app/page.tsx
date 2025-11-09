@@ -185,6 +185,18 @@ function isUUID(s: string): boolean {
 }
 function uid(): string { return Math.random().toString(36).slice(2) + Date.now().toString(36); }
 
+// Map a Today plan item to the canonical task UUID if possible
+function canonicalTaskIdForItem(it: { id: string; title: string; course: string }, dateKey: string, schedule: ScheduledBlock[], tasks: any[]): string | null {
+  if (isUUID(it.id)) return it.id;
+  // try schedule for today
+  const byId = (schedule||[]).find(b => b.day === dateKey && (b.id === it.id || (b.title === it.title && (b.course||'') === (it.course||''))));
+  if (byId && isUUID(byId.taskId)) return byId.taskId;
+  // try tasks by exact title+course
+  const t = (tasks||[]).find((x:any) => (x.title||'') === (it.title||'') && (x.course||'') === (it.course||''));
+  if (t && isUUID(t.id)) return t.id;
+  return null;
+}
+
 // Day-level Chicago helpers for countdowns
 function chicagoPartsYMD(d: Date) {
   const fmt = new Intl.DateTimeFormat('en-CA', { timeZone: 'America/Chicago', year: 'numeric', month: '2-digit', day: '2-digit' });
@@ -386,8 +398,16 @@ export default function TodayPage() {
         const baseline = origMap[it.id] || ('p. ' + chips.join(', '));
         if (!origMap[it.id]) { origMap[it.id] = baseline; }
         const origIntervals = parseIntervalsFromRangeString(baseline);
-        // cumulative previously read
-        const prevRead = (sessions||[]).reduce((s:number, ss:any)=> (ss?.taskId===it.id && Number(ss?.pagesRead||0)>0) ? s + Number(ss.pagesRead) : s, 0);
+        // cumulative previously read (pagesRead if present; else derive from minutes)
+        let prevPages = 0; let extraMins = 0;
+        for (const ss of (sessions||[])) {
+          if (ss?.taskId !== it.id) continue;
+          const pr = Number(ss?.pagesRead || 0);
+          if (pr > 0) prevPages += pr;
+          else extraMins += Math.max(0, Number(ss?.minutes)||0);
+        }
+        const mpp = minutesPerPageForCourse(it.course);
+        const prevRead = prevPages + Math.floor(extraMins / Math.max(1, Math.round(mpp)));
         let remaining = subtractCountFromFront(origIntervals, prevRead);
         const pagesLeft = pagesInIntervals(remaining);
         const remainLabel = intervalsToLabel(remaining);
@@ -641,11 +661,12 @@ export default function TodayPage() {
       const estFromPages = Math.max(1, Math.round(pagesRead * mpp));
       minutes = estFromPages;
     }
-    const body: any = { taskId: isUUID(it.id) ? it.id : null, when: new Date().toISOString(), minutes, focus, notes, pagesRead, activity: null };
+    const taskId = canonicalTaskIdForItem(it, plan.dateKey, schedule, tasks);
+    const body: any = { taskId: taskId, when: new Date().toISOString(), minutes, focus, notes, pagesRead, activity: null };
     try { await fetch('/api/sessions', { method:'POST', headers:{ 'Content-Type':'application/json' }, body: JSON.stringify(body) }); } catch {}
     await refreshSessionsNow();
     if (logModal.mode === 'finish') {
-      if (isUUID(it.id)) { try { await fetch(`/api/tasks/${it.id}`, { method:'PATCH', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ status: 'done' }) }); } catch {} }
+      if (taskId) { try { await fetch(`/api/tasks/${taskId}`, { method:'PATCH', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ status: 'done' }) }); } catch {} }
       setPlan(p => ({ ...p, items: p.items.filter(x => x.id !== it.id) }));
     } else {
       // Partial: recompute remaining ranges & minutes using cumulative pages read
@@ -653,9 +674,10 @@ export default function TodayPage() {
       const origIntervals = parseIntervalsFromRangeString(titleRangesStr);
       const totalPages = pagesInIntervals(origIntervals);
       // Cumulative pages previously read for this task (sessions state)
+      const canonId = canonicalTaskIdForItem(it, plan.dateKey, schedule, tasks) || it.id;
       const prevRead = (sessions||[]).reduce((sum:number, s:any)=>{
         const tid = s?.taskId; const pr = Number(s?.pagesRead||0);
-        return (tid===it.id && pr>0) ? (sum+pr) : sum;
+        return (tid===canonId && pr>0) ? (sum+pr) : sum;
       }, 0);
       // Start from remaining after previously read pages (consume from front)
       let baseRemaining = subtractCountFromFront(origIntervals, prevRead);
@@ -676,10 +698,10 @@ export default function TodayPage() {
         const newTitle = re.test(it.title) ? String(it.title).replace(re, remainLabel) : `${it.title} — ${remainLabel}`;
         setPlan(p => ({ ...p, items: p.items.map(x => x.id === it.id ? { ...x, title: newTitle, minutes: newMinutes, guessed: false } : x) }));
         // Persist to Task so changes show everywhere
-        if (isUUID(it.id)) { try { await fetch(`/api/tasks/${it.id}`, { method:'PATCH', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ title: newTitle, estimatedMinutes: newMinutes }) }); } catch {} }
+        if (taskId) { try { await fetch(`/api/tasks/${taskId}`, { method:'PATCH', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ title: newTitle, estimatedMinutes: newMinutes }) }); } catch {} }
         // Update this week's schedule block for the task (today's block)
         try {
-          const nextSched = (schedule||[]).map(b => (b.taskId === it.id && b.day === plan.dateKey) ? { ...b, plannedMinutes: newMinutes, title: newTitle, guessed: false } : b);
+          const nextSched = (schedule||[]).map(b => (b.taskId === (taskId||it.id) && b.day === plan.dateKey) ? { ...b, plannedMinutes: newMinutes, title: newTitle, guessed: false } : b);
           if (nextSched !== schedule) {
             setSchedule(nextSched as any);
             try { void fetch('/api/schedule', { method:'PUT', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ blocks: nextSched }) }); } catch {}
@@ -688,9 +710,9 @@ export default function TodayPage() {
       } else {
         // No pages left; remove from plan and optionally mark task/schedule as done-ish
         setPlan(p => ({ ...p, items: p.items.filter(x => x.id !== it.id) }));
-        if (isUUID(it.id)) { try { await fetch(`/api/tasks/${it.id}`, { method:'PATCH', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ status: 'done' }) }); } catch {} }
+        if (taskId) { try { await fetch(`/api/tasks/${taskId}`, { method:'PATCH', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ status: 'done' }) }); } catch {} }
         try {
-          const nextSched = (schedule||[]).map(b => (b.taskId === it.id && b.day === plan.dateKey) ? { ...b, plannedMinutes: 0 } : b);
+          const nextSched = (schedule||[]).map(b => (b.taskId === (taskId||it.id) && b.day === plan.dateKey) ? { ...b, plannedMinutes: 0 } : b);
           if (nextSched !== schedule) {
             setSchedule(nextSched as any);
             try { void fetch('/api/schedule', { method:'PUT', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ blocks: nextSched }) }); } catch {}
@@ -1111,7 +1133,7 @@ export default function TodayPage() {
                         <button aria-label="Finish task" onClick={()=>openLogFor(it.id,'finish')} className="px-2 py-1 rounded bg-emerald-600 hover:bg-emerald-500 text-xs focus-visible:outline focus-visible:outline-2 focus-visible:outline-blue-500">Finish</button>
                       </div>
                     </div>
-                    {(() => { const chips = (() => { const arr = extractPageRanges(String(it.title||'')); return arr; })(); const pr = pagesReadByTask[it.id]||0; const total = countPagesFromTitle(String(it.title||'')); return (chips.length || pr>0) ? (
+                    {(() => { const chips = (() => { const arr = extractPageRanges(String(it.title||'')); return arr; })(); const tid = canonicalTaskIdForItem(it, dateKey, schedule, tasks) || it.id; const pr = pagesReadByTask[tid]||0; const total = countPagesFromTitle(String(it.title||'')); return (chips.length || pr>0) ? (
                       <div className="flex flex-wrap gap-1 text-[11px] text-slate-300/80 pl-4">
                         {chips.map((ch:string, j:number) => (<span key={j} className="px-1.5 py-0.5 rounded border border-[#1b2344]">{ch}</span>))}
                         {pr>0 ? (<span className="px-1.5 py-0.5 rounded border border-[#1b2344]">{total>0?`${pr}/${total}p`:`${pr}p`}</span>) : null}
