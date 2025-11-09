@@ -448,13 +448,145 @@ export default function WeekPlanPage() {
   const effectiveCapByKey = useMemo(() => {
     const m: Record<string, number> = {};
     for (const d of days) {
-      const k = ymd(d);
-      m[k] = Math.max(0, Number(availability[d.getDay()] || 0));
+      const k = ymd(d); const dow = d.getDay();
+      // Build merged windows and breaks
+      const winIntervals: Array<[number,number]> = (windowsByDow[dow]||[])
+        .map(w => [toMin(normHHMM(w.start||''))??-1, toMin(normHHMM(w.end||''))??-1])
+        .filter(([a,b]) => a>=0 && b>=0 && b>a) as Array<[number,number]>;
+      winIntervals.sort((a,b)=>a[0]-b[0]);
+      const mergedWins: Array<[number,number]> = [];
+      for (const iv of winIntervals) { if (!mergedWins.length || iv[0] > mergedWins[mergedWins.length-1][1]) mergedWins.push([iv[0], iv[1]]); else mergedWins[mergedWins.length-1][1] = Math.max(mergedWins[mergedWins.length-1][1], iv[1]); }
+      const brIntervals: Array<[number,number]> = (breaksByDow[dow]||[])
+        .map(b => [toMin(normHHMM(b.start||''))??-1, toMin(normHHMM(b.end||''))??-1])
+        .filter(([a,b]) => a>=0 && b>=0 && b>a) as Array<[number,number]>;
+      brIntervals.sort((a,b)=>a[0]-b[0]);
+      const mergedBr: Array<[number,number]> = [];
+      for (const iv of brIntervals) { if (!mergedBr.length || iv[0] > mergedBr[mergedBr.length-1][1]) mergedBr.push([iv[0], iv[1]]); else mergedBr[mergedBr.length-1][1] = Math.max(mergedBr[mergedBr.length-1][1], iv[1]); }
+      const evIntervals: Array<[number,number]> = eventIntervalsByKey[k] || [];
+      // Sum W − overlaps(B) − overlaps(E)
+      let total = 0;
+      if (mergedWins.length>0) {
+        for (const [ws,we] of mergedWins) {
+          const base = Math.max(0, we - ws);
+          let overB = 0; for (const [bs,be] of mergedBr) { const sC = Math.max(ws, bs); const eC = Math.min(we, be); if (eC>sC) overB += (eC - sC); }
+          let overE = 0; for (const [es,ee] of evIntervals) { const sC = Math.max(ws, es); const eC = Math.min(we, ee); if (eC>sC) overE += (eC - sC); }
+          total += Math.max(0, base - overB - overE);
+        }
+        m[k] = Math.max(0, total);
+      } else {
+        // Fallback when no explicit windows: subtract total event minutes from availability
+        const availMin = Math.max(0, Number(availability[dow]||0));
+        const evMin = Math.max(0, eventMinutesByKey[k] || 0);
+        m[k] = Math.max(0, availMin - evMin);
+      }
     }
     return m;
-  }, [days, availability]);
+  }, [days, windowsByDow, breaksByDow, availability, eventIntervalsByKey, eventMinutesByKey]);
 
   
+
+  // Read-only events list by day (for display only; no capacity subtraction)
+  const eventsByDay = useMemo(() => {
+    const map: Record<string, Array<{ label: string; time?: string; color?: string }>> = {};
+    const keyOf = (dt: Date) => `${dt.getFullYear()}-${String(dt.getMonth()+1).padStart(2,'0')}-${String(dt.getDate()).padStart(2,'0')}`;
+    const fmt12 = (hhmm?: string | null) => {
+      if (!hhmm || !/^(\d{2}):(\d{2})$/.test(hhmm)) return '';
+      const [hStr, mStr] = hhmm.split(':'); const h = parseInt(hStr, 10);
+      const ap = h >= 12 ? 'PM' : 'AM'; let h12 = h % 12; if (h12 === 0) h12 = 12; return `${h12}:${mStr} ${ap}`;
+    };
+    for (const d of days) map[ymd(d)] = [];
+    // Classes
+    for (const c of (courses||[])) {
+      const start = c.startDate ? new Date(c.startDate) : null;
+      const end = c.endDate ? new Date(c.endDate) : null;
+      const blocksArr = (Array.isArray(c.meetingBlocks) && c.meetingBlocks.length)
+        ? c.meetingBlocks
+        : ((Array.isArray(c.meetingDays) && c.meetingStart && c.meetingEnd) ? [{ days: c.meetingDays, start: c.meetingStart, end: c.meetingEnd, location: c.room || c.location || null }] : []);
+      if (!Array.isArray(blocksArr) || !blocksArr.length) continue;
+      for (const d of days) {
+        const within = (!start || d >= start) && (!end || d <= end);
+        if (!within) continue;
+        for (const b of blocksArr) {
+          if (!Array.isArray(b.days)) continue;
+          if (b.days.includes(d.getDay())) {
+            const sNorm = normHHMM((b as any).start);
+            const eNorm = normHHMM((b as any).end);
+            const k = keyOf(d);
+            const courseName = (c.title || c.code || '').toString();
+            map[k].push({ label: courseName || 'Class', time: (sNorm && eNorm) ? `${fmt12(sNorm)}–${fmt12(eNorm)}` : undefined, color: colorForCourse(courseName) });
+          }
+        }
+      }
+    }
+    // Timed task events (if present)
+    for (const t of (tasks||[])) {
+      const dayKey = keyOf(new Date(t.dueDate));
+      if (!(dayKey in map)) continue;
+      const sNorm = normHHMM((t as any).startTime);
+      const eNorm = normHHMM((t as any).endTime);
+      if (sNorm && eNorm) {
+        const courseName = (t.course || '').toString();
+        map[dayKey].push({ label: t.title, time: `${fmt12(sNorm)}–${fmt12(eNorm)}`, color: colorForCourse(courseName) });
+      }
+    }
+    // Sort by time-ish by placing items with a time first
+    for (const k of Object.keys(map)) map[k].sort((a,b) => (a.time?0:1) - (b.time?0:1));
+    return map;
+  }, [courses, tasks, days]);
+
+  // Event intervals (minutes) by day key, merged and minutes totals
+  const eventIntervalsByKey = useMemo(() => {
+    const map: Record<string, Array<[number,number]>> = {};
+    for (const d of days) map[ymd(d)] = [];
+    // Classes
+    for (const c of (courses||[])) {
+      const start = c.startDate ? new Date(c.startDate) : null;
+      const end = c.endDate ? new Date(c.endDate) : null;
+      const blocksArr = (Array.isArray(c.meetingBlocks) && c.meetingBlocks.length)
+        ? c.meetingBlocks
+        : ((Array.isArray(c.meetingDays) && c.meetingStart && c.meetingEnd) ? [{ days: c.meetingDays, start: c.meetingStart, end: c.meetingEnd }] : []);
+      if (!Array.isArray(blocksArr) || !blocksArr.length) continue;
+      for (const d of days) {
+        const within = (!start || d >= start) && (!end || d <= end);
+        if (!within) continue;
+        for (const b of blocksArr) {
+          if (!Array.isArray(b.days)) continue;
+          if (b.days.includes(d.getDay())) {
+            const sMin = toMin(normHHMM((b as any).start)); const eMin = toMin(normHHMM((b as any).end));
+            if (sMin!=null && eMin!=null && eMin>sMin) map[ymd(d)].push([sMin, eMin]);
+          }
+        }
+      }
+    }
+    // Timed tasks
+    for (const t of (tasks||[])) {
+      const k = ymd(new Date(t.dueDate)); if (!(k in map)) continue;
+      const sMin = toMin(normHHMM((t as any).startTime)); const eMin = toMin(normHHMM((t as any).endTime));
+      if (sMin!=null && eMin!=null && eMin>sMin) map[k].push([sMin, eMin]);
+    }
+    // Merge per day
+    for (const k of Object.keys(map)) {
+      const arr = map[k].slice().sort((a,b)=>a[0]-b[0]);
+      const merged: Array<[number,number]> = [];
+      for (const iv of arr) {
+        if (!merged.length || iv[0] > merged[merged.length-1][1]) merged.push([iv[0], iv[1]]);
+        else merged[merged.length-1][1] = Math.max(merged[merged.length-1][1], iv[1]);
+      }
+      map[k] = merged;
+    }
+    return map;
+  }, [courses, tasks, days]);
+
+  const eventMinutesByKey = useMemo(() => {
+    const m: Record<string, number> = {};
+    for (const d of days) {
+      const k = ymd(d);
+      const iv = eventIntervalsByKey[k] || [];
+      let sum = 0; for (const [a,b] of iv) sum += Math.max(0, b-a);
+      m[k] = sum;
+    }
+    return m;
+  }, [days, eventIntervalsByKey]);
 
   function moveBlockLaterToday(b: ScheduledBlock) {
     // Just reorder to end if same-day slack allows (cap - busy - others >= minutes); else no-op
@@ -912,6 +1044,19 @@ function parseAvailFlexible(input: string): number | null {
                 </div>
                 {overBy>0 ? <div className="text-[11px] text-rose-400 mb-2">Over by {minutesToHM(overBy)}</div> : null}
                 
+                <div className="text-xs text-slate-300/70 mb-1">Events</div>
+                <ul className="space-y-1 mb-2">
+                  {(eventsByDay[k]||[]).length===0 ? (
+                    <li className="text-[11px] text-slate-300/50">—</li>
+                  ) : (
+                    (eventsByDay[k]||[]).map((ev,i) => (
+                      <li key={i} className="text-[11px] flex items-center gap-2">
+                        <span className="inline-block w-2 h-2 rounded-full" style={{ backgroundColor: ev.color||'#64748b' }} />
+                        <span className="truncate">{ev.label}{ev.time?` · ${ev.time}`:''}</span>
+                      </li>
+                    ))
+                  )}
+                </ul>
                 <div className="text-xs text-slate-300/70 mb-1">Planned</div>
                 <ul className="space-y-1">
                   {dayBlocks.length===0 ? (
