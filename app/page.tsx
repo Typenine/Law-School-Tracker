@@ -884,8 +884,8 @@ export default function TodayPage() {
                           <button aria-label="Start item timer" onClick={()=>setActiveItemId(it.id)} className="px-2 py-1 rounded border border-[#1b2344] text-xs focus-visible:outline focus-visible:outline-2 focus-visible:outline-blue-500">Start</button>
                         )}
                         <button aria-label="Reset timer" onClick={()=>setItemSeconds(prev=>({ ...prev, [it.id]: 0 }))} className="px-2 py-1 rounded border border-[#1b2344] text-xs">Reset</button>
-                        <button aria-label="Partial complete" onClick={()=>setLogModal({ mode:'partial', itemId: it.id })} className="px-2 py-1 rounded border border-[#1b2344] text-xs focus-visible:outline focus-visible:outline-2 focus-visible:outline-blue-500">Partial</button>
-                        <button aria-label="Finish task" onClick={()=>setLogModal({ mode:'finish', itemId: it.id })} className="px-2 py-1 rounded bg-emerald-600 hover:bg-emerald-500 text-xs focus-visible:outline focus-visible:outline-2 focus-visible:outline-blue-500">Finish</button>
+                        <button aria-label="Partial complete" onClick={()=>openLogFor(it.id,'partial')} className="px-2 py-1 rounded border border-[#1b2344] text-xs focus-visible:outline focus-visible:outline-2 focus-visible:outline-blue-500">Partial</button>
+                        <button aria-label="Finish task" onClick={()=>openLogFor(it.id,'finish')} className="px-2 py-1 rounded bg-emerald-600 hover:bg-emerald-500 text-xs focus-visible:outline focus-visible:outline-2 focus-visible:outline-blue-500">Finish</button>
                       </div>
                     </div>
                     {(() => { const chips = (() => { const arr = extractPageRanges(String(it.title||'')); return arr; })(); return chips.length ? (
@@ -901,7 +901,7 @@ export default function TodayPage() {
               <div className="text-xs text-slate-300/70 mt-2">Locked · Total {totalPlannedLabel}</div>
             )}
           </div>
-          {/* ... */}
+          <div className="rounded border border-[#1b2344] p-4 min-h-[140px]">
             <div className="flex items-center justify-between mb-2">
               <h3 className="text-sm font-medium">Preview</h3>
               <div className="flex items-center gap-2 text-xs">
