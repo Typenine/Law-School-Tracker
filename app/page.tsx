@@ -101,6 +101,64 @@ function extractPageRanges(title: string): string[] {
     return raw.split(/\s*,\s*/).map(x => x.replace(/-/g, '–').trim()).filter(x => /\d/.test(x));
   } catch { return []; }
 }
+
+// Flexible duration parser: accepts "H:MM", "2h 5m", "135", "1.5h" etc.
+function parseMinutesFlexible(input: string): number | null {
+  const s = (input||'').toString().trim().toLowerCase();
+  if (!s) return null;
+  const hm = /^(\d{1,3}):(\d{1,2})$/.exec(s);
+  if (hm) { const h=parseInt(hm[1],10), m=parseInt(hm[2],10); if(!isNaN(h)&&!isNaN(m)) return Math.max(0, h*60 + m); }
+  const hr = /([0-9]+(?:\.[0-9]+)?)\s*h/.exec(s); const mr = /([0-9]+)\s*m(?![a-z])/i.exec(s);
+  if (hr || mr) { let tot=0; if (hr){ const h=parseFloat(hr[1]); if(!isNaN(h)) tot+=Math.round(h*60);} if(mr){ const m=parseInt(mr[1],10); if(!isNaN(m)) tot+=m; } return Math.max(0,tot); }
+  const plain = parseFloat(s);
+  if (!isNaN(plain)) { if (s.includes('.') || plain <= 10) return Math.max(0, Math.round(plain*60)); return Math.max(0, Math.round(plain)); }
+  return null;
+}
+
+// Page range helpers
+type Interval = [number, number]; // inclusive
+function parseIntervalsFromRangeString(ranges: string): Interval[] {
+  const cleaned = (ranges||'').replace(/p(?:ages?)?\.?/ig,'').replace(/–/g,'-').replace(/\s+/g,'').trim();
+  if (!cleaned) return [];
+  const parts = cleaned.split(',').map(p=>p.trim()).filter(Boolean);
+  const out: Interval[] = [];
+  for (const p of parts) {
+    const m = /^(\d+)(?:-(\d+))?$/.exec(p);
+    if (!m) continue; const a=parseInt(m[1],10); const b = m[2] ? parseInt(m[2],10) : a;
+    if (!isNaN(a) && !isNaN(b) && b>=a) out.push([a,b]);
+  }
+  return mergeIntervals(out);
+}
+function mergeIntervals(arr: Interval[]): Interval[] {
+  const a = arr.slice().sort((x,y)=>x[0]-y[0]); if (!a.length) return [];
+  const out: Interval[] = [a[0].slice() as Interval];
+  for (let i=1;i<a.length;i++) { const [s,e]=a[i]; const last = out[out.length-1]; if (s<=last[1]+1) last[1] = Math.max(last[1], e); else out.push([s,e]); }
+  return out;
+}
+function pagesInIntervals(arr: Interval[]): number { return arr.reduce((sum,[a,b])=>sum+Math.max(0,b-a+1),0); }
+function unionIntervals(a: Interval[], b: Interval[]): Interval[] { return mergeIntervals([...a, ...b]); }
+function subtractIntervals(base: Interval[], cover: Interval[]): Interval[] {
+  if (!base.length) return [];
+  if (!cover.length) return mergeIntervals(base);
+  const covered = mergeIntervals(cover);
+  const res: Interval[] = [];
+  for (const [s,e] of mergeIntervals(base)) {
+    let curS = s; let curE = e;
+    for (const [cs,ce] of covered) {
+      if (ce < curS || cs > curE) continue; // no overlap
+      if (cs <= curS && ce >= curE) { curS = curE+1; break; }
+      if (cs <= curS) { curS = ce+1; continue; }
+      if (ce >= curE) { res.push([curS, cs-1]); curS = curE+1; break; }
+      res.push([curS, cs-1]); curS = ce+1;
+    }
+    if (curS <= curE) res.push([curS, curE]);
+  }
+  return res;
+}
+function intervalsToLabel(arr: Interval[]): string {
+  if (!arr.length) return '';
+  return 'p. ' + arr.map(([a,b]) => a===b ? String(a) : `${a}88${b}`.replace(/\u0008/g,'–')).join(', ');
+}
 function isUUID(s: string): boolean {
   return /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(s);
 }
@@ -481,18 +539,24 @@ export default function TodayPage() {
     const minsFromTimer = Math.floor(secs / 60);
     const def = mode === 'finish' ? Math.max(1, minsFromTimer || (Number(it.minutes)||0)) : Math.max(1, minsFromTimer || Math.max(1, Math.round((Number(it.minutes)||0)/2)));
     const df = (typeof window !== 'undefined' ? (window.localStorage.getItem('defaultFocus') || '5') : '5');
-    setLogForm({ minutes: String(def), focus: df, notes: '', pages: '', portion: '' });
+    setLogForm({ minutes: minutesToHM(def), focus: df, notes: '', pages: '', portion: '' });
     setLogModal({ mode, itemId });
   }
 
   async function submitLog() {
     if (!logModal) return;
     const it = plan.items.find(x => x.id === logModal.itemId); if (!it) return;
-    let minutes = Math.max(1, parseInt(logForm.minutes || '0', 10) || 0);
+    let minutes = (() => { const p = parseMinutesFlexible(logForm.minutes||''); if (p!=null && p>0) return p; const n = parseInt(logForm.minutes||'0',10); return Math.max(1, isNaN(n)?0:n); })();
     const f = parseFloat(logForm.focus || ''); const focus = isNaN(f) ? null : Math.max(1, Math.min(10, f));
     const portion = (logForm.portion || '').trim();
     const notes = (() => { const base = (logForm.notes || '').trim(); return portion ? (base ? `${base}\nPortion: ${portion}` : `Portion: ${portion}`) : (base || null); })();
-    const pagesRead = (() => { const p = parseInt(logForm.pages || '0', 10); return isNaN(p) || p <= 0 ? null : p; })();
+    const pagesRead = (() => {
+      const str = (logForm.pages||'').trim();
+      const iv = parseIntervalsFromRangeString(str);
+      const fromIv = pagesInIntervals(iv);
+      if (fromIv>0) return fromIv;
+      const n = parseInt(str,10); return isNaN(n)||n<=0 ? null : n;
+    })();
     // If user provided pages for readings, compute minutes from pages using per-course MPP
     if (pagesRead && pagesRead > 0) {
       const mpp = minutesPerPageForCourse(it.course);
@@ -506,8 +570,38 @@ export default function TodayPage() {
       if (isUUID(it.id)) { try { await fetch(`/api/tasks/${it.id}`, { method:'PATCH', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ status: 'done' }) }); } catch {} }
       setPlan(p => ({ ...p, items: p.items.filter(x => x.id !== it.id) }));
     } else {
-      const m = Math.min(minutes, Math.max(1, Number(it.minutes)||0));
-      setPlan(p => ({ ...p, items: p.items.map(x => x.id === it.id ? { ...x, minutes: Math.max(0, (Number(x.minutes)||0) - m) } : x) }));
+      // Partial: if page ranges were entered, recompute remaining ranges and minutes
+      const titleRangesStr = extractPageRanges(String(it.title||'')).join(', ');
+      const origIntervals = parseIntervalsFromRangeString(titleRangesStr);
+      const readIntervals = parseIntervalsFromRangeString(logForm.pages||'');
+      const remainingIntervals = subtractIntervals(origIntervals, readIntervals);
+      const pagesLeft = pagesInIntervals(remainingIntervals);
+      if (pagesLeft > 0) {
+        const newMinutes = Math.max(1, Math.round(pagesLeft * minutesPerPageForCourse(it.course)));
+        const re = /\bp(?:p|ages?)?\.?\s*[0-9,\s–-]+(?:\s*,\s*[0-9–-]+)*/i;
+        const remainLabel = intervalsToLabel(remainingIntervals);
+        const newTitle = re.test(it.title) ? String(it.title).replace(re, remainLabel) : `${it.title} — ${remainLabel}`;
+        setPlan(p => ({ ...p, items: p.items.map(x => x.id === it.id ? { ...x, title: newTitle, minutes: newMinutes, guessed: false } : x) }));
+        // Persist to Task so changes show everywhere
+        if (isUUID(it.id)) { try { await fetch(`/api/tasks/${it.id}`, { method:'PATCH', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ title: newTitle, estimatedMinutes: newMinutes }) }); } catch {} }
+        // Update this week's schedule block for the task (today's block)
+        try {
+          const nextSched = (schedule||[]).map(b => (b.taskId === it.id && b.day === plan.dateKey) ? { ...b, plannedMinutes: newMinutes, title: newTitle, guessed: false } : b);
+          if (nextSched !== schedule) {
+            setSchedule(nextSched as any);
+            try { void fetch('/api/schedule', { method:'PUT', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ blocks: nextSched }) }); } catch {}
+          }
+        } catch {}
+      } else {
+        // No pages left; fall back to minute-based or remove if zero
+        const m = Math.min(minutes, Math.max(1, Number(it.minutes)||0));
+        const left = Math.max(0, (Number(it.minutes)||0) - m);
+        if (left <= 0) {
+          setPlan(p => ({ ...p, items: p.items.filter(x => x.id !== it.id) }));
+        } else {
+          setPlan(p => ({ ...p, items: p.items.map(x => x.id === it.id ? { ...x, minutes: left } : x) }));
+        }
+      }
     }
     setItemSeconds(prev => ({ ...prev, [it.id]: 0 }));
     if (activeItemId === it.id) setActiveItemId(null);
@@ -1053,15 +1147,36 @@ export default function TodayPage() {
             <div className="relative z-10 w-[92vw] max-w-md bg-[#0b1020] border border-[#1b2344] rounded p-4">
               <div className="text-sm font-medium mb-2">{logModal.mode==='finish' ? 'Finish Task' : 'Log Partial'}</div>
               <div className="grid grid-cols-1 gap-2 text-sm">
-                {(() => { const it = plan.items.find(x => x.id === (logModal?.itemId||'')); const total = it ? countPagesFromTitle(String(it.title||'')) : 0; return total>0 ? (<div className="text-xs text-slate-300/70">Total pages: <span className="text-slate-100">{total}</span></div>) : null; })()}
-                <label className="flex items-center justify-between gap-2"> <span className="text-xs text-slate-300/70">Minutes</span>
-                  <input type="number" min={1} step={1} value={logForm.minutes} onChange={e=>setLogForm(f=>({...f, minutes: e.target.value}))} className="w-28 bg-[#0b1020] border border-[#1b2344] rounded px-2 py-1" />
-                </label>
+                {(() => {
+                  const it = plan.items.find(x => x.id === (logModal?.itemId||''));
+                  const total = it ? countPagesFromTitle(String(it.title||'')) : 0;
+                  const titleRangesStr = it ? (extractPageRanges(String(it.title||''))||[]).join(', ') : '';
+                  const titleIntervals = parseIntervalsFromRangeString(titleRangesStr);
+                  const readIntervals = parseIntervalsFromRangeString(logForm.pages||'');
+                  const pagesRead = pagesInIntervals(readIntervals);
+                  const remaining = subtractIntervals(titleIntervals, readIntervals);
+                  const remainLabel = intervalsToLabel(remaining);
+                  const parsedMin = parseMinutesFlexible(logForm.minutes||'');
+                  const minsHint = parsedMin!=null ? ` (${parsedMin}m)` : '';
+                  const mpp = it ? minutesPerPageForCourse(it.course) : minutesPerPage();
+                  const estMins = pagesRead>0 ? Math.max(1, Math.round(pagesRead * mpp)) : null;
+                  return (
+                    <>
+                      {total>0 ? (<div className="text-xs text-slate-300/70">Total pages: <span className="text-slate-100">{total}</span></div>) : null}
+                      <label className="flex items-center justify-between gap-2"> <span className="text-xs text-slate-300/70">Time</span>
+                        <input type="text" placeholder="H:MM" value={logForm.minutes} onChange={e=>setLogForm(f=>({...f, minutes: e.target.value}))} className="w-28 bg-[#0b1020] border border-[#1b2344] rounded px-2 py-1" />
+                      </label>
+                      <div className="text-[11px] text-slate-300/60">Enter H:MM, e.g., 2:15{minsHint}</div>
+                      <label className="block"> <span className="block text-xs text-slate-300/70 mb-1">Page ranges read (optional)</span>
+                        <input type="text" placeholder="449–486, 505–520" value={logForm.pages} onChange={e=>setLogForm(f=>({...f, pages: e.target.value}))} className="w-full bg-[#0b1020] border border-[#1b2344] rounded px-2 py-1" />
+                      </label>
+                      {pagesRead>0 ? (<div className="text-[11px] text-slate-300/60">Computed pages: {pagesRead}{estMins?` · ~${estMins}m`:''}</div>) : null}
+                      {remainLabel ? (<div className="text-[11px] text-slate-300/60">Still to read: {remainLabel}</div>) : null}
+                    </>
+                  );
+                })()}
                 <label className="flex items-center justify-between gap-2"> <span className="text-xs text-slate-300/70">Focus (1–10)</span>
                   <input type="number" min={1} max={10} step={0.1} value={logForm.focus} onChange={e=>setLogForm(f=>({...f, focus: e.target.value}))} className="w-28 bg-[#0b1020] border border-[#1b2344] rounded px-2 py-1" />
-                </label>
-                <label className="block"> <span className="block text-xs text-slate-300/70 mb-1">Pages read (optional)</span>
-                  <input type="number" min={0} step={1} value={logForm.pages} onChange={e=>setLogForm(f=>({...f, pages: e.target.value}))} className="w-full bg-[#0b1020] border border-[#1b2344] rounded px-2 py-1" />
                 </label>
                 <label className="block"> <span className="block text-xs text-slate-300/70 mb-1">Portion label (e.g., p. 449–486)</span>
                   <input value={logForm.portion} onChange={e=>setLogForm(f=>({...f, portion: e.target.value}))} className="w-full bg-[#0b1020] border border-[#1b2344] rounded px-2 py-1" />
