@@ -95,10 +95,10 @@ function mmss(sec: number): string {
 // Extract page ranges from a title like "p. 449–486, 505–520"
 function extractPageRanges(title: string): string[] {
   try {
-    const m = title.match(/p(?:ages?)?\.?\s*([0-9,\s–-]+(?:\s*,\s*[0-9–-]+)*)/i);
+    const m = title.match(/p(?:ages?)?\.?\s*([0-9,\s–:\-]+(?:\s*,\s*[0-9–:\-]+)*)/i);
     if (!m) return [];
     const raw = m[1] || '';
-    return raw.split(/\s*,\s*/).map(x => x.replace(/-/g, '–').trim()).filter(x => /\d/.test(x));
+    return raw.split(/\s*,\s*/).map(x => x.replace(/[:\-]/g, '–').trim()).filter(x => /\d/.test(x));
   } catch { return []; }
 }
 
@@ -118,7 +118,7 @@ function parseMinutesFlexible(input: string): number | null {
 // Page range helpers
 type Interval = [number, number]; // inclusive
 function parseIntervalsFromRangeString(ranges: string): Interval[] {
-  const cleaned = (ranges||'').replace(/p(?:ages?)?\.?/ig,'').replace(/–/g,'-').replace(/\s+/g,'').trim();
+  const cleaned = (ranges||'').replace(/p(?:ages?)?\.?/ig,'').replace(/[–:]/g,'-').replace(/\s+/g,'').trim();
   if (!cleaned) return [];
   const parts = cleaned.split(',').map(p=>p.trim()).filter(Boolean);
   const out: Interval[] = [];
@@ -157,7 +157,27 @@ function subtractIntervals(base: Interval[], cover: Interval[]): Interval[] {
 }
 function intervalsToLabel(arr: Interval[]): string {
   if (!arr.length) return '';
-  return 'p. ' + arr.map(([a,b]) => a===b ? String(a) : `${a}88${b}`.replace(/\u0008/g,'–')).join(', ');
+  return 'p. ' + arr.map(([a,b]) => a===b ? String(a) : `${a}–${b}`).join(', ');
+}
+
+// Subtract a raw page count from the start of the intervals
+function subtractCountFromFront(base: Interval[], count: number): Interval[] {
+  if (count <= 0) return mergeIntervals(base);
+  const arr = mergeIntervals(base).slice();
+  let n = count;
+  const out: Interval[] = [];
+  for (const [s,e] of arr) {
+    const len = Math.max(0, e - s + 1);
+    if (n >= len) {
+      n -= len; // consume entire interval
+      continue;
+    }
+    // consume part, keep remaining tail
+    const newStart = s + n;
+    out.push([newStart, e]);
+    n = 0;
+  }
+  return out;
 }
 function isUUID(s: string): boolean {
   return /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(s);
@@ -574,11 +594,16 @@ export default function TodayPage() {
       const titleRangesStr = extractPageRanges(String(it.title||'')).join(', ');
       const origIntervals = parseIntervalsFromRangeString(titleRangesStr);
       const readIntervals = parseIntervalsFromRangeString(logForm.pages||'');
-      const remainingIntervals = subtractIntervals(origIntervals, readIntervals);
+      let remainingIntervals = subtractIntervals(origIntervals, readIntervals);
+      // If user entered numeric pages and no explicit ranges, consume from front
+      if (readIntervals.length === 0) {
+        const n = parseInt((logForm.pages||'').trim(), 10);
+        if (!isNaN(n) && n>0) remainingIntervals = subtractCountFromFront(origIntervals, n);
+      }
       const pagesLeft = pagesInIntervals(remainingIntervals);
       if (pagesLeft > 0) {
         const newMinutes = Math.max(1, Math.round(pagesLeft * minutesPerPageForCourse(it.course)));
-        const re = /\bp(?:p|ages?)?\.?\s*[0-9,\s–-]+(?:\s*,\s*[0-9–-]+)*/i;
+        const re = /\bp(?:p|ages?)?\.?\s*[0-9,\s–:\-]+(?:\s*,\s*[0-9–:\-]+)*/i;
         const remainLabel = intervalsToLabel(remainingIntervals);
         const newTitle = re.test(it.title) ? String(it.title).replace(re, remainLabel) : `${it.title} — ${remainLabel}`;
         setPlan(p => ({ ...p, items: p.items.map(x => x.id === it.id ? { ...x, title: newTitle, minutes: newMinutes, guessed: false } : x) }));
@@ -971,19 +996,109 @@ export default function TodayPage() {
                 </ul>
                 <div className="flex items-center gap-2">
                   <button aria-label="Back to Step 1" onClick={()=>setStep(1)} className="px-3 py-2 rounded border border-[#1b2344] text-sm focus-visible:outline focus-visible:outline-2 focus-visible:outline-blue-500">Back</button>
-                  <button aria-label="Lock plan" onClick={lockPlan} className="px-3 py-2 rounded bg-blue-600 hover:bg-blue-500 text-sm focus-visible:outline focus-visible:outline-2 focus-visible:outline-blue-500" disabled={plan.items.length===0}>Lock Plan · {minutesStr(plan.items.reduce((s,it)=>s+it.minutes,0))}</button>
-                </div>
-              </div>
-            )}
-          </div>
-        )}
-
-        {/* Plan + Tomorrow preview */}
-        <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
-          <div className="rounded border border-[#1b2344] p-4 min-h-[140px]">
-            <h3 className="text-sm font-medium mb-2">Today’s Plan</h3>
-            {plan.items.length===0 ? (
-              <div className="text-xs text-slate-300/80">No items in plan yet. Press <button onClick={()=>setStep(1)} className="underline focus-visible:outline focus-visible:outline-2 focus-visible:outline-blue-500">Plan Today</button> or add tasks in <a href="/tasks?tag=inbox" className="underline focus-visible:outline focus-visible:outline-2 focus-visible:outline-blue-500">Inbox</a>.</div>
+                  <button aria-label="Confirm Plan" onClick={()=>lockPlan()} className="px-3 py-2 rounded bg-blue-600 hover:bg-blue-500 text-sm focus-visible:outline focus-visible:outline-2 focus-visible:outline-blue-500">Confirm</button>
+const d = new Date(y,(m as number)-1,da);
+const w = d.toLocaleDateString(undefined, { weekday: 'long' });
+const md = d.toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: 'numeric' });
+const isToday = selectedKey === chicagoYmd(new Date());
+return (
+<span>
+<span className="text-slate-200 font-medium">{w}</span> · {md}
+{isToday ? <span className="ml-2 text-[10px] px-1.5 py-0.5 rounded bg-blue-600/30 border border-blue-600/60 text-blue-300">Today</span> : null}
+</span>
+);
+})()}
+</div>
+<div className="space-y-3">
+<div>
+<div className="text-xs text-slate-300/70 mb-1">Scheduled</div>
+{selectedBlocks.length===0 ? (
+<div className="text-[11px] text-slate-300/60">—</div>
+) : (
+<ul className="text-sm space-y-1">
+{selectedBlocks.map(b => (
+<li key={b.id} className="flex items-center justify-between">
+<span className="truncate">{b.course ? `${b.course}: ` : ''}{b.title}</span>
+<span className="text-slate-300/70">{minutesToHM(b.plannedMinutes)}</span>
+</li>
+))}
+</ul>
+)}
+</div>
+<div>
+<div className="text-xs text-slate-300/70 mb-1">Due</div>
+{tasksDueSelected.length===0 ? (
+<div className="text-[11px] text-slate-300/60">—</div>
+) : (
+<ul className="text-sm space-y-2">
+{tasksDueSelected.map((t:any) => (
+<li key={t.id} className="space-y-0.5">
+<div className="text-slate-200 break-words whitespace-pre-wrap">
+<span className="mr-2 text-xs text-slate-300/70">{chicagoYmd(new Date(t.dueDate))}</span>
+{t.course ? <span className="mr-2 inline-flex items-center text-[11px] px-1.5 py-0.5 rounded border border-[#1b2344] text-slate-300/80">{t.course}</span> : null}
+{(() => { const raw = String(t.title || ''); const c = String(t.course||''); const lc = c.toLowerCase(); const lraw = raw.toLowerCase(); if (lc && (lraw.startsWith(lc+':') || lraw.startsWith(lc+' -') || lraw.startsWith(lc+' —') || lraw.startsWith(lc+' –'))) { return raw.slice(c.length+1).trimStart(); } return raw; })()}
+</div>
+{(() => { const chips = (() => { const arr = extractPageRanges(String(t.title||'')); if (arr.length===0 && typeof t.pagesRead==='number' && t.pagesRead>0) return [String(t.pagesRead)+'p']; return arr; })(); return chips.length ? (
+<div className="flex flex-wrap gap-1 text-[11px] text-slate-300/80">
+{chips.map((ch:string, i:number) => (<span key={i} className="px-1.5 py-0.5 rounded border border-[#1b2344]">{ch}</span>))}
+</div>
+) : null; })()}
+{typeof t.estimatedMinutes === 'number' ? <div className="text-xs text-slate-300/70">{minutesToHM(t.estimatedMinutes)}</div> : null}
+</li>
+))}
+</ul>
+)}
+</div>
+</div>
+</>
+) : (
+<>
+<div className="text-xs text-slate-300/70 mb-2">Week of {selectedWeekKeys[0]}—{selectedWeekKeys[6]}</div>
+<div className="space-y-3">
+<div>
+<div className="text-xs text-slate-300/70 mb-1">Scheduled (Week)</div>
+{weekBlocks.length===0 ? (
+<div className="text-[11px] text-slate-300/60">—</div>
+) : (
+<ul className="text-sm space-y-1">
+{weekBlocks.map(b => (
+<li key={b.id} className="flex items-center justify-between">
+<span className="truncate">{b.day} · {b.course ? `${b.course}: ` : ''}{b.title}</span>
+<span className="text-slate-300/70">{minutesToHM(b.plannedMinutes)}</span>
+</li>
+))}
+</ul>
+)}
+</div>
+<div>
+<div className="text-xs text-slate-300/70 mb-1">Due (Week)</div>
+{weekDueTasks.length===0 ? (
+<div className="text-[11px] text-slate-300/60">—</div>
+) : (
+<ul className="text-sm space-y-2">
+{weekDueTasks.map((t:any) => (
+<li key={t.id} className="space-y-0.5">
+<div className="text-slate-200 break-words whitespace-pre-wrap">
+<span className="mr-2 text-xs text-slate-300/70">{chicagoYmd(new Date(t.dueDate))}</span>
+{t.course ? <span className="mr-2 inline-flex items-center text-[11px] px-1.5 py-0.5 rounded border border-[#1b2344] text-slate-300/80">{t.course}</span> : null}
+{(() => { const raw = String(t.title || ''); const c = String(t.course||''); const lc = c.toLowerCase(); const lraw = raw.toLowerCase(); if (lc && (lraw.startsWith(lc+':') || lraw.startsWith(lc+' -') || lraw.startsWith(lc+' —') || lraw.startsWith(lc+' –'))) { return raw.slice(c.length+1).trimStart(); } return raw; })()}
+</div>
+{(() => { const chips = (() => { const arr = extractPageRanges(String(t.title||'')); if (arr.length===0 && typeof t.pagesRead==='number' && t.pagesRead>0) return [String(t.pagesRead)+'p']; return arr; })(); return chips.length ? (
+<div className="flex flex-wrap gap-1 text-[11px] text-slate-300/80">
+{chips.map((ch:string, i:number) => (<span key={i} className="px-1.5 py-0.5 rounded border border-[#1b2344]">{ch}</span>))}
+</div>
+) : null; })()}
+{typeof t.estimatedMinutes === 'number' ? <div className="text-xs text-slate-300/70">{minutesToHM(t.estimatedMinutes)}</div> : null}
+</li>
+))}
+</ul>
+)}
+</div>
+</div>
+</>
+)}
+</div>
+</div>
             ) : (
               <ul className="space-y-1 text-sm">
                 {plan.items.map((it, i) => (
@@ -1006,9 +1121,10 @@ export default function TodayPage() {
                         <button aria-label="Finish task" onClick={()=>openLogFor(it.id,'finish')} className="px-2 py-1 rounded bg-emerald-600 hover:bg-emerald-500 text-xs focus-visible:outline focus-visible:outline-2 focus-visible:outline-blue-500">Finish</button>
                       </div>
                     </div>
-                    {(() => { const chips = (() => { const arr = extractPageRanges(String(it.title||'')); return arr; })(); return chips.length ? (
+                    {(() => { const chips = (() => { const arr = extractPageRanges(String(it.title||'')); return arr; })(); const pr = pagesReadByTask[it.id]||0; const total = countPagesFromTitle(String(it.title||'')); return (chips.length || pr>0) ? (
                       <div className="flex flex-wrap gap-1 text-[11px] text-slate-300/80 pl-4">
                         {chips.map((ch:string, j:number) => (<span key={j} className="px-1.5 py-0.5 rounded border border-[#1b2344]">{ch}</span>))}
+                        {pr>0 ? (<span className="px-1.5 py-0.5 rounded border border-[#1b2344]">{total>0?`${pr}/${total}p`:`${pr}p`}</span>) : null}
                       </div>
                     ) : null; })()}
                   </li>
@@ -1168,9 +1284,9 @@ export default function TodayPage() {
                       </label>
                       <div className="text-[11px] text-slate-300/60">Enter H:MM, e.g., 2:15{minsHint}</div>
                       <label className="block"> <span className="block text-xs text-slate-300/70 mb-1">Page ranges read (optional)</span>
-                        <input type="text" placeholder="449–486, 505–520" value={logForm.pages} onChange={e=>setLogForm(f=>({...f, pages: e.target.value}))} className="w-full bg-[#0b1020] border border-[#1b2344] rounded px-2 py-1" />
+                        <input type="text" placeholder="449–486, 505–520 or 90" value={logForm.pages} onChange={e=>setLogForm(f=>({...f, pages: e.target.value}))} className="w-full bg-[#0b1020] border border-[#1b2344] rounded px-2 py-1" />
                       </label>
-                      {pagesRead>0 ? (<div className="text-[11px] text-slate-300/60">Computed pages: {pagesRead}{estMins?` · ~${estMins}m`:''}</div>) : null}
+                      {(() => { const inp=(logForm.pages||'').trim(); let pr=pagesRead; if (pr===0 && /^\d+$/.test(inp)) pr=parseInt(inp,10); return pr>0 ? (<div className="text-[11px] text-slate-300/60">Computed pages: {pr}{estMins?` · ~${Math.max(1, Math.round(pr * mpp))}m`:''}</div>) : null; })()}
                       {remainLabel ? (<div className="text-[11px] text-slate-300/60">Still to read: {remainLabel}</div>) : null}
                     </>
                   );

@@ -169,6 +169,7 @@ export default function WeekPlanPage() {
   const [availStartByDow, setAvailStartByDow] = useState<Record<number, string>>({ 0:'',1:'',2:'',3:'',4:'',5:'',6:'' });
   const [availEndByDow, setAvailEndByDow] = useState<Record<number, string>>({ 0:'',1:'',2:'',3:'',4:'',5:'',6:'' });
   const [autoFromWindow, setAutoFromWindow] = useState<boolean>(true);
+  const [settingsReady, setSettingsReady] = useState<boolean>(false);
   const [catchupPreview, setCatchupPreview] = useState<{
     days: Array<{ day: string; total: number; usedBefore: number; usedAfter: number; items: Array<{ taskId: string; title: string; course: string; minutes: number; guessed: boolean }> }>;
     unschedulable: Array<{ taskId: string; title: string; remaining: number; dueYmd: string }>;
@@ -227,12 +228,7 @@ export default function WeekPlanPage() {
           const br = (settings as any).availabilityBreaksV1;
           if (br && typeof br === 'object') setBreaksByDow(br as Record<number, Array<{ start?: string; end?: string }>>);
           if (typeof (settings as any).availabilityAutoFromWindow === 'boolean') setAutoFromWindow((settings as any).availabilityAutoFromWindow as boolean);
-          // Mirror virtual course colors to localStorage so colorForCourse picks them up on all pages
-          try {
-            if (typeof window !== 'undefined') {
-              if (typeof settings.internshipColor === 'string' && settings.internshipColor) window.localStorage.setItem('internshipColor', settings.internshipColor);
-              if (typeof settings.sportsLawReviewColor === 'string' && settings.sportsLawReviewColor) window.localStorage.setItem('sportsLawReviewColor', settings.sportsLawReviewColor);
-            }
+          setSettingsReady(true);
           } catch {}
         }
         if (schRes.ok) {
@@ -272,11 +268,11 @@ export default function WeekPlanPage() {
   useEffect(() => { try { if (typeof window !== 'undefined') window.localStorage.setItem(LS_WEEK_START, ymd(weekStart)); } catch {} try { void fetch('/api/settings', { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ weekPlanWeekStartYmd: ymd(weekStart) }) }); } catch {} }, [weekStart]);
   useEffect(() => { try { void fetch('/api/settings', { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ availabilityTemplateV1: availability }) }); } catch {} }, [availability]);
   useEffect(() => { try { void fetch('/api/settings', { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ weeklyGoalsV1: goals }) }); } catch {} }, [goals]);
-  useEffect(() => { try { if (typeof window!=='undefined') window.localStorage.setItem(LS_AVAIL_START, JSON.stringify(availStartByDow)); void fetch('/api/settings', { method:'PATCH', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ availabilityStartHHMM: availStartByDow }) }); } catch {} }, [availStartByDow]);
-  useEffect(() => { try { if (typeof window!=='undefined') window.localStorage.setItem(LS_AVAIL_END, JSON.stringify(availEndByDow)); void fetch('/api/settings', { method:'PATCH', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ availabilityEndHHMM: availEndByDow }) }); } catch {} }, [availEndByDow]);
-  useEffect(() => { try { if (typeof window!=='undefined') window.localStorage.setItem(LS_AVAIL_BREAKS, JSON.stringify(breaksByDow)); void fetch('/api/settings', { method:'PATCH', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ availabilityBreaksV1: breaksByDow }) }); } catch {} }, [breaksByDow]);
+  useEffect(() => { try { if (typeof window!=='undefined') window.localStorage.setItem(LS_AVAIL_START, JSON.stringify(availStartByDow)); if (settingsReady) void fetch('/api/settings', { method:'PATCH', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ availabilityStartHHMM: availStartByDow }) }); } catch {} }, [availStartByDow, settingsReady]);
+  useEffect(() => { try { if (typeof window!=='undefined') window.localStorage.setItem(LS_AVAIL_END, JSON.stringify(availEndByDow)); if (settingsReady) void fetch('/api/settings', { method:'PATCH', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ availabilityEndHHMM: availEndByDow }) }); } catch {} }, [availEndByDow, settingsReady]);
+  useEffect(() => { try { if (typeof window!=='undefined') window.localStorage.setItem(LS_AVAIL_BREAKS, JSON.stringify(breaksByDow)); if (settingsReady) void fetch('/api/settings', { method:'PATCH', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ availabilityBreaksV1: breaksByDow }) }); } catch {} }, [breaksByDow, settingsReady]);
   // Persist auto-from-window toggle
-  useEffect(() => { try { if (typeof window!=='undefined') window.localStorage.setItem(LS_AVAIL_AUTO, autoFromWindow ? 'true':'false'); void fetch('/api/settings', { method:'PATCH', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ availabilityAutoFromWindow: autoFromWindow }) }); } catch {} }, [autoFromWindow]);
+  useEffect(() => { try { if (typeof window!=='undefined') window.localStorage.setItem(LS_AVAIL_AUTO, autoFromWindow ? 'true':'false'); if (settingsReady) void fetch('/api/settings', { method:'PATCH', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ availabilityAutoFromWindow: autoFromWindow }) }); } catch {} }, [autoFromWindow, settingsReady]);
 
   // Auto derive availability minutes from Start/End minus breaks
   useEffect(() => {
