@@ -951,6 +951,37 @@ export default function TodayPage() {
     return m;
   }, [sessions]);
 
+  // Remaining ranges per plan item (assigned − completed), compressed to human label
+  const remainingByItem = useMemo(() => {
+    const out: Record<string, { label: string; pages: number; assignedLabel: string; assignedPages: number; etaMinutes: number }> = {};
+    try {
+      const raw = typeof window!=='undefined' ? window.localStorage.getItem(LS_ORIG_RANGES) : null;
+      const origMap = raw ? (JSON.parse(raw) as Record<string, string>) : {};
+      for (const it of plan.items) {
+        const chips = extractPageRanges(String(it.title||''));
+        const base = origMap[it.id] || (chips.length? ('p. ' + chips.join(', ')) : '');
+        const assignedIntervals = parseIntervalsFromRangeString(base);
+        const assignedPages = pagesInIntervals(assignedIntervals);
+        const taskId = canonicalTaskIdForItem(it, plan.dateKey, schedule, tasks) || it.id;
+        let prevPages = 0; let extraMins = 0;
+        for (const ss of (sessions||[])) {
+          if ((ss as any)?.taskId !== taskId) continue;
+          const pr = Number((ss as any)?.pagesRead || 0);
+          if (pr > 0) prevPages += pr; else extraMins += Math.max(0, Number((ss as any)?.minutes)||0);
+        }
+        const mpp = minutesPerPageForCourse(it.course);
+        const consumed = prevPages + Math.floor(extraMins / Math.max(1, Math.round(mpp)));
+        const remainingIntervals = subtractCountFromFront(assignedIntervals, consumed);
+        const pagesLeft = pagesInIntervals(remainingIntervals);
+        const label = intervalsToLabel(remainingIntervals);
+        const assignedLabel = intervalsToLabel(assignedIntervals);
+        const etaMinutes = pagesLeft>0 ? Math.max(1, Math.round(pagesLeft * mpp)) : Math.max(1, Math.round((it.minutes||0))) || 0;
+        out[it.id] = { label, pages: pagesLeft, assignedLabel, assignedPages, etaMinutes };
+      }
+    } catch {}
+    return out;
+  }, [plan.items, sessions, schedule, tasks, plan.dateKey]);
+
   // Streaks (Chicago local dates)
   const activeDaysSet = useMemo(() => {
     const set = new Set<string>();
@@ -1156,42 +1187,54 @@ export default function TodayPage() {
         )}
 
         {/* Plan + Tomorrow preview */}
-        <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
-          <div className="rounded border border-[#1b2344] p-4 min-h-[140px]">
+        <div className="grid grid-cols-1 xl:grid-cols-[1.7fr_1fr] gap-6 xl:max-w-[1600px] mx-auto px-6 md:px-8">
+          <div className="min-h-[140px]">
             <h3 className="text-sm font-medium mb-2">Today’s Plan</h3>
             {plan.items.length===0 ? (
               <div className="text-xs text-slate-300/80">No items in plan yet. Press <button onClick={()=>setStep(1)} className="underline focus-visible:outline focus-visible:outline-2 focus-visible:outline-blue-500">Plan Today</button> or add tasks in <a href="/tasks?tag=inbox" className="underline focus-visible:outline focus-visible:outline-2 focus-visible:outline-blue-500">Inbox</a>.</div>
             ) : (
-              <ul className="space-y-1 text-sm">
-                {plan.items.map((it, i) => (
-                  <li key={it.id} className="space-y-0.5">
-                    <div className="flex items-center justify-between">
-                      <span className="truncate flex items-center gap-2">
-                        <span className="inline-block w-2 h-2 rounded-full" style={{ backgroundColor: courseColor(it.course) }} />
-                        <span>{i+1}. {it.course ? `${it.course}: `:''}{it.title}</span>
-                      </span>
-                      <div className="flex items-center gap-2 shrink-0">
-                        <span className="text-slate-300/70">{minutesToHM(it.minutes)}</span>
-                        <span className="text-slate-300/60 tabular-nums">{(() => { const base = Math.max(0, Number(itemSeconds[it.id]||0)); const live = (activeItemId===it.id && itemStartAt[it.id]) ? Math.max(0, Math.floor((nowTs - itemStartAt[it.id]) / 1000)) : 0; return mmss(base + live); })()}</span>
-                        {activeItemId === it.id ? (
-                          <button aria-label="Pause item timer" onClick={pauseItemTimer} className="px-2 py-1 rounded border border-[#1b2344] text-xs focus-visible:outline focus-visible:outline-2 focus-visible:outline-emerald-500">Pause</button>
-                        ) : (
-                          <button aria-label="Start item timer" onClick={()=>startItemTimer(it.id)} className="px-2 py-1 rounded border border-[#1b2344] text-xs focus-visible:outline focus-visible:outline-2 focus-visible:outline-emerald-500">Start</button>
-                        )}
-                        <button aria-label="Reset timer" onClick={() => { setItemSeconds(prev=>({ ...prev, [it.id]: 0 })); setItemStartAt(prev=>({ ...prev, [it.id]: 0 })); if (activeItemId===it.id) setActiveItemId(null); }} className="px-2 py-1 rounded border border-[#1b2344] text-xs">Reset</button>
-                        <button aria-label="Recalculate from logs" onClick={()=>recalcFromSessions(it)} className="px-2 py-1 rounded border border-emerald-700 text-emerald-300 text-xs">Recalc</button>
-                        <button aria-label="Partial complete" onClick={()=>openLogFor(it.id,'partial')} className="px-2 py-1 rounded border border-[#1b2344] text-xs focus-visible:outline focus-visible:outline-2 focus-visible:outline-blue-500">Partial</button>
-                        <button aria-label="Finish task" onClick={()=>openLogFor(it.id,'finish')} className="px-2 py-1 rounded bg-emerald-600 hover:bg-emerald-500 text-xs focus-visible:outline focus-visible:outline-2 focus-visible:outline-blue-500">Finish</button>
+              <ul className="space-y-3">
+                {plan.items.map((it, i) => {
+                  const rem = remainingByItem[it.id] || { label: '', pages: 0, assignedLabel: '', assignedPages: 0, etaMinutes: Math.max(1, Math.round(Number(it.minutes)||0)) };
+                  const elapsedSec = Math.max(0, Number(itemSeconds[it.id]||0)) + ((activeItemId===it.id && itemStartAt[it.id]) ? Math.max(0, Math.floor((nowTs - itemStartAt[it.id]) / 1000)) : 0);
+                  const elapsedMin = Math.floor(elapsedSec/60);
+                  const estMin = Math.max(1, Math.round(Number(it.minutes)||0));
+                  const pct = Math.min(100, Math.round((elapsedMin/Math.max(estMin,1))*100));
+                  return (
+                    <li key={it.id} className="rounded-2xl p-5 md:p-6 border border-white/10 bg-white/5">
+                      <div className="flex items-start justify-between gap-4">
+                        <div className="flex-1 min-w-0">
+                          <div className="mb-1">
+                            {it.course ? <span className="mr-2 inline-flex items-center text-[11px] px-1.5 py-0.5 rounded border border-white/10 text-white/80">{it.course}</span> : null}
+                            <span className="text-lg font-semibold align-middle line-clamp-2" title={it.title}>{i+1}. {(() => { const c = String(it.course||''); const raw = String(it.title||''); const lc = c.toLowerCase(); const lraw = raw.toLowerCase(); if (lc && (lraw.startsWith(lc+':') || lraw.startsWith(lc+' -') || lraw.startsWith(lc+' —') || lraw.startsWith(lc+' –'))) { return raw.slice(c.length+1).trimStart(); } return raw; })()}</span>
+                          </div>
+                          {rem.label ? (
+                            <div className="text-sm text-slate-200"><span className="font-medium">Remaining:</span> {rem.label} <span className="text-slate-300/70">({rem.pages}p)</span></div>
+                          ) : null}
+                          {rem.assignedLabel ? (
+                            <div className="text-xs text-white/60 mt-0.5">Assigned: {rem.assignedLabel}</div>
+                          ) : null}
+                          <div className="mt-3 h-1 bg-white/10 rounded overflow-hidden" role="progressbar" aria-valuemin={0} aria-valuemax={100} aria-valuenow={pct} aria-label="Elapsed vs estimate">
+                            <div className="h-full bg-emerald-600" style={{ width: `${pct}%` }} />
+                          </div>
+                        </div>
+                        <div className="w-[420px] min-w-[420px] flex-shrink-0 flex flex-col items-end gap-2">
+                          <div className="inline-flex items-center px-2 py-0.5 rounded-md text-sm bg-white/10">ETA {minutesToHM(rem.etaMinutes)}</div>
+                          <div className="flex items-center gap-2 flex-nowrap">
+                            {activeItemId === it.id ? (
+                              <button aria-label="Pause item timer" onClick={pauseItemTimer} className="px-2 py-1 rounded border border-[#1b2344] text-xs">Stop</button>
+                            ) : (
+                              <button aria-label="Start item timer" onClick={()=>startItemTimer(it.id)} className="px-2 py-1 rounded border border-[#1b2344] text-xs">Start</button>
+                            )}
+                            <button aria-label="Recalculate from logs" onClick={()=>recalcFromSessions(it)} className="px-2 py-1 rounded border border-emerald-700 text-emerald-300 text-xs">Recalc</button>
+                            <button aria-label="Partial complete" onClick={()=>openLogFor(it.id,'partial')} className="px-2 py-1 rounded border border-[#1b2344] text-xs">Partial</button>
+                            <button aria-label="Finish task" onClick={()=>openLogFor(it.id,'finish')} className="px-2 py-1 rounded bg-emerald-600 hover:bg-emerald-500 text-xs">Finish</button>
+                          </div>
+                        </div>
                       </div>
-                    </div>
-                    {(() => { const chips = (() => { const arr = extractPageRanges(String(it.title||'')); return arr; })(); const tid = canonicalTaskIdForItem(it, dateKey, schedule, tasks) || it.id; const pr = pagesReadByTask[tid]||0; const total = countPagesFromTitle(String(it.title||'')); return (chips.length || pr>0) ? (
-                      <div className="flex flex-wrap gap-1 text-[11px] text-slate-300/80 pl-4">
-                        {chips.map((ch:string, j:number) => (<span key={j} className="px-1.5 py-0.5 rounded border border-[#1b2344]">{ch}</span>))}
-                        {pr>0 ? (<span className="px-1.5 py-0.5 rounded border border-[#1b2344]">{total>0?`${pr}/${total}p`:`${pr}p`}</span>) : null}
-                      </div>
-                    ) : null; })()}
-                  </li>
-                ))}
+                    </li>
+                  );
+                })}
               </ul>
             )}
             {plan.locked && (
