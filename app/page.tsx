@@ -34,6 +34,7 @@ const LS_BACKLOG = "backlogItemsV1";
 const LS_AVAIL = "availabilityTemplateV1";
 const LS_TODAY = "todayPlanV1";
 const LS_GOALS = "weeklyGoalsV1";
+const LS_ORIG_RANGES = "readOrigRangesMapV1";
 
 function minutesPerPage(): number { if (typeof window==='undefined') return 3; const s=window.localStorage.getItem('minutesPerPage'); const n=s?parseFloat(s):NaN; return !isNaN(n)&&n>0?n:3; }
 // Count pages from title ranges like "p. 449–486, 505–520"
@@ -366,6 +367,63 @@ export default function TodayPage() {
     })();
     return () => { mounted = false; };
   }, [dateKey]);
+  // Auto-sync: adjust remaining ranges/minutes based on cumulative pages read
+  useEffect(() => {
+    if (!plan || !plan.items || plan.items.length === 0) return;
+    if (typeof window === 'undefined') return;
+    try {
+      const raw = window.localStorage.getItem(LS_ORIG_RANGES);
+      const origMap = raw ? (JSON.parse(raw) as Record<string, string>) : {};
+      let changed = false;
+      let scheduleChanged = false;
+      const nextItems: TodayPlanItem[] = [];
+      const nextSched = (schedule||[]).slice();
+      for (const it of plan.items) {
+        const chips = extractPageRanges(String(it.title||''));
+        if (chips.length === 0) { nextItems.push(it); continue; }
+        const re = /\bp(?:p|ages?)?\.?\s*[0-9,\s–:\-]+(?:\s*,\s*[0-9–:\-]+)*/i;
+        // establish baseline
+        const baseline = origMap[it.id] || ('p. ' + chips.join(', '));
+        if (!origMap[it.id]) { origMap[it.id] = baseline; }
+        const origIntervals = parseIntervalsFromRangeString(baseline);
+        // cumulative previously read
+        const prevRead = (sessions||[]).reduce((s:number, ss:any)=> (ss?.taskId===it.id && Number(ss?.pagesRead||0)>0) ? s + Number(ss.pagesRead) : s, 0);
+        let remaining = subtractCountFromFront(origIntervals, prevRead);
+        const pagesLeft = pagesInIntervals(remaining);
+        const remainLabel = intervalsToLabel(remaining);
+        if (pagesLeft <= 0) {
+          // remove from plan
+          changed = true;
+          // mark schedule block to 0 if present
+          const si = nextSched.findIndex(b => b.taskId === it.id && b.day === plan.dateKey);
+          if (si !== -1) { nextSched[si] = { ...nextSched[si], plannedMinutes: 0 }; scheduleChanged = true; }
+          // best-effort mark task done
+          if (isUUID(it.id)) { try { void fetch(`/api/tasks/${it.id}`, { method:'PATCH', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ status: 'done' }) }); } catch {} }
+          continue;
+        }
+        const newMinutes = Math.max(1, Math.round(pagesLeft * minutesPerPageForCourse(it.course)));
+        const currentLabel = String(it.title||'').match(re)?.[0] || '';
+        const desiredTitle = re.test(it.title||'') ? String(it.title).replace(re, remainLabel) : `${it.title} — ${remainLabel}`;
+        if (currentLabel !== remainLabel || Number(it.minutes)!==newMinutes || it.guessed===true) {
+          nextItems.push({ ...it, title: desiredTitle, minutes: newMinutes, guessed: false });
+          changed = true;
+          // schedule
+          const si = nextSched.findIndex(b => b.taskId === it.id && b.day === plan.dateKey);
+          if (si !== -1) { nextSched[si] = { ...nextSched[si], title: desiredTitle, plannedMinutes: newMinutes, guessed: false }; scheduleChanged = true; }
+          // persist task
+          if (isUUID(it.id)) { try { void fetch(`/api/tasks/${it.id}`, { method:'PATCH', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ title: desiredTitle, estimatedMinutes: newMinutes }) }); } catch {} }
+        } else {
+          nextItems.push(it);
+        }
+      }
+      if (changed) setPlan(p => ({ ...p, items: nextItems }));
+      if (scheduleChanged) {
+        setSchedule(nextSched as any);
+        try { void fetch('/api/schedule', { method:'PUT', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ blocks: nextSched }) }); } catch {}
+      }
+      window.localStorage.setItem(LS_ORIG_RANGES, JSON.stringify(origMap));
+    } catch {}
+  }, [sessions, plan.dateKey, plan.items.length]);
   // Tasks for tomorrow preview
   useEffect(() => {
     let mounted = true;
@@ -590,15 +648,25 @@ export default function TodayPage() {
       if (isUUID(it.id)) { try { await fetch(`/api/tasks/${it.id}`, { method:'PATCH', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ status: 'done' }) }); } catch {} }
       setPlan(p => ({ ...p, items: p.items.filter(x => x.id !== it.id) }));
     } else {
-      // Partial: if page ranges were entered, recompute remaining ranges and minutes
+      // Partial: recompute remaining ranges & minutes using cumulative pages read
       const titleRangesStr = extractPageRanges(String(it.title||'')).join(', ');
       const origIntervals = parseIntervalsFromRangeString(titleRangesStr);
+      const totalPages = pagesInIntervals(origIntervals);
+      // Cumulative pages previously read for this task (sessions state)
+      const prevRead = (sessions||[]).reduce((sum:number, s:any)=>{
+        const tid = s?.taskId; const pr = Number(s?.pagesRead||0);
+        return (tid===it.id && pr>0) ? (sum+pr) : sum;
+      }, 0);
+      // Start from remaining after previously read pages (consume from front)
+      let baseRemaining = subtractCountFromFront(origIntervals, prevRead);
+      // Apply current input
       const readIntervals = parseIntervalsFromRangeString(logForm.pages||'');
-      let remainingIntervals = subtractIntervals(origIntervals, readIntervals);
-      // If user entered numeric pages and no explicit ranges, consume from front
-      if (readIntervals.length === 0) {
+      let remainingIntervals = baseRemaining;
+      if (readIntervals.length > 0) {
+        remainingIntervals = subtractIntervals(baseRemaining, readIntervals);
+      } else {
         const n = parseInt((logForm.pages||'').trim(), 10);
-        if (!isNaN(n) && n>0) remainingIntervals = subtractCountFromFront(origIntervals, n);
+        if (!isNaN(n) && n>0) remainingIntervals = subtractCountFromFront(baseRemaining, n);
       }
       const pagesLeft = pagesInIntervals(remainingIntervals);
       if (pagesLeft > 0) {
@@ -618,14 +686,16 @@ export default function TodayPage() {
           }
         } catch {}
       } else {
-        // No pages left; fall back to minute-based or remove if zero
-        const m = Math.min(minutes, Math.max(1, Number(it.minutes)||0));
-        const left = Math.max(0, (Number(it.minutes)||0) - m);
-        if (left <= 0) {
-          setPlan(p => ({ ...p, items: p.items.filter(x => x.id !== it.id) }));
-        } else {
-          setPlan(p => ({ ...p, items: p.items.map(x => x.id === it.id ? { ...x, minutes: left } : x) }));
-        }
+        // No pages left; remove from plan and optionally mark task/schedule as done-ish
+        setPlan(p => ({ ...p, items: p.items.filter(x => x.id !== it.id) }));
+        if (isUUID(it.id)) { try { await fetch(`/api/tasks/${it.id}`, { method:'PATCH', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ status: 'done' }) }); } catch {} }
+        try {
+          const nextSched = (schedule||[]).map(b => (b.taskId === it.id && b.day === plan.dateKey) ? { ...b, plannedMinutes: 0 } : b);
+          if (nextSched !== schedule) {
+            setSchedule(nextSched as any);
+            try { void fetch('/api/schedule', { method:'PUT', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ blocks: nextSched }) }); } catch {}
+          }
+        } catch {}
       }
     }
     setItemSeconds(prev => ({ ...prev, [it.id]: 0 }));
