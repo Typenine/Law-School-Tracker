@@ -627,6 +627,56 @@ export default function TodayPage() {
     });
   }
 
+  async function recalcFromSessions(it: TodayPlanItem) {
+    try {
+      if (typeof window === 'undefined') return;
+      const taskId = canonicalTaskIdForItem(it, plan.dateKey, schedule, tasks) || it.id;
+      const chips = extractPageRanges(String(it.title||''));
+      if (chips.length === 0) return;
+      const raw = window.localStorage.getItem(LS_ORIG_RANGES);
+      const origMap = raw ? (JSON.parse(raw) as Record<string, string>) : {};
+      const baseline = origMap[it.id] || ('p. ' + chips.join(', '));
+      if (!origMap[it.id]) { origMap[it.id] = baseline; }
+      const origIntervals = parseIntervalsFromRangeString(baseline);
+      let prevPages = 0; let extraMins = 0;
+      for (const ss of (sessions||[])) {
+        if (ss?.taskId !== taskId) continue;
+        const pr = Number(ss?.pagesRead || 0);
+        if (pr > 0) prevPages += pr; else extraMins += Math.max(0, Number(ss?.minutes)||0);
+      }
+      const mpp = minutesPerPageForCourse(it.course);
+      const prevRead = prevPages + Math.floor(extraMins / Math.max(1, Math.round(mpp)));
+      let remaining = subtractCountFromFront(origIntervals, prevRead);
+      const pagesLeft = pagesInIntervals(remaining);
+      const remainLabel = intervalsToLabel(remaining);
+      if (pagesLeft <= 0) {
+        setPlan(p => ({ ...p, items: p.items.filter(x => x.id !== it.id) }));
+        if (isUUID(taskId)) { try { void fetch(`/api/tasks/${taskId}`, { method:'PATCH', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ status: 'done' }) }); } catch {} }
+        try {
+          const nextSched = (schedule||[]).map(b => (b.taskId === taskId && b.day === plan.dateKey) ? { ...b, plannedMinutes: 0 } : b);
+          if (nextSched !== schedule) {
+            setSchedule(nextSched as any);
+            try { void fetch('/api/schedule', { method:'PUT', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ blocks: nextSched }) }); } catch {}
+          }
+        } catch {}
+      } else {
+        const newMinutes = Math.max(1, Math.round(pagesLeft * mpp));
+        const re = /\bp(?:p|ages?)?\.?\s*[0-9,\s–:\-]+(?:\s*,\s*[0-9–:\-]+)*/i;
+        const newTitle = re.test(it.title) ? String(it.title).replace(re, remainLabel) : `${it.title} — ${remainLabel}`;
+        setPlan(p => ({ ...p, items: p.items.map(x => x.id === it.id ? { ...x, title: newTitle, minutes: newMinutes, guessed: false } : x) }));
+        if (isUUID(taskId)) { try { void fetch(`/api/tasks/${taskId}`, { method:'PATCH', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ title: newTitle, estimatedMinutes: newMinutes }) }); } catch {} }
+        try {
+          const nextSched = (schedule||[]).map(b => (b.taskId === taskId && b.day === plan.dateKey) ? { ...b, plannedMinutes: newMinutes, title: newTitle, guessed: false } : b);
+          if (nextSched !== schedule) {
+            setSchedule(nextSched as any);
+            try { void fetch('/api/schedule', { method:'PUT', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ blocks: nextSched }) }); } catch {}
+          }
+        } catch {}
+      }
+      window.localStorage.setItem(LS_ORIG_RANGES, JSON.stringify(origMap));
+    } catch {}
+  }
+
   async function refreshSessionsNow() {
     try { const r = await fetch('/api/sessions', { cache: 'no-store' }); const d = await r.json(); setSessions(Array.isArray(d.sessions)?d.sessions:[]); } catch {}
   }
@@ -1029,7 +1079,7 @@ export default function TodayPage() {
             <p className="text-xs text-slate-300/60">Central time · {dateKey} · {ctNow}</p>
           </div>
           {!plan.locked ? (
-            <button aria-label="Open Plan Today" onClick={()=>setStep(1)} className="inline-flex items-center justify-center px-4 py-2 rounded bg-blue-600 hover:bg-blue-500 text-sm font-medium transition focus-visible:outline focus-visible:outline-2 focus-visible:outline-blue-500">Plan Today</button>
+            <button aria-label="Open Plan Today" onClick={()=>setStep(1)} className="inline-flex items-center justify-center px-4 py-2 rounded bg-emerald-600 hover:bg-emerald-500 text-sm font-medium transition focus-visible:outline focus-visible:outline-2 focus-visible:outline-emerald-500">Plan Today</button>
           ) : (
             <div className="text-sm text-slate-300/80">Planned {totalPlannedLabel}</div>
           )}
@@ -1097,8 +1147,8 @@ export default function TodayPage() {
                   ))}
                 </ul>
                 <div className="flex items-center gap-2">
-                  <button aria-label="Back to Step 1" onClick={()=>setStep(1)} className="px-3 py-2 rounded border border-[#1b2344] text-sm focus-visible:outline focus-visible:outline-2 focus-visible:outline-blue-500">Back</button>
-                  <button aria-label="Confirm Plan" onClick={lockPlan} className="px-3 py-2 rounded bg-blue-600 hover:bg-blue-500 text-sm focus-visible:outline focus-visible:outline-2 focus-visible:outline-blue-500">Confirm</button>
+                  <button aria-label="Back to Step 1" onClick={()=>setStep(1)} className="px-3 py-2 rounded border border-[#1b2344] text-sm focus-visible:outline focus-visible:outline-2 focus-visible:outline-emerald-500">Back</button>
+                  <button aria-label="Confirm Plan" onClick={lockPlan} className="px-3 py-2 rounded bg-emerald-600 hover:bg-emerald-500 text-sm focus-visible:outline focus-visible:outline-2 focus-visible:outline-emerald-500">Confirm</button>
                 </div>
               </div>
             )}
@@ -1124,11 +1174,12 @@ export default function TodayPage() {
                         <span className="text-slate-300/70">{minutesToHM(it.minutes)}</span>
                         <span className="text-slate-300/60 tabular-nums">{(() => { const base = Math.max(0, Number(itemSeconds[it.id]||0)); const live = (activeItemId===it.id && itemStartAt[it.id]) ? Math.max(0, Math.floor((nowTs - itemStartAt[it.id]) / 1000)) : 0; return mmss(base + live); })()}</span>
                         {activeItemId === it.id ? (
-                          <button aria-label="Pause item timer" onClick={pauseItemTimer} className="px-2 py-1 rounded border border-[#1b2344] text-xs focus-visible:outline focus-visible:outline-2 focus-visible:outline-blue-500">Pause</button>
+                          <button aria-label="Pause item timer" onClick={pauseItemTimer} className="px-2 py-1 rounded border border-[#1b2344] text-xs focus-visible:outline focus-visible:outline-2 focus-visible:outline-emerald-500">Pause</button>
                         ) : (
-                          <button aria-label="Start item timer" onClick={()=>startItemTimer(it.id)} className="px-2 py-1 rounded border border-[#1b2344] text-xs focus-visible:outline focus-visible:outline-2 focus-visible:outline-blue-500">Start</button>
+                          <button aria-label="Start item timer" onClick={()=>startItemTimer(it.id)} className="px-2 py-1 rounded border border-[#1b2344] text-xs focus-visible:outline focus-visible:outline-2 focus-visible:outline-emerald-500">Start</button>
                         )}
                         <button aria-label="Reset timer" onClick={() => { setItemSeconds(prev=>({ ...prev, [it.id]: 0 })); setItemStartAt(prev=>({ ...prev, [it.id]: 0 })); if (activeItemId===it.id) setActiveItemId(null); }} className="px-2 py-1 rounded border border-[#1b2344] text-xs">Reset</button>
+                        <button aria-label="Recalculate from logs" onClick={()=>recalcFromSessions(it)} className="px-2 py-1 rounded border border-emerald-700 text-emerald-300 text-xs">Recalc</button>
                         <button aria-label="Partial complete" onClick={()=>openLogFor(it.id,'partial')} className="px-2 py-1 rounded border border-[#1b2344] text-xs focus-visible:outline focus-visible:outline-2 focus-visible:outline-blue-500">Partial</button>
                         <button aria-label="Finish task" onClick={()=>openLogFor(it.id,'finish')} className="px-2 py-1 rounded bg-emerald-600 hover:bg-emerald-500 text-xs focus-visible:outline focus-visible:outline-2 focus-visible:outline-blue-500">Finish</button>
                       </div>
@@ -1152,8 +1203,8 @@ export default function TodayPage() {
               <h3 className="text-sm font-medium">Preview</h3>
               <div className="flex items-center gap-2 text-xs">
                 <div className="inline-flex rounded border border-[#1b2344] overflow-hidden">
-                  <button onClick={()=>setRightMode('day')} className={`px-2 py-1 ${rightMode==='day'?'bg-blue-600':'bg-transparent'}`}>Day</button>
-                  <button onClick={()=>setRightMode('week')} className={`px-2 py-1 ${rightMode==='week'?'bg-blue-600':'bg-transparent'}`}>Week</button>
+                  <button onClick={()=>setRightMode('day')} className={`px-2 py-1 ${rightMode==='day'?'bg-emerald-600':'bg-transparent'}`}>Day</button>
+                  <button onClick={()=>setRightMode('week')} className={`px-2 py-1 ${rightMode==='week'?'bg-emerald-600':'bg-transparent'}`}>Week</button>
                 </div>
                 <div className="inline-flex items-center gap-1">
                   <button onClick={()=>{ setSelectedKey(k=>ymdAddDays(k, rightMode==='day'? -1 : -7)); }} className="px-2 py-1 rounded border border-[#1b2344]">◀</button>
