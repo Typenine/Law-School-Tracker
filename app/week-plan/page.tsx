@@ -165,7 +165,6 @@ export default function WeekPlanPage() {
   const [timePicker, setTimePicker] = useState<{ kind: 'win-start'|'win-end'|'br-start'|'br-end'; dow: number; index: number } | null>(null);
   const [rowMenu, setRowMenu] = useState<{ kind: 'win'|'br'; dow: number; index: number } | null>(null);
   const [toolbarMenu, setToolbarMenu] = useState<{ dow: number } | null>(null);
-  const [addWinModal, setAddWinModal] = useState<{ dow: number; start: string; end: string } | null>(null);
   const [courses, setCourses] = useState<any[]>([]);
   const [twoWeeksOnly, setTwoWeeksOnly] = useState<boolean>(false);
   const [undoSnapshot, setUndoSnapshot] = useState<ScheduledBlock[] | null>(null);
@@ -365,7 +364,7 @@ export default function WeekPlanPage() {
       let cur = s;
       for (const [bs,be] of mergedBr) { const ss = Math.max(cur, s); const ee = Math.min(e, bs); if (ee>ss) wins.push([ss, ee]); cur = Math.max(cur, be); }
       if (cur < e) wins.push([cur, e]);
-      out[dow] = wins.map(([a,b]) => ({ start: fmt12Input(`${String(Math.floor(a/60)).padStart(2,'0')}:${String(a%60).padStart(2,'0')}`), end: fmt12Input(`${String(Math.floor(b/60)).padStart(2,'0')}:${String(b%60).padStart(2,'0')}`) }));
+      out[dow] = wins.map(([a,b]) => ({ id: uid(), start: fmt12Input(`${String(Math.floor(a/60)).padStart(2,'0')}:${String(a%60).padStart(2,'0')}`), end: fmt12Input(`${String(Math.floor(b/60)).padStart(2,'0')}:${String(b%60).padStart(2,'0')}`) } as any));
     }
     setWindowsByDow(out);
   }, [availStartByDow, availEndByDow, breaksByDow]);
@@ -541,14 +540,22 @@ export default function WeekPlanPage() {
 
   
 
-  // Read-only events list by day (for display only; no capacity subtraction)
+  // Read-only events list by day (display only)
   const eventsByDay = useMemo(() => {
-    const map: Record<string, Array<{ label: string; time?: string; color?: string }>> = {};
+    const map: Record<string, Array<{ label: string; time?: string; color?: string; s?: number }>> = {};
     const keyOf = (dt: Date) => `${dt.getFullYear()}-${String(dt.getMonth()+1).padStart(2,'0')}-${String(dt.getDate()).padStart(2,'0')}`;
     const fmt12 = (hhmm?: string | null) => {
       if (!hhmm || !/^(\d{2}):(\d{2})$/.test(hhmm)) return '';
       const [hStr, mStr] = hhmm.split(':'); const h = parseInt(hStr, 10);
       const ap = h >= 12 ? 'PM' : 'AM'; let h12 = h % 12; if (h12 === 0) h12 = 12; return `${h12}:${mStr} ${ap}`;
+    };
+    const fmt12Range = (s?: string|null, e?: string|null) => {
+      const ss = fmt12(s||''); const ee = fmt12(e||'');
+      if (!ss || !ee) return (ss||ee||'All day');
+      const sm = /\s(AM|PM)$/i.exec(ss)?.[1] || '';
+      const em = /\s(AM|PM)$/i.exec(ee)?.[1] || '';
+      if (sm && em && sm===em) return `${ss.replace(/\s(AM|PM)$/i,'')}–${ee.replace(/\s(AM|PM)$/i,'')} ${sm}`;
+      return `${ss}–${ee}`;
     };
     for (const d of days) map[ymd(d)] = [];
     // Classes
@@ -569,7 +576,8 @@ export default function WeekPlanPage() {
             const eNorm = normHHMM((b as any).end);
             const k = keyOf(d);
             const courseName = (c.title || c.code || '').toString();
-            map[k].push({ label: courseName || 'Class', time: (sNorm && eNorm) ? `${fmt12(sNorm)}–${fmt12(eNorm)}` : undefined, color: colorForCourse(courseName) });
+            const sMin = toMin(sNorm||'');
+            map[k].push({ label: courseName || 'Class', time: (sNorm && eNorm) ? fmt12Range(sNorm,eNorm) : 'All day', color: colorForCourse(courseName), s: (sMin ?? 24*60) });
           }
         }
       }
@@ -580,13 +588,13 @@ export default function WeekPlanPage() {
       if (!(dayKey in map)) continue;
       const sNorm = normHHMM((t as any).startTime);
       const eNorm = normHHMM((t as any).endTime);
-      if (sNorm && eNorm) {
-        const courseName = (t.course || '').toString();
-        map[dayKey].push({ label: t.title, time: `${fmt12(sNorm)}–${fmt12(eNorm)}`, color: colorForCourse(courseName) });
-      }
+      const courseName = (t.course || '').toString();
+      const sMin = toMin(sNorm||'');
+      const labelTime = (sNorm && eNorm) ? fmt12Range(sNorm,eNorm) : 'All day';
+      map[dayKey].push({ label: t.title, time: labelTime, color: colorForCourse(courseName), s: (sMin ?? 24*60) });
     }
-    // Sort by time-ish by placing items with a time first
-    for (const k of Object.keys(map)) map[k].sort((a,b) => (a.time?0:1) - (b.time?0:1));
+    // Sort by start minutes asc; all-day at end
+    for (const k of Object.keys(map)) map[k].sort((a,b) => (Number(a.s||1e9) - Number(b.s||1e9)) || String(a.label).localeCompare(String(b.label)));
     return map;
   }, [courses, tasks, days]);
 
@@ -904,8 +912,8 @@ function parseAvailFlexible(input: string): number | null {
                       <button aria-label="Open day actions" onClick={()=>setToolbarMenu(m => (m && m.dow===dow)? null : { dow })} className="px-2 py-1 rounded border border-white/10 text-xs">…</button>
                       {toolbarMenu && toolbarMenu.dow===dow ? (
                         <div className="absolute right-0 mt-2 z-30 w-40 rounded border border-white/10 bg-[#0b1020] p-2 text-xs space-y-1 shadow-lg">
-                          <button onClick={()=>{ setAddWinModal({ dow, start: '9:00 AM', end: '5:00 PM' }); setToolbarMenu(null); }} className="block w-full text-left px-2 py-1 rounded hover:bg-white/5">Add window</button>
-                          <button onClick={()=>{ setBreaksByDow(prev=>{ const arr=(prev[dow]||[]).slice(); arr.push({ start:'', end:'' }); return { ...prev, [dow]: arr }; }); setToolbarMenu(null); }} className="block w-full text-left px-2 py-1 rounded hover:bg-white/5">Add break</button>
+                          <button onClick={()=>{ setWindowsByDow(prev=>{ const arr=(prev[dow]||[]).slice(); arr.push({ id: uid(), start:'', end:'' } as any); return { ...prev, [dow]: arr }; }); setToolbarMenu(null); }} className="block w-full text-left px-2 py-1 rounded hover:bg-white/5">Add window</button>
+                          <button onClick={()=>{ setBreaksByDow(prev=>{ const arr=(prev[dow]||[]).slice(); arr.push({ id: uid(), start:'', end:'' } as any); return { ...prev, [dow]: arr }; }); setToolbarMenu(null); }} className="block w-full text-left px-2 py-1 rounded hover:bg-white/5">Add break</button>
                           <button onClick={()=>{ setWindowsByDow(prev=>{ const wins=(prev[dow]||[]).slice(); const out: Record<number, any[]> = {0:[],1:[],2:[],3:[],4:[],5:[],6:[]}; for(const k of [1,2,3,4,5]) out[k]=wins.slice(); return { ...prev, ...out } as any; }); setBreaksByDow(prev=>{ const br=(prev[dow]||[]).slice(); const out: Record<number, any[]> = {0:(prev[0]||[]),1:[],2:[],3:[],4:[],5:[],6:(prev[6]||[])}; for(const k of [1,2,3,4,5]) out[k]=br.slice(); return out as any; }); setToolbarMenu(null); }} className="block w-full text-left px-2 py-1 rounded hover:bg-white/5">Copy to weekdays</button>
                         </div>
                       ) : null}
@@ -915,8 +923,8 @@ function parseAvailFlexible(input: string): number | null {
                 <div>
                   <div className="text-xs text-white/70 mb-1">Windows</div>
                   <div className="space-y-2">
-                    {(windowsByDow[dow]||[]).map((w, i) => { const sOk = toMin(normHHMM(w.start||''))!=null; const eOk = toMin(normHHMM(w.end||''))!=null; const valid = (toMin(normHHMM(w.start||''))??0) < (toMin(normHHMM(w.end||''))??0); return (
-                      <div key={`w-${i}`} className="relative grid grid-cols-[1fr_1fr_auto] items-center gap-3">
+                    {(windowsByDow[dow]||[]).map((w, i) => { const sOk = toMin(normHHMM(w.start||''))!=null; const eOk = toMin(normHHMM(w.end||''))!=null; const valid = (toMin(normHHMM(w.start||''))??0) < (toMin(normHHMM(w.end||''))??0); const keyId = (w as any).id || `w-${i}`; return (
+                      <div key={keyId} className="relative grid grid-cols-[1fr_1fr_auto] items-center gap-3">
                         <input type="text" placeholder="7:00 AM" value={fmt12Input(w.start||'')} onChange={e=>setWindowsByDow(prev=>{ const arr=(prev[dow]||[]).slice(); arr[i]={...arr[i], start:e.target.value}; return { ...prev, [dow]: arr }; })} onKeyDown={e=>{ if(e.key==='ArrowUp'){ e.preventDefault(); setWindowsByDow(prev=>{ const arr=(prev[dow]||[]).slice(); arr[i]={...arr[i], start: adjustTimeText(arr[i].start||'', 5)}; return { ...prev, [dow]: arr }; }); } if(e.key==='ArrowDown'){ e.preventDefault(); setWindowsByDow(prev=>{ const arr=(prev[dow]||[]).slice(); arr[i]={...arr[i], start: adjustTimeText(arr[i].start||'', -5)}; return { ...prev, [dow]: arr }; }); } if(e.key==='PageUp'){ e.preventDefault(); setWindowsByDow(prev=>{ const arr=(prev[dow]||[]).slice(); arr[i]={...arr[i], start: adjustTimeText(arr[i].start||'', 15)}; return { ...prev, [dow]: arr }; }); } if(e.key==='PageDown'){ e.preventDefault(); setWindowsByDow(prev=>{ const arr=(prev[dow]||[]).slice(); arr[i]={...arr[i], start: adjustTimeText(arr[i].start||'', -15)}; return { ...prev, [dow]: arr }; }); } }} onClick={()=>setTimePicker(tp=> tp && tp.kind==='win-start' && tp.dow===dow && tp.index===i ? null : { kind:'win-start', dow, index:i })} className={`h-9 px-3 text-sm rounded-lg bg-white/10 border ${valid && sOk? 'border-white/10':'border-rose-600'} focus-visible:ring-2 focus-visible:ring-emerald-400`} />
                         <input type="text" placeholder="5:00 PM" value={fmt12Input(w.end||'')} onChange={e=>setWindowsByDow(prev=>{ const arr=(prev[dow]||[]).slice(); arr[i]={...arr[i], end:e.target.value}; return { ...prev, [dow]: arr }; })} onKeyDown={e=>{ if(e.key==='ArrowUp'){ e.preventDefault(); setWindowsByDow(prev=>{ const arr=(prev[dow]||[]).slice(); arr[i]={...arr[i], end: adjustTimeText(arr[i].end||'', 5)}; return { ...prev, [dow]: arr }; }); } if(e.key==='ArrowDown'){ e.preventDefault(); setWindowsByDow(prev=>{ const arr=(prev[dow]||[]).slice(); arr[i]={...arr[i], end: adjustTimeText(arr[i].end||'', -5)}; return { ...prev, [dow]: arr }; }); } if(e.key==='PageUp'){ e.preventDefault(); setWindowsByDow(prev=>{ const arr=(prev[dow]||[]).slice(); arr[i]={...arr[i], end: adjustTimeText(arr[i].end||'', 15)}; return { ...prev, [dow]: arr }; }); } if(e.key==='PageDown'){ e.preventDefault(); setWindowsByDow(prev=>{ const arr=(prev[dow]||[]).slice(); arr[i]={...arr[i], end: adjustTimeText(arr[i].end||'', -15)}; return { ...prev, [dow]: arr }; }); } }} onClick={()=>setTimePicker(tp=> tp && tp.kind==='win-end' && tp.dow===dow && tp.index===i ? null : { kind:'win-end', dow, index:i })} className={`h-9 px-3 text-sm rounded-lg bg-white/10 border ${valid && eOk? 'border-white/10':'border-rose-600'} focus-visible:ring-2 focus-visible:ring-emerald-400`} />
                         <div className="relative">
@@ -925,7 +933,7 @@ function parseAvailFlexible(input: string): number | null {
                             <div className="absolute right-0 mt-2 z-10 rounded border border-white/10 bg-[#0b1020] p-2 text-xs space-y-1">
                               <button onClick={()=>{ setWindowsByDow(prev=>{ const arr=(prev[dow]||[]).slice(); arr[i]={...arr[i], start: adjustTimeText(arr[i].start||'', -15), end: adjustTimeText(arr[i].end||'', -15)}; return { ...prev, [dow]: arr }; }); setRowMenu(null); }} className="block px-2 py-1 rounded hover:bg-white/5">−15</button>
                               <button onClick={()=>{ setWindowsByDow(prev=>{ const arr=(prev[dow]||[]).slice(); arr[i]={...arr[i], start: adjustTimeText(arr[i].start||'', 15), end: adjustTimeText(arr[i].end||'', 15)}; return { ...prev, [dow]: arr }; }); setRowMenu(null); }} className="block px-2 py-1 rounded hover:bg-white/5">+15</button>
-                              <button onClick={()=>{ setWindowsByDow(prev=>{ const arr=(prev[dow]||[]).slice(); const copy = { ...arr[i] }; arr.splice(i+1,0,copy); return { ...prev, [dow]: arr }; }); setRowMenu(null); }} className="block px-2 py-1 rounded hover:bg-white/5">Duplicate</button>
+                              <button onClick={()=>{ setWindowsByDow(prev=>{ const arr=(prev[dow]||[]).slice(); const copy = { ...arr[i], id: uid() } as any; arr.splice(i+1,0,copy); return { ...prev, [dow]: arr }; }); setRowMenu(null); }} className="block px-2 py-1 rounded hover:bg-white/5">Duplicate</button>
                               <button onClick={()=>{ setWindowsByDow(prev=>{ const arr=(prev[dow]||[]).slice(); arr.splice(i,1); return { ...prev, [dow]: arr }; }); setRowMenu(null); }} className="block px-2 py-1 rounded hover:bg-white/5">Delete</button>
                             </div>
                           ) : null}
@@ -941,16 +949,18 @@ function parseAvailFlexible(input: string): number | null {
                         ) : null}
                       </div>
                     );})}
-                    <div>
-                      <button onClick={()=>setAddWinModal({ dow, start: '9:00 AM', end: '5:00 PM' })} className="mt-1 px-2 py-1 rounded border border-white/10 text-xs">+ Add window</button>
-                    </div>
+                    {(() => { const hasInvalid = (windowsByDow[dow]||[]).some(w => { const s=toMin(normHHMM(w.start||'')); const e=toMin(normHHMM(w.end||'')); return !(s!=null && e!=null && e>s); }); return (
+                      <div>
+                        <button onClick={()=>setWindowsByDow(prev=>{ const arr=(prev[dow]||[]).slice(); arr.push({ id: uid(), start:'', end:'' } as any); return { ...prev, [dow]: arr }; })} className="mt-1 px-2 py-1 rounded border border-white/10 text-xs disabled:opacity-50" disabled={hasInvalid}>+ Add window</button>
+                      </div>
+                    ); })()}
                   </div>
                 </div>
                 <div>
                   <div className="text-xs text-white/70 mb-1">Breaks</div>
                   <div className="space-y-2">
-                    {(breaksByDow[dow]||[]).map((br, i) => { const valid = (toMin(normHHMM(br.start||''))??0) < (toMin(normHHMM(br.end||''))??0); return (
-                      <div key={`b-${i}`} className="relative grid grid-cols-[1fr_1fr_auto] items-center gap-3">
+                    {(breaksByDow[dow]||[]).map((br, i) => { const valid = (toMin(normHHMM(br.start||''))??0) < (toMin(normHHMM(br.end||''))??0); const keyId=(br as any).id || `b-${i}`; return (
+                      <div key={keyId} className="relative grid grid-cols-[1fr_1fr_auto] items-center gap-3">
                         <input type="text" placeholder="2:15 PM" value={fmt12Input(br.start||'')} onChange={e=>setBreaksByDow(prev=>{ const arr=(prev[dow]||[]).slice(); arr[i]={...arr[i], start:e.target.value}; return { ...prev, [dow]: arr }; })} onKeyDown={e=>{ if(e.key==='ArrowUp'){ e.preventDefault(); setBreaksByDow(prev=>{ const arr=(prev[dow]||[]).slice(); arr[i]={...arr[i], start: adjustTimeText(arr[i].start||'', 5)}; return { ...prev, [dow]: arr }; }); } if(e.key==='ArrowDown'){ e.preventDefault(); setBreaksByDow(prev=>{ const arr=(prev[dow]||[]).slice(); arr[i]={...arr[i], start: adjustTimeText(arr[i].start||'', -5)}; return { ...prev, [dow]: arr }; }); } if(e.key==='PageUp'){ e.preventDefault(); setBreaksByDow(prev=>{ const arr=(prev[dow]||[]).slice(); arr[i]={...arr[i], start: adjustTimeText(arr[i].start||'', 15)}; return { ...prev, [dow]: arr }; }); } if(e.key==='PageDown'){ e.preventDefault(); setBreaksByDow(prev=>{ const arr=(prev[dow]||[]).slice(); arr[i]={...arr[i], start: adjustTimeText(arr[i].start||'', -15)}; return { ...prev, [dow]: arr }; }); } }} onClick={()=>setTimePicker(tp=> tp && tp.kind==='br-start' && tp.dow===dow && tp.index===i ? null : { kind:'br-start', dow, index:i })} className={`h-9 px-3 text-sm rounded-lg bg-white/10 border ${valid? 'border-white/10':'border-rose-600'} focus-visible:ring-2 focus-visible:ring-emerald-400`} />
                         <input type="text" placeholder="2:45 PM" value={fmt12Input(br.end||'')} onChange={e=>setBreaksByDow(prev=>{ const arr=(prev[dow]||[]).slice(); arr[i]={...arr[i], end:e.target.value}; return { ...prev, [dow]: arr }; })} onKeyDown={e=>{ if(e.key==='ArrowUp'){ e.preventDefault(); setBreaksByDow(prev=>{ const arr=(prev[dow]||[]).slice(); arr[i]={...arr[i], end: adjustTimeText(arr[i].end||'', 5)}; return { ...prev, [dow]: arr }; }); } if(e.key==='ArrowDown'){ e.preventDefault(); setBreaksByDow(prev=>{ const arr=(prev[dow]||[]).slice(); arr[i]={...arr[i], end: adjustTimeText(arr[i].end||'', -5)}; return { ...prev, [dow]: arr }; }); } if(e.key==='PageUp'){ e.preventDefault(); setBreaksByDow(prev=>{ const arr=(prev[dow]||[]).slice(); arr[i]={...arr[i], end: adjustTimeText(arr[i].end||'', 15)}; return { ...prev, [dow]: arr }; }); } if(e.key==='PageDown'){ e.preventDefault(); setBreaksByDow(prev=>{ const arr=(prev[dow]||[]).slice(); arr[i]={...arr[i], end: adjustTimeText(arr[i].end||'', -15)}; return { ...prev, [dow]: arr }; }); } }} onClick={()=>setTimePicker(tp=> tp && tp.kind==='br-end' && tp.dow===dow && tp.index===i ? null : { kind:'br-end', dow, index:i })} className={`h-9 px-3 text-sm rounded-lg bg-white/10 border ${valid? 'border-white/10':'border-rose-600'} focus-visible:ring-2 focus-visible:ring-emerald-400`} />
                         <div className="relative">
@@ -959,7 +969,7 @@ function parseAvailFlexible(input: string): number | null {
                             <div className="absolute right-0 mt-2 z-10 rounded border border-white/10 bg-[#0b1020] p-2 text-xs space-y-1">
                               <button onClick={()=>{ setBreaksByDow(prev=>{ const arr=(prev[dow]||[]).slice(); arr[i]={...arr[i], start: adjustTimeText(arr[i].start||'', -15), end: adjustTimeText(arr[i].end||'', -15)}; return { ...prev, [dow]: arr }; }); setRowMenu(null); }} className="block px-2 py-1 rounded hover:bg-white/5">−15</button>
                               <button onClick={()=>{ setBreaksByDow(prev=>{ const arr=(prev[dow]||[]).slice(); arr[i]={...arr[i], start: adjustTimeText(arr[i].start||'', 15), end: adjustTimeText(arr[i].end||'', 15)}; return { ...prev, [dow]: arr }; }); setRowMenu(null); }} className="block px-2 py-1 rounded hover:bg-white/5">+15</button>
-                              <button onClick={()=>{ setBreaksByDow(prev=>{ const arr=(prev[dow]||[]).slice(); const copy = { ...arr[i] }; arr.splice(i+1,0,copy); return { ...prev, [dow]: arr }; }); setRowMenu(null); }} className="block px-2 py-1 rounded hover:bg-white/5">Duplicate</button>
+                              <button onClick={()=>{ setBreaksByDow(prev=>{ const arr=(prev[dow]||[]).slice(); const copy = { ...arr[i], id: uid() } as any; arr.splice(i+1,0,copy); return { ...prev, [dow]: arr }; }); setRowMenu(null); }} className="block px-2 py-1 rounded hover:bg-white/5">Duplicate</button>
                               <button onClick={()=>{ setBreaksByDow(prev=>{ const arr=(prev[dow]||[]).slice(); arr.splice(i,1); return { ...prev, [dow]: arr }; }); setRowMenu(null); }} className="block px-2 py-1 rounded hover:bg-white/5">Delete</button>
                             </div>
                           ) : null}
@@ -976,7 +986,7 @@ function parseAvailFlexible(input: string): number | null {
                       </div>
                     );})}
                     <div>
-                      <button onClick={()=>setBreaksByDow(prev=>{ const arr=(prev[dow]||[]).slice(); arr.push({ start:'', end:'' }); return { ...prev, [dow]: arr }; })} className="mt-1 px-2 py-1 rounded border border-white/10 text-xs">+ Add break</button>
+                      <button onClick={()=>setBreaksByDow(prev=>{ const arr=(prev[dow]||[]).slice(); arr.push({ id: uid(), start:'', end:'' } as any); return { ...prev, [dow]: arr }; })} className="mt-1 px-2 py-1 rounded border border-white/10 text-xs">+ Add break</button>
                     </div>
                   </div>
                 </div>
@@ -1126,50 +1136,6 @@ function parseAvailFlexible(input: string): number | null {
           </div>
         )}
       </section>
-
-      {addWinModal && (
-        <div role="dialog" aria-modal="true" className="fixed inset-0 z-50 flex items-center justify-center">
-          <div className="absolute inset-0 bg-black/60" onClick={()=>setAddWinModal(null)} />
-          {(() => { const dow = addWinModal.dow; const startVal = addWinModal.start; const endVal = addWinModal.end; const valid = (toMin(normHHMM(startVal||''))??0) < (toMin(normHHMM(endVal||''))??0); const curWins = (windowsByDow[dow]||[]); const brs = (breaksByDow[dow]||[]); const before = computeAvailForWins(dow, curWins, brs); const candWins = [...curWins, { start: startVal, end: endVal }]; const after = valid ? computeAvailForWins(dow, candWins, brs) : before; const k = ymdForDow(dow); const dayBlocks = blocks.filter(b => b.day === k); return (
-            <div className="relative z-10 w-[92vw] max-w-md bg-[#0b1020] border border-[#1b2344] rounded p-4">
-              <div className="flex items-center justify-between mb-2">
-                <div className="text-sm font-medium">Add window — {['Sun','Mon','Tue','Wed','Thu','Fri','Sat'][dow]}</div>
-                <button onClick={()=>setAddWinModal(null)} className="text-xs px-2 py-1 rounded border border-[#1b2344]">Close</button>
-              </div>
-              <div className="grid grid-cols-1 gap-2 text-sm">
-                <label className="block">
-                  <span className="block text-xs text-slate-300/70 mb-1">Start</span>
-                  <input type="text" placeholder="9:00 AM" value={startVal} onChange={e=>setAddWinModal(m=>m?{...m,start:e.target.value}:m)} className={`w-full h-9 px-3 rounded-lg bg-white/10 border ${valid? 'border-white/10':'border-rose-600'}`} />
-                </label>
-                <label className="block">
-                  <span className="block text-xs text-slate-300/70 mb-1">End</span>
-                  <input type="text" placeholder="5:00 PM" value={endVal} onChange={e=>setAddWinModal(m=>m?{...m,end:e.target.value}:m)} className={`w-full h-9 px-3 rounded-lg bg-white/10 border ${valid? 'border-white/10':'border-rose-600'}`} />
-                </label>
-                <div className="text-xs text-slate-300/70">Availability: <span className="text-slate-200">{minutesToHM(before)}</span> → <span className="text-emerald-400">{minutesToHM(after)}</span></div>
-                <div className="text-xs text-slate-300/70">Scheduled that day: <span className="text-slate-200">{minutesToHM(dayBlocks.reduce((s,b)=>s+b.plannedMinutes,0))}</span></div>
-                <div className="max-h-40 overflow-auto border border-[#1b2344] rounded p-2">
-                  {dayBlocks.length===0 ? (
-                    <div className="text-[11px] text-slate-300/50">No items planned</div>
-                  ) : (
-                    <ul className="text-[11px] space-y-1">
-                      {dayBlocks.map(b => (
-                        <li key={b.id} className="flex items-center justify-between">
-                          <span className="truncate mr-2">{b.course ? `${b.course}: `:''}{b.title}</span>
-                          <span>{minutesToHM(b.plannedMinutes)}</span>
-                        </li>
-                      ))}
-                    </ul>
-                  )}
-                </div>
-                <div className="flex items-center justify-end gap-2 mt-1">
-                  <button onClick={()=>setAddWinModal(null)} className="px-3 py-2 rounded border border-[#1b2344] text-sm">Cancel</button>
-                  <button disabled={!valid} onClick={()=>{ if(!valid) return; const st = fmt12Input(normHHMM(startVal||'')||''); const en = fmt12Input(normHHMM(endVal||'')||''); setWindowsByDow(prev=>{ const arr=(prev[dow]||[]).slice(); arr.push({ start: st, end: en }); return { ...prev, [dow]: arr }; }); setAddWinModal(null); }} className={`px-3 py-2 rounded text-sm ${valid? 'bg-emerald-600 hover:bg-emerald-500':'bg-[#1b2344] text-slate-400'}`}>Add window</button>
-                </div>
-              </div>
-            </div>
-          ); })()}
-        </div>
-      )}
 
       {showCatchup && catchupPreview && (
         <div role="dialog" aria-modal="true" className="fixed inset-0 z-50 flex items-center justify-center">

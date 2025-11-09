@@ -51,7 +51,6 @@ function countPagesFromTitle(title: string): number {
     const a = parseInt(mm[1],10); const b = mm[2]? parseInt(mm[2],10): a;
     if (!isNaN(a) && !isNaN(b) && b >= a) pages += (b - a + 1);
   }
-
   return pages;
 }
 function minutesPerPageForCourse(course?: string | null): number {
@@ -334,6 +333,8 @@ export default function TodayPage() {
   const [nowTs, setNowTs] = useState<number>(() => Date.now());
   const [logModal, setLogModal] = useState<{ mode: 'partial'|'finish'; itemId: string } | null>(null);
   const [logForm, setLogForm] = useState<{ minutes: string; focus: string; notes: string; pages: string; portion: string }>({ minutes: '', focus: '5', notes: '', pages: '', portion: '' });
+  const [editModal, setEditModal] = useState<{ itemId: string } | null>(null);
+  const [editForm, setEditForm] = useState<{ title: string; notes: string; estimate: string; segments: string; pph: string }>({ title: '', notes: '', estimate: '', segments: '', pph: '' });
   useEffect(() => {
     const id = setInterval(() => {
       setCtNow(new Intl.DateTimeFormat('en-US',{ timeZone:'America/Chicago', hour:'numeric', minute:'2-digit', hour12:true }).format(new Date()));
@@ -682,6 +683,20 @@ export default function TodayPage() {
     });
   }
 
+  function resetTimer(id: string) {
+    setActiveItemId(prev => {
+      if (prev === id && itemStartAt[id]) {
+        const delta = Math.max(0, Math.floor((Date.now() - (itemStartAt[id] || 0)) / 1000));
+        if (delta > 0) {
+          // discard unsaved elapsed for current run
+          setItemStartAt(st => ({ ...st, [id]: 0 }));
+        }
+      }
+      return prev === id ? null : prev;
+    });
+    setItemSeconds(s => ({ ...s, [id]: 0 }));
+  }
+
   async function recalcFromSessions(it: TodayPlanItem) {
     try {
       if (typeof window === 'undefined') return;
@@ -828,6 +843,44 @@ export default function TodayPage() {
     setItemSeconds(prev => ({ ...prev, [it.id]: 0 }));
     if (activeItemId === it.id) setActiveItemId(null);
     setLogModal(null);
+  }
+
+  function openEditFor(id: string) {
+    const it = plan.items.find(x => x.id === id); if (!it) return;
+    const t: any = (tasks||[]).find((x:any) => (x.id===id) || (x.title===it.title && (x.course||'')===(it.course||''))) || {};
+    const segs = Array.isArray(t.assignedSegments) ? t.assignedSegments as any[] : [];
+    const segmentsText = segs.map((s:any) => Array.isArray(s?.ranges)? s.ranges.map((r:any)=>`${r.start}-${r.end}`).join(',') : '').filter(Boolean).join('; ');
+    setEditForm({
+      title: String(t.title || it.title || ''),
+      notes: String(t.notes || ''),
+      estimate: String(Math.max(0, Number(t.estimatedMinutes || it.minutes) || 0)),
+      segments: segmentsText,
+      pph: (()=>{ try{ const raw=window.localStorage.getItem('coursePphMap'); const map=raw?JSON.parse(raw):{}; const k=(it.course||'').toString().toLowerCase(); const v=(map&&map[k]&&map[k].pph)||''; return v?String(v):''; }catch{return '';} })()
+    });
+    setEditModal({ itemId: id });
+  }
+
+  async function saveEdit() {
+    if (!editModal) return;
+    const id = editModal.itemId;
+    const it = plan.items.find(x => x.id === id); if (!it) { setEditModal(null); return; }
+    const est = Math.max(0, parseInt(editForm.estimate||'0',10) || 0);
+    const segmentsText = (editForm.segments||'').trim();
+    const segs = segmentsText ? segmentsText.split(/\s*;\s*/).map(part => {
+      const ranges = part.split(/\s*,\s*/).map(r=>{ const mm=/^(\d+)-(\d+)$/.exec(r); if(!mm) return null; return { start: parseInt(mm[1],10), end: parseInt(mm[2],10) };}).filter(Boolean);
+      return { mode: 'read', ranges } as any;
+    }).filter((s:any)=>Array.isArray(s.ranges)&&s.ranges.length>0) : undefined;
+    try {
+      if (isUUID(id)) {
+        const body:any = { title: editForm.title, notes: editForm.notes||null, estimatedMinutes: est>0?est:null };
+        if (segs && segs.length>0) body.assignedSegments = segs;
+        await fetch(`/api/tasks/${id}`, { method:'PATCH', headers:{'Content-Type':'application/json'}, body: JSON.stringify(body) });
+      }
+      setTasks(prev => prev.map((t:any)=> (t.id===id? { ...t, title: editForm.title, notes: editForm.notes||null, estimatedMinutes: est>0?est:null, assignedSegments: segs||t.assignedSegments } : t)) as any);
+      try { if (editForm.pph) { const n=parseInt(editForm.pph,10); if(!isNaN(n)&&n>0){ const raw=window.localStorage.getItem('coursePphMap'); const map=raw?JSON.parse(raw):{}; const k=(it.course||'').toString().toLowerCase(); map[k]={pph:n}; window.localStorage.setItem('coursePphMap', JSON.stringify(map)); } } } catch {}
+      setPlan(p => ({ ...p, items: p.items.map(x=> x.id===id? { ...x, title: editForm.title, minutes: est>0?est:x.minutes } : x) }));
+    } catch {}
+    setEditModal(null);
   }
 
   async function logSessionForItem(it: TodayPlanItem, minutes: number) {
@@ -1021,6 +1074,22 @@ export default function TodayPage() {
     return out;
   }, [plan.items, plan.dateKey, schedule, tasks, sessions]);
 
+  function statsForTaskId(taskId: string, title: string, course: string) {
+    try {
+      const t:any = (tasks||[]).find((x:any)=>x.id===taskId || (x.title===title && (x.course||'')===(course||''))) || null;
+      const assignedNorm = normalizeRanges((t as any)?.assignedSegments || null);
+      const assignedIv = assignedUnion(assignedNorm);
+      const logs: LogEntry[] = (sessions||[]).filter((s:any)=> (s?.taskId===taskId)).map((s:any)=>({ mode: (s?.mode||null) as any, ranges: (Array.isArray(s?.ranges)?s.ranges:null), pages: (Array.isArray(s?.pages)?s.pages:null), minutes: Number(s?.minutes)||0 })) as LogEntry[];
+      const cmp = completedUnion(logs);
+      const remainingIv = remainingUnion(assignedIv, cmp.iv);
+      const pagesLeft = (assignedIv.length>0 && cmp.hasPageInfo) ? countPages(remainingIv) : (assignedIv.length>0 && cmp.hasPageInfo===false ? null : 0);
+      const pph = pagesPerHourForCourse(course) || 18;
+      const etaMinutes = (typeof pagesLeft==='number' && pagesLeft!=null) ? Math.ceil((pagesLeft / Math.max(pph,0.1)) * 60) : null;
+      const remainingLabel = (typeof pagesLeft==='number' && pagesLeft!=null) ? formatRanges(remainingIv) : '';
+      return { pagesLeft, pph: Math.round(pph), etaMinutes: (etaMinutes||0), remainingLabel, showRemaining: (assignedIv.length>0 && cmp.hasPageInfo) };
+    } catch { return { pagesLeft:null, pph:18, etaMinutes:0, remainingLabel:'', showRemaining:false }; }
+  }
+
   // Streaks (Chicago local dates)
   const activeDaysSet = useMemo(() => {
     const set = new Set<string>();
@@ -1148,11 +1217,7 @@ export default function TodayPage() {
             <h2 className="text-lg font-medium">Today</h2>
             <p className="text-xs text-slate-300/60">Central time · {dateKey} · {ctNow}</p>
           </div>
-          {!plan.locked ? (
-            <button aria-label="Open Plan Today" onClick={()=>setStep(1)} className="inline-flex items-center justify-center px-4 py-2 rounded bg-emerald-600 hover:bg-emerald-500 text-sm font-medium transition focus-visible:outline focus-visible:outline-2 focus-visible:outline-emerald-500">Plan Today</button>
-          ) : (
-            <div className="text-sm text-slate-300/80">Planned {totalPlannedLabel}</div>
-          )}
+          <div className="text-xs text-slate-300/80">Today’s Plan comes from your schedule.</div>
         </div>
 
         {/* Wizard */}
@@ -1237,18 +1302,18 @@ export default function TodayPage() {
           <div className="min-h-[140px]">
             <h3 className="text-sm font-medium mb-2">Today’s Plan</h3>
             {plan.items.length===0 ? (
-              <div className="text-xs text-slate-300/80">No items in plan yet. Press <button onClick={()=>setStep(1)} className="underline focus-visible:outline focus-visible:outline-2 focus-visible:outline-blue-500">Plan Today</button> or add tasks in <a href="/tasks?tag=inbox" className="underline focus-visible:outline focus-visible:outline-2 focus-visible:outline-blue-500">Inbox</a>.</div>
+              <div className="text-xs text-slate-300/80">No items yet. Today’s Plan comes from your schedule.</div>
             ) : (
               <ul className="space-y-3">
                 {plan.items.map((it, i) => {
                   const st = readingStatsByItem[it.id] || { assignedIv: [], assignedLabel: '', remainingIv: [], remainingLabel: '', pagesLeft: null as number|null, pph: pagesPerHourForCourse(it.course), etaMinutes: Math.max(1, Math.round(Number(it.minutes)||0)), loggedMinutes: (sessions||[]).filter((s:any)=>s?.taskId===it.id).reduce((a:number,s:any)=>a+(Number(s?.minutes)||0),0), showRemaining: false };
                   const pct = Math.min(100, Math.round((st.loggedMinutes/Math.max(st.etaMinutes,1))*100));
                   return (
-                    <li key={it.id} className="rounded-2xl p-5 md:p-6 border border-white/10 bg-white/5">
+                    <li key={it.id} className="rounded-2xl p-5 md:p-6 border border-white/10 bg-white/5" style={{ borderLeft: `3px solid ${courseColor(it.course)}` }}>
                       <div className="flex items-start justify-between gap-4">
                         <div className="flex-1 min-w-0">
                           <div className="mb-1">
-                            {it.course ? <span className="mr-2 inline-flex items-center text-[11px] px-1.5 py-0.5 rounded border border-white/10 text-white/80">{it.course}</span> : null}
+                            {it.course ? <span className="mr-2 inline-flex items-center text-[11px] px-1.5 py-0.5 rounded border border-white/10 text-white/80" style={{ backgroundColor: 'transparent' }}>{it.course}</span> : null}
                             <span className="text-lg font-semibold align-middle line-clamp-2" title={stripControlChars(it.title)}>{i+1}. {(() => { const c = String(it.course||''); const raw = stripControlChars(String(it.title||'')); const lc = c.toLowerCase(); const lraw = raw.toLowerCase(); if (lc && (lraw.startsWith(lc+':') || lraw.startsWith(lc+' -') || lraw.startsWith(lc+' —') || lraw.startsWith(lc+' –'))) { return raw.slice(c.length+1).trimStart(); } return raw; })()}</span>
                           </div>
                           {st.showRemaining ? (
@@ -1277,6 +1342,8 @@ export default function TodayPage() {
                             <button aria-label="Recalculate from logs" onClick={()=>recalcFromSessions(it)} className="px-2 py-1 rounded border border-emerald-700 text-emerald-300 text-xs">Recalc</button>
                             <button aria-label="Partial complete" onClick={()=>openLogFor(it.id,'partial')} className="px-2 py-1 rounded border border-[#1b2344] text-xs">Partial</button>
                             <button aria-label="Finish task" onClick={()=>openLogFor(it.id,'finish')} className="px-2 py-1 rounded bg-emerald-600 hover:bg-emerald-500 text-xs">Finish</button>
+                            <button aria-label="Reset item timer" onClick={()=>resetTimer(it.id)} className="px-2 py-1 rounded border border-[#1b2344] text-xs">Reset</button>
+                            <button aria-label="Edit task" onClick={()=>openEditFor(it.id)} className="px-2 py-1 rounded border border-[#1b2344] text-xs">Edit</button>
                           </div>
                         </div>
                       </div>
@@ -1327,13 +1394,26 @@ export default function TodayPage() {
                     {selectedBlocks.length===0 ? (
                       <div className="text-[11px] text-slate-300/60">—</div>
                     ) : (
-                      <ul className="text-sm space-y-1">
-                        {selectedBlocks.map(b => (
-                          <li key={b.id} className="flex items-center justify-between">
-                            <span className="truncate">{b.course ? `${b.course}: ` : ''}{b.title}</span>
-                            <span className="text-slate-300/70">{minutesToHM(b.plannedMinutes)}</span>
+                      <ul className="space-y-2">
+                        {selectedBlocks.map((b, i) => { const st = statsForTaskId(b.taskId, b.title, b.course); const pct = st.etaMinutes>0 ? 0 : 0; return (
+                          <li key={b.id} className="rounded-2xl p-3 border border-white/10 bg-white/5 flex items-start justify-between gap-2" style={{ borderLeft: `3px solid ${courseColor(b.course)}` }}>
+                            <div className="min-w-0">
+                              <div className="text-sm">
+                                {b.course ? <span className="mr-2 inline-flex items-center text-[10px] px-1.5 py-0.5 rounded border border-white/10 text-white/80">{b.course}</span> : null}
+                                <span className="font-medium align-middle line-clamp-2" title={stripControlChars(b.title)}>{i+1}. {(() => { const c = String(b.course||''); const raw = stripControlChars(String(b.title||'')); const lc = c.toLowerCase(); const lraw = raw.toLowerCase(); if (lc && (lraw.startsWith(lc+':') || lraw.startsWith(lc+' -') || lraw.startsWith(lc+' —') || lraw.startsWith(lc+' –'))) { return raw.slice(c.length+1).trimStart(); } return raw; })()}</span>
+                              </div>
+                              {st.showRemaining ? (
+                                <div className="text-[12px] text-slate-200"><span className="font-medium">Remaining:</span> {st.remainingLabel} <span className="text-slate-300/70">({st.pagesLeft}p)</span></div>
+                              ) : null}
+                            </div>
+                            <div className="shrink-0 inline-flex items-center px-2 py-0.5 rounded-md text-xs bg-white/10 leading-tight">
+                              <div className="text-right">
+                                <div className="font-medium">{st.pagesLeft==null?`Est. ${minutesToHM(Math.max(1, Math.round(Number(b.plannedMinutes)||0)))}`:minutesToHM(Math.max(1, st.etaMinutes))}</div>
+                                {typeof st.pagesLeft==='number' ? (<div className="text-[10px] text-white/70">{st.pagesLeft}p @ {st.pph}pph</div>) : null}
+                              </div>
+                            </div>
                           </li>
-                        ))}
+                        ); })}
                       </ul>
                     )}
                   </div>
