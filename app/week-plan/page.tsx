@@ -190,16 +190,18 @@ export default function WeekPlanPage() {
       }
     } catch {}
     let canceled = false;
+    let settingsCache: Record<string, any> = {};
     (async () => {
       try {
         const [schRes, setRes] = await Promise.all([
           fetch('/api/schedule', { cache: 'no-store' }),
-          fetch('/api/settings?keys=availabilityTemplateV1,weeklyGoalsV1,weekPlanShowConflicts,weekPlanWeekStartYmd,weekPlanTwoWeeksOnly,internshipColor,sportsLawReviewColor,availabilityStartHHMM,availabilityEndHHMM', { cache: 'no-store' })
+          fetch('/api/settings?keys=availabilityTemplateV1,weeklyGoalsV1,weekPlanShowConflicts,weekPlanWeekStartYmd,weekPlanTwoWeeksOnly,internshipColor,sportsLawReviewColor,availabilityStartHHMM,availabilityEndHHMM,weekScheduleV1', { cache: 'no-store' })
         ]);
         if (canceled) return;
         if (setRes.ok) {
           const sj = await setRes.json().catch(() => ({ settings: {} }));
           const settings = (sj?.settings || {}) as Record<string, any>;
+          settingsCache = settings;
           if (settings.availabilityTemplateV1 && typeof settings.availabilityTemplateV1 === 'object') {
             setAvailability(settings.availabilityTemplateV1 as any);
           }
@@ -231,9 +233,15 @@ export default function WeekPlanPage() {
           const local = loadSchedule();
           if (remote.length > 0) {
             setBlocks(remote as any);
-          } else if (local.length > 0) {
-            // Migrate local → server
-            try { await fetch('/api/schedule', { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ blocks: local }) }); } catch {}
+          } else {
+            // Try settings backup, then localStorage
+            const fromSettings = (settingsCache as any)?.weekScheduleV1;
+            if (Array.isArray(fromSettings) && fromSettings.length > 0) {
+              setBlocks(fromSettings as any);
+              try { await fetch('/api/schedule', { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ blocks: fromSettings }) }); } catch {}
+            } else if (local.length > 0) {
+              try { await fetch('/api/schedule', { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ blocks: local }) }); } catch {}
+            }
           }
         }
       } catch {}
@@ -243,10 +251,13 @@ export default function WeekPlanPage() {
   // Persist changes locally and to server
   useEffect(() => { saveAvailability(availability); }, [availability]);
   useEffect(() => { saveSchedule(blocks); }, [blocks]);
-  // Debounced server save for blocks
+  // Debounced server save for blocks (persist API + settings backup)
   useEffect(() => {
     const id = setTimeout(() => {
-      try { void fetch('/api/schedule', { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ blocks }) }); } catch {}
+      try {
+        void fetch('/api/schedule', { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ blocks }) });
+        void fetch('/api/settings', { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ weekScheduleV1: blocks }) });
+      } catch {}
     }, 400);
     return () => clearTimeout(id);
   }, [blocks]);
