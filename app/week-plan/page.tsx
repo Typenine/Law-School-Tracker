@@ -66,9 +66,10 @@ function endOfDayIso(ymdStr: string) { const [y,m,da]=ymdStr.split('-').map(n=>p
 function minutesPerPage(): number { if (typeof window==='undefined') return 3; const s=window.localStorage.getItem('minutesPerPage'); const n=s?parseFloat(s):NaN; return !isNaN(n)&&n>0?n:3; }
 function normHHMM(s?: string | null): string | null {
   const raw = (s||'').trim().toLowerCase(); if (!raw) return null;
-  const m = /^(\d{1,2})(?::?(\d{2}))?\s*([ap]m)?$/.exec(raw);
+  const m = /^(\d{1,2})(?::?(\d{2}))?\s*([ap]m?)?$/.exec(raw);
   if (!m) return null; let hh = parseInt(m[1],10); const mm = Math.min(59, Math.max(0, parseInt(m[2]||'0',10)));
-  const ap = (m[3]||'').toLowerCase(); if (ap) { if (hh === 12) hh = 0; if (ap==='pm') hh += 12; }
+  const apRaw = (m[3]||'').toLowerCase(); const ap = apRaw === 'a' ? 'am' : (apRaw === 'p' ? 'pm' : apRaw);
+  if (ap) { if (hh === 12) hh = 0; if (ap==='pm') hh += 12; }
   if (hh<0||hh>23) return null; return `${String(hh).padStart(2,'0')}:${String(mm).padStart(2,'0')}`;
 }
 function fmt12Input(s?: string | null): string {
@@ -160,6 +161,9 @@ export default function WeekPlanPage() {
   const [sessions, setSessions] = useState<any[]>([]);
   const [goals, setGoals] = useState<WeeklyGoal[]>([]);
   const [breaksByDow, setBreaksByDow] = useState<Record<number, Array<{ start?: string; end?: string }>>>({ 0:[],1:[],2:[],3:[],4:[],5:[],6:[] });
+  const [windowsByDow, setWindowsByDow] = useState<Record<number, Array<{ start?: string; end?: string }>>>({ 0:[],1:[],2:[],3:[],4:[],5:[],6:[] });
+  const [timePicker, setTimePicker] = useState<{ kind: 'win-start'|'win-end'|'br-start'|'br-end'; dow: number; index: number } | null>(null);
+  const [rowMenu, setRowMenu] = useState<{ kind: 'win'|'br'; dow: number; index: number } | null>(null);
   const [courses, setCourses] = useState<any[]>([]);
   const [twoWeeksOnly, setTwoWeeksOnly] = useState<boolean>(false);
   const [undoSnapshot, setUndoSnapshot] = useState<ScheduledBlock[] | null>(null);
@@ -218,12 +222,21 @@ export default function WeekPlanPage() {
           }
           const sStart: any = (settings as any).availabilityStartHHMM;
           const sEnd: any = (settings as any).availabilityEndHHMM;
-          if (sStart && typeof sStart === 'object') setAvailStartByDow(sStart as Record<number,string>);
-          else if (typeof sStart === 'string') setAvailStartByDow({0:sStart,1:sStart,2:sStart,3:sStart,4:sStart,5:sStart,6:sStart});
-          if (sEnd && typeof sEnd === 'object') setAvailEndByDow(sEnd as Record<number,string>);
-          else if (typeof sEnd === 'string') setAvailEndByDow({0:sEnd,1:sEnd,2:sEnd,3:sEnd,4:sEnd,5:sEnd,6:sEnd});
           const br = (settings as any).availabilityBreaksV1;
-          if (br && typeof br === 'object') setBreaksByDow(br as Record<number, Array<{ start?: string; end?: string }>>);
+          // pick latest between local and remote if updatedAt present
+          const readLocalJson = (key: string) => { try { if (typeof window!=='undefined') { const raw = window.localStorage.getItem(key); return raw?JSON.parse(raw):null; } } catch {} return null; };
+          const localStart = readLocalJson(LS_AVAIL_START);
+          const localEnd = readLocalJson(LS_AVAIL_END);
+          const localBr = readLocalJson(LS_AVAIL_BREAKS);
+          const ts = (o:any) => { try { return Date.parse(o?.updatedAt||''); } catch { return 0; } };
+          const bestStart = (ts(localStart) > ts(sStart)) ? localStart : sStart;
+          const bestEnd = (ts(localEnd) > ts(sEnd)) ? localEnd : sEnd;
+          const bestBr = (ts(localBr) > ts(br)) ? localBr : br;
+          if (bestStart && typeof bestStart === 'object') setAvailStartByDow(bestStart as Record<number,string>);
+          else if (typeof bestStart === 'string') setAvailStartByDow({0:bestStart,1:bestStart,2:bestStart,3:bestStart,4:bestStart,5:bestStart,6:bestStart});
+          if (bestEnd && typeof bestEnd === 'object') setAvailEndByDow(bestEnd as Record<number,string>);
+          else if (typeof bestEnd === 'string') setAvailEndByDow({0:bestEnd,1:bestEnd,2:bestEnd,3:bestEnd,4:bestEnd,5:bestEnd,6:bestEnd});
+          if (bestBr && typeof bestBr === 'object') setBreaksByDow(bestBr as Record<number, Array<{ start?: string; end?: string }>>);
           if (typeof (settings as any).availabilityAutoFromWindow === 'boolean') setAutoFromWindow((settings as any).availabilityAutoFromWindow as boolean);
           setSettingsReady(true);
         }
@@ -264,40 +277,103 @@ export default function WeekPlanPage() {
   useEffect(() => { try { if (typeof window !== 'undefined') window.localStorage.setItem(LS_WEEK_START, ymd(weekStart)); } catch {} try { void fetch('/api/settings', { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ weekPlanWeekStartYmd: ymd(weekStart) }) }); } catch {} }, [weekStart]);
   useEffect(() => { try { void fetch('/api/settings', { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ availabilityTemplateV1: availability }) }); } catch {} }, [availability]);
   useEffect(() => { try { void fetch('/api/settings', { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ weeklyGoalsV1: goals }) }); } catch {} }, [goals]);
-  useEffect(() => { try { if (typeof window!=='undefined') window.localStorage.setItem(LS_AVAIL_START, JSON.stringify(availStartByDow)); if (settingsReady) void fetch('/api/settings', { method:'PATCH', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ availabilityStartHHMM: availStartByDow }) }); } catch {} }, [availStartByDow, settingsReady]);
-  useEffect(() => { try { if (typeof window!=='undefined') window.localStorage.setItem(LS_AVAIL_END, JSON.stringify(availEndByDow)); if (settingsReady) void fetch('/api/settings', { method:'PATCH', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ availabilityEndHHMM: availEndByDow }) }); } catch {} }, [availEndByDow, settingsReady]);
-  useEffect(() => { try { if (typeof window!=='undefined') window.localStorage.setItem(LS_AVAIL_BREAKS, JSON.stringify(breaksByDow)); if (settingsReady) void fetch('/api/settings', { method:'PATCH', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ availabilityBreaksV1: breaksByDow }) }); } catch {} }, [breaksByDow, settingsReady]);
+  useEffect(() => { try { const nowIso=new Date().toISOString(); if (typeof window!=='undefined') window.localStorage.setItem(LS_AVAIL_START, JSON.stringify({ ...availStartByDow, updatedAt: nowIso })); if (settingsReady) void fetch('/api/settings', { method:'PATCH', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ availabilityStartHHMM: { ...availStartByDow, updatedAt: nowIso } }) }); } catch {} }, [availStartByDow, settingsReady]);
+  useEffect(() => { try { const nowIso=new Date().toISOString(); if (typeof window!=='undefined') window.localStorage.setItem(LS_AVAIL_END, JSON.stringify({ ...availEndByDow, updatedAt: nowIso })); if (settingsReady) void fetch('/api/settings', { method:'PATCH', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ availabilityEndHHMM: { ...availEndByDow, updatedAt: nowIso } }) }); } catch {} }, [availEndByDow, settingsReady]);
+  useEffect(() => { try { const nowIso=new Date().toISOString(); if (typeof window!=='undefined') window.localStorage.setItem(LS_AVAIL_BREAKS, JSON.stringify({ ...breaksByDow, updatedAt: nowIso })); if (settingsReady) void fetch('/api/settings', { method:'PATCH', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ availabilityBreaksV1: { ...breaksByDow, updatedAt: nowIso } }) }); } catch {} }, [breaksByDow, settingsReady]);
   // Persist auto-from-window toggle
   useEffect(() => { try { if (typeof window!=='undefined') window.localStorage.setItem(LS_AVAIL_AUTO, autoFromWindow ? 'true':'false'); if (settingsReady) void fetch('/api/settings', { method:'PATCH', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ availabilityAutoFromWindow: autoFromWindow }) }); } catch {} }, [autoFromWindow, settingsReady]);
 
-  // Auto derive availability minutes from Start/End minus breaks
+  // Derive availability minutes from Windows minus Breaks (breaks clipped to windows)
   useEffect(() => {
     if (!autoFromWindow) return;
     setAvailability(prev => {
       const next: Record<number, number> = { ...prev } as any;
       let changed = false;
       for (const dow of [0,1,2,3,4,5,6]) {
-        const s = normHHMM(availStartByDow[dow]||'');
-        const e = normHHMM(availEndByDow[dow]||'');
-        const sMin = toMin(s); const eMin = toMin(e);
-        if (sMin==null || eMin==null || eMin<=sMin) continue; // require valid window
-        const winStart = sMin; const winEnd = eMin; const baseLen = Math.max(0, winEnd - winStart);
-        const brs = breaksByDow[dow] || [];
-        const toI = (v?: string | null) => toMin(normHHMM(v||''));
-        const rawIntervals: Array<[number,number]> = brs.map(b => [toI(b.start)??-1, toI(b.end)??-1]).filter(([a,b]) => a>=0 && b>=0 && b>a) as Array<[number,number]>;
-        rawIntervals.sort((a,b)=>a[0]-b[0]);
-        const merged: Array<[number,number]> = [];
-        for (const iv of rawIntervals) {
-          if (!merged.length || iv[0] > merged[merged.length-1][1]) merged.push([iv[0], iv[1]]);
-          else merged[merged.length-1][1] = Math.max(merged[merged.length-1][1], iv[1]);
+        const wins = (windowsByDow[dow]||[]) as Array<{ start?: string; end?: string }>;
+        const winIntervals: Array<[number,number]> = wins
+          .map(w => [toMin(normHHMM(w.start||''))??-1, toMin(normHHMM(w.end||''))??-1])
+          .filter(([a,b]) => a>=0 && b>=0 && b>a) as Array<[number,number]>;
+        winIntervals.sort((a,b)=>a[0]-b[0]);
+        const mergedWins: Array<[number,number]> = [];
+        for (const iv of winIntervals) {
+          if (!mergedWins.length || iv[0] > mergedWins[mergedWins.length-1][1]) mergedWins.push([iv[0], iv[1]]);
+          else mergedWins[mergedWins.length-1][1] = Math.max(mergedWins[mergedWins.length-1][1], iv[1]);
         }
-        let breakOverlap = 0; for (const [a,b] of merged) { const sC = Math.max(winStart, a); const eC = Math.min(winEnd, b); if (eC > sC) breakOverlap += (eC - sC); }
-        const windowMinutes = Math.max(0, baseLen - breakOverlap);
-        if ((next as any)[dow] !== windowMinutes) { (next as any)[dow] = windowMinutes; changed = true; }
+        const brs = (breaksByDow[dow]||[]) as Array<{ start?: string; end?: string }>;
+        const brIntervals: Array<[number,number]> = brs
+          .map(b => [toMin(normHHMM(b.start||''))??-1, toMin(normHHMM(b.end||''))??-1])
+          .filter(([a,b]) => a>=0 && b>=0 && b>a) as Array<[number,number]>;
+        brIntervals.sort((a,b)=>a[0]-b[0]);
+        const mergedBr: Array<[number,number]> = [];
+        for (const iv of brIntervals) {
+          if (!mergedBr.length || iv[0] > mergedBr[mergedBr.length-1][1]) mergedBr.push([iv[0], iv[1]]);
+          else mergedBr[mergedBr.length-1][1] = Math.max(mergedBr[mergedBr.length-1][1], iv[1]);
+        }
+        let total = 0;
+        for (const [ws,we] of mergedWins) {
+          const base = Math.max(0, we - ws);
+          let over = 0;
+          for (const [bs,be] of mergedBr) { const sC = Math.max(ws, bs); const eC = Math.min(we, be); if (eC>sC) over += (eC - sC); }
+          total += Math.max(0, base - over);
+        }
+        if ((next as any)[dow] !== total) { (next as any)[dow] = total; changed = true; }
       }
       return changed ? next : prev;
     });
-  }, [availStartByDow, availEndByDow, breaksByDow, autoFromWindow]);
+  }, [windowsByDow, breaksByDow, autoFromWindow]);
+
+  // On first load, hydrate Windows from Start/End +/- Breaks (complement of breaks within [start,end])
+  useEffect(() => {
+    const empty = [0,1,2,3,4,5,6].every(d => ((windowsByDow[d]||[]).length===0));
+    if (!empty) return;
+    const out: Record<number, Array<{ start?: string; end?: string }>> = { 0:[],1:[],2:[],3:[],4:[],5:[],6:[] };
+    for (const dow of [0,1,2,3,4,5,6]) {
+      const s = toMin(normHHMM(availStartByDow[dow]||''));
+      const e = toMin(normHHMM(availEndByDow[dow]||''));
+      if (s==null || e==null || e<=s) { out[dow] = []; continue; }
+      const brRaw = (breaksByDow[dow]||[]).map(b=>[toMin(normHHMM(b.start||''))??-1, toMin(normHHMM(b.end||''))??-1]).filter(([a,b])=>a>=0&&b>=0&&b>a).sort((a,b)=>a[0]-b[0]) as Array<[number,number]>;
+      const mergedBr: Array<[number,number]> = [];
+      for (const iv of brRaw) { if (!mergedBr.length || iv[0] > mergedBr[mergedBr.length-1][1]) mergedBr.push([iv[0], iv[1]]); else mergedBr[mergedBr.length-1][1] = Math.max(mergedBr[mergedBr.length-1][1], iv[1]); }
+      const wins: Array<[number,number]> = [];
+      let cur = s;
+      for (const [bs,be] of mergedBr) { const ss = Math.max(cur, s); const ee = Math.min(e, bs); if (ee>ss) wins.push([ss, ee]); cur = Math.max(cur, be); }
+      if (cur < e) wins.push([cur, e]);
+      out[dow] = wins.map(([a,b]) => ({ start: fmt12Input(`${String(Math.floor(a/60)).padStart(2,'0')}:${String(a%60).padStart(2,'0')}`), end: fmt12Input(`${String(Math.floor(b/60)).padStart(2,'0')}:${String(b%60).padStart(2,'0')}`) }));
+    }
+    setWindowsByDow(out);
+  }, [availStartByDow, availEndByDow, breaksByDow]);
+
+  // When Windows or Breaks change, derive Start/End (earliest to latest) and merged Breaks (user + gaps) for persistence
+  useEffect(() => {
+    const sMap: Record<number,string> = {0:'',1:'',2:'',3:'',4:'',5:'',6:''};
+    const eMap: Record<number,string> = {0:'',1:'',2:'',3:'',4:'',5:'',6:''};
+    const brMap: Record<number, Array<{ start?: string; end?: string }>> = {0:[],1:[],2:[],3:[],4:[],5:[],6:[]};
+    for (const dow of [0,1,2,3,4,5,6]) {
+      const winIv = (windowsByDow[dow]||[]).map(w=>[toMin(normHHMM(w.start||''))??-1, toMin(normHHMM(w.end||''))??-1]).filter(([a,b])=>a>=0&&b>=0&&b>a).sort((a,b)=>a[0]-b[0]) as Array<[number,number]>;
+      let minS: number | null = null; let maxE: number | null = null;
+      for (const [a,b] of winIv) { if (minS==null||a<minS) minS=a; if (maxE==null||b>maxE) maxE=b; }
+      sMap[dow] = minS!=null ? fmt12Input(`${String(Math.floor(minS/60)).padStart(2,'0')}:${String(minS%60).padStart(2,'0')}`) : '';
+      eMap[dow] = maxE!=null ? fmt12Input(`${String(Math.floor(maxE/60)).padStart(2,'0')}:${String(maxE%60).padStart(2,'0')}`) : '';
+      // Gaps between windows inside [minS,maxE]
+      const gaps: Array<[number,number]> = [];
+      if (minS!=null && maxE!=null && maxE>minS) {
+        let cur = minS;
+        for (const [a,b] of winIv) { if (a>cur) gaps.push([cur,a]); cur = Math.max(cur, b); }
+        if (cur<maxE) gaps.push([cur,maxE]);
+      }
+      const userBr = (breaksByDow[dow]||[]).map(b=>[toMin(normHHMM(b.start||''))??-1, toMin(normHHMM(b.end||''))??-1]).filter(([a,b])=>a>=0&&b>=0&&b>a) as Array<[number,number]>;
+      const allBr = [...gaps, ...userBr].sort((a,b)=>a[0]-b[0]);
+      const merged: Array<[number,number]> = [];
+      for (const iv of allBr) { if (!merged.length || iv[0] > merged[merged.length-1][1]) merged.push([iv[0], iv[1]]); else merged[merged.length-1][1] = Math.max(merged[merged.length-1][1], iv[1]); }
+      brMap[dow] = merged.map(([a,b])=>({ start: fmt12Input(`${String(Math.floor(a/60)).padStart(2,'0')}:${String(a%60).padStart(2,'0')}`), end: fmt12Input(`${String(Math.floor(b/60)).padStart(2,'0')}:${String(b%60).padStart(2,'0')}`) }));
+    }
+    // Only update states if actually changed to avoid loops
+    const eqObj = (a:any,b:any) => JSON.stringify(a)===JSON.stringify(b);
+    if (!eqObj(sMap, availStartByDow)) setAvailStartByDow(sMap);
+    if (!eqObj(eMap, availEndByDow)) setAvailEndByDow(eMap);
+    if (!eqObj(brMap, breaksByDow)) setBreaksByDow(brMap);
+  }, [windowsByDow]);
 
   // Fetch tasks for Catch-Up
   useEffect(() => {
@@ -587,6 +663,12 @@ export default function WeekPlanPage() {
     if (nextBlocks.length) setBlocks(prev => [...prev, ...nextBlocks]);
   }
 function toMin(hhmm?: string | null): number | null { if (!hhmm) return null; const m=/^(\d{2}):(\d{2})$/.exec(hhmm); if(!m) return null; const h=parseInt(m[1],10), mi=parseInt(m[2],10); if(isNaN(h)||isNaN(mi)) return null; return h*60+mi; }
+function minutesToHHMM(mins: number): string { const m = ((mins % 1440) + 1440) % 1440; const h = Math.floor(m/60); const mi = m % 60; return `${String(h).padStart(2,'0')}:${String(mi).padStart(2,'0')}`; }
+function adjustTimeText(val: string, deltaMin: number): string {
+  const n = toMin(normHHMM(val||'')); if (n==null) return val;
+  const next = minutesToHHMM(n + deltaMin);
+  return fmt12Input(next);
+}
 function parseAvailFlexible(input: string): number | null {
     const s = (input||'').trim().toLowerCase();
     if (!s) return null;
@@ -649,80 +731,86 @@ function parseAvailFlexible(input: string): number | null {
           </div>
         </div>
         <div className="space-y-3">
-          <div className="text-sm text-slate-300/70">Availability (hours:minutes per weekday)</div>
-          <div className="grid grid-cols-2 sm:grid-cols-4 md:grid-cols-7 gap-3">
+          <div className="text-sm text-slate-300/70">Availability (windows − breaks) per weekday</div>
+          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-7 gap-3">
             {[6,0,1,2,3,4,5].map(dow => (
-              <div key={dow} className="rounded border border-[#1b2344] p-3">
-                <div className="flex items-center justify-between mb-1">
-                  <label className="block text-sm" htmlFor={`avail-${dow}`}>{['Sun','Mon','Tue','Wed','Thu','Fri','Sat'][dow]}</label>
-                  <div className="text-xs text-slate-300/70">{minutesToHM(availability[dow] ?? 0)}</div>
-                </div>
-                <div className="flex items-center gap-2">
-                  <input id={`avail-${dow}`} type="text" inputMode="numeric" placeholder="H:MM" value={minutesToHM(availability[dow] ?? 0)} onChange={e=>setAvailForDow(dow, e.target.value)} disabled={autoFromWindow} className="flex-1 bg-[#0b1020] border border-[#1b2344] rounded px-2 py-2 text-sm focus-visible:outline focus-visible:outline-2 focus-visible:outline-emerald-500 disabled:opacity-50" />
-                  <div className="flex items-center gap-1">
-                    <button aria-label="Minus 30 minutes" onClick={()=>bumpAvail(dow,-30)} disabled={autoFromWindow} className="px-2 py-1 rounded border border-[#1b2344] text-xs disabled:opacity-50">-30</button>
-                    <button aria-label="Minus 15 minutes" onClick={()=>bumpAvail(dow,-15)} disabled={autoFromWindow} className="px-2 py-1 rounded border border-[#1b2344] text-xs disabled:opacity-50">-15</button>
-                    <button aria-label="Plus 15 minutes" onClick={()=>bumpAvail(dow,15)} disabled={autoFromWindow} className="px-2 py-1 rounded border border-[#1b2344] text-xs disabled:opacity-50">+15</button>
-                    <button aria-label="Plus 30 minutes" onClick={()=>bumpAvail(dow,30)} disabled={autoFromWindow} className="px-2 py-1 rounded border border-[#1b2344] text-xs disabled:opacity-50">+30</button>
+              <div key={dow} className="rounded-2xl p-5 md:p-6 border border-white/10 bg-white/5 space-y-3">
+                <div className="flex items-center justify-between">
+                  <div className="text-sm">{['Sun','Mon','Tue','Wed','Thu','Fri','Sat'][dow]}</div>
+                  <div className="flex items-center gap-2">
+                    <div className="text-xs text-slate-300/70">{minutesToHM(availability[dow] ?? 0)}</div>
+                    <div className="hidden md:flex items-center gap-2">
+                      <button onClick={()=>setWindowsByDow(prev=>{ const arr=(prev[dow]||[]).slice(); arr.push({ start:'', end:'' }); return { ...prev, [dow]: arr }; })} className="px-2 py-1 rounded border border-white/10 text-xs">Add window</button>
+                      <button onClick={()=>setBreaksByDow(prev=>{ const arr=(prev[dow]||[]).slice(); arr.push({ start:'', end:'' }); return { ...prev, [dow]: arr }; })} className="px-2 py-1 rounded border border-white/10 text-xs">Add break</button>
+                      <button onClick={()=>{ setWindowsByDow(prev=>{ const wins=(prev[dow]||[]).slice(); const out: Record<number, any[]> = {0:[],1:[],2:[],3:[],4:[],5:[],6:[]}; for(const k of [1,2,3,4,5]) out[k]=wins.slice(); return { ...prev, ...out } as any; }); setBreaksByDow(prev=>{ const br=(prev[dow]||[]).slice(); const out: Record<number, any[]> = {0:(prev[0]||[]),1:[],2:[],3:[],4:[],5:[],6:(prev[6]||[])}; for(const k of [1,2,3,4,5]) out[k]=br.slice(); return out as any; }); }} className="px-2 py-1 rounded border border-white/10 text-xs">Copy to weekdays</button>
+                    </div>
                   </div>
                 </div>
-                <div className="mt-3">
-                  <div className="text-xs mb-1">Breaks</div>
+                <div>
+                  <div className="text-xs text-white/70 mb-1">Windows</div>
                   <div className="space-y-2">
-                    {(breaksByDow[dow]||[]).map((br, i) => (
-                      <div key={i} className="grid grid-cols-2 gap-2 items-start">
-                        <div className="flex flex-col gap-1 items-start">
-                          <input type="text" placeholder="2:15" value={fmt12Input(br.start||'').replace(/\s?(AM|PM)$/,'')} onChange={e=>setBreaksByDow(prev=>{ const arr=(prev[dow]||[]).slice(); arr[i]={...arr[i], start:e.target.value}; return { ...prev, [dow]: arr }; })} onBlur={e=>setBreaksByDow(prev=>{ const arr=(prev[dow]||[]).slice(); arr[i]={...arr[i], start: fmt12Input(e.target.value)}; return { ...prev, [dow]: arr }; })} className="w-full bg-[#0b1020] border border-[#1b2344] rounded px-2 py-2 text-sm" />
-                          {(() => { const hh = toMin(normHHMM(br.start||'')); const isPM = (hh ?? 0) >= 12*60; return (
-                            <div className="inline-flex gap-1">
-                              <button type="button" onClick={()=>{ const cur=normHHMM(br.start||'')||'13:00'; const [H,M]=cur.split(':').map(v=>parseInt(v,10)); const nextH=(H>=12?H-12:H); const nn=`${String(nextH).padStart(2,'0')}:${String(M).padStart(2,'0')}`; setBreaksByDow(prev=>{ const arr=(prev[dow]||[]).slice(); arr[i]={...arr[i], start: nn}; return { ...prev, [dow]: arr }; }); }} className={`px-2 py-1 text-[10px] border rounded ${!isPM?'bg-emerald-600 text-white':'border-[#1b2344]'}`}>AM</button>
-                              <button type="button" onClick={()=>{ const cur=normHHMM(br.start||'')||'13:00'; const [H,M]=cur.split(':').map(v=>parseInt(v,10)); const nextH=(H<12?H+12:H); const nn=`${String(nextH).padStart(2,'0')}:${String(M).padStart(2,'0')}`; setBreaksByDow(prev=>{ const arr=(prev[dow]||[]).slice(); arr[i]={...arr[i], start: nn}; return { ...prev, [dow]: arr }; }); }} className={`px-2 py-1 text-[10px] border rounded ${isPM?'bg-emerald-600 text-white':'border-[#1b2344]'}`}>PM</button>
+                    {(windowsByDow[dow]||[]).map((w, i) => { const sOk = toMin(normHHMM(w.start||''))!=null; const eOk = toMin(normHHMM(w.end||''))!=null; const valid = (toMin(normHHMM(w.start||''))??0) < (toMin(normHHMM(w.end||''))??0); return (
+                      <div key={`w-${i}`} className="relative grid grid-cols-[1fr_1fr_auto] items-center gap-3">
+                        <input type="text" placeholder="7:00 AM" value={fmt12Input(w.start||'')} onChange={e=>setWindowsByDow(prev=>{ const arr=(prev[dow]||[]).slice(); arr[i]={...arr[i], start:e.target.value}; return { ...prev, [dow]: arr }; })} onKeyDown={e=>{ if(e.key==='ArrowUp'){ e.preventDefault(); setWindowsByDow(prev=>{ const arr=(prev[dow]||[]).slice(); arr[i]={...arr[i], start: adjustTimeText(arr[i].start||'', 5)}; return { ...prev, [dow]: arr }; }); } if(e.key==='ArrowDown'){ e.preventDefault(); setWindowsByDow(prev=>{ const arr=(prev[dow]||[]).slice(); arr[i]={...arr[i], start: adjustTimeText(arr[i].start||'', -5)}; return { ...prev, [dow]: arr }; }); } if(e.key==='PageUp'){ e.preventDefault(); setWindowsByDow(prev=>{ const arr=(prev[dow]||[]).slice(); arr[i]={...arr[i], start: adjustTimeText(arr[i].start||'', 15)}; return { ...prev, [dow]: arr }; }); } if(e.key==='PageDown'){ e.preventDefault(); setWindowsByDow(prev=>{ const arr=(prev[dow]||[]).slice(); arr[i]={...arr[i], start: adjustTimeText(arr[i].start||'', -15)}; return { ...prev, [dow]: arr }; }); } }} onClick={()=>setTimePicker(tp=> tp && tp.kind==='win-start' && tp.dow===dow && tp.index===i ? null : { kind:'win-start', dow, index:i })} className={`h-9 px-3 text-sm rounded-lg bg-white/10 border ${valid && sOk? 'border-white/10':'border-rose-600'} focus-visible:ring-2 focus-visible:ring-emerald-400`} />
+                        <input type="text" placeholder="5:00 PM" value={fmt12Input(w.end||'')} onChange={e=>setWindowsByDow(prev=>{ const arr=(prev[dow]||[]).slice(); arr[i]={...arr[i], end:e.target.value}; return { ...prev, [dow]: arr }; })} onKeyDown={e=>{ if(e.key==='ArrowUp'){ e.preventDefault(); setWindowsByDow(prev=>{ const arr=(prev[dow]||[]).slice(); arr[i]={...arr[i], end: adjustTimeText(arr[i].end||'', 5)}; return { ...prev, [dow]: arr }; }); } if(e.key==='ArrowDown'){ e.preventDefault(); setWindowsByDow(prev=>{ const arr=(prev[dow]||[]).slice(); arr[i]={...arr[i], end: adjustTimeText(arr[i].end||'', -5)}; return { ...prev, [dow]: arr }; }); } if(e.key==='PageUp'){ e.preventDefault(); setWindowsByDow(prev=>{ const arr=(prev[dow]||[]).slice(); arr[i]={...arr[i], end: adjustTimeText(arr[i].end||'', 15)}; return { ...prev, [dow]: arr }; }); } if(e.key==='PageDown'){ e.preventDefault(); setWindowsByDow(prev=>{ const arr=(prev[dow]||[]).slice(); arr[i]={...arr[i], end: adjustTimeText(arr[i].end||'', -15)}; return { ...prev, [dow]: arr }; }); } }} onClick={()=>setTimePicker(tp=> tp && tp.kind==='win-end' && tp.dow===dow && tp.index===i ? null : { kind:'win-end', dow, index:i })} className={`h-9 px-3 text-sm rounded-lg bg-white/10 border ${valid && eOk? 'border-white/10':'border-rose-600'} focus-visible:ring-2 focus-visible:ring-emerald-400`} />
+                        <div className="relative">
+                          <button aria-label="Row menu" onClick={()=>setRowMenu(m => m && m.kind==='win' && m.dow===dow && m.index===i ? null : { kind:'win', dow, index:i })} className="px-2 py-1 rounded border border-white/10 text-xs">…</button>
+                          {rowMenu && rowMenu.kind==='win' && rowMenu.dow===dow && rowMenu.index===i ? (
+                            <div className="absolute right-0 mt-2 z-10 rounded border border-white/10 bg-[#0b1020] p-2 text-xs space-y-1">
+                              <button onClick={()=>{ setWindowsByDow(prev=>{ const arr=(prev[dow]||[]).slice(); arr[i]={...arr[i], start: adjustTimeText(arr[i].start||'', -15), end: adjustTimeText(arr[i].end||'', -15)}; return { ...prev, [dow]: arr }; }); setRowMenu(null); }} className="block px-2 py-1 rounded hover:bg-white/5">−15</button>
+                              <button onClick={()=>{ setWindowsByDow(prev=>{ const arr=(prev[dow]||[]).slice(); arr[i]={...arr[i], start: adjustTimeText(arr[i].start||'', 15), end: adjustTimeText(arr[i].end||'', 15)}; return { ...prev, [dow]: arr }; }); setRowMenu(null); }} className="block px-2 py-1 rounded hover:bg-white/5">+15</button>
+                              <button onClick={()=>{ setWindowsByDow(prev=>{ const arr=(prev[dow]||[]).slice(); const copy = { ...arr[i] }; arr.splice(i+1,0,copy); return { ...prev, [dow]: arr }; }); setRowMenu(null); }} className="block px-2 py-1 rounded hover:bg-white/5">Duplicate</button>
+                              <button onClick={()=>{ setWindowsByDow(prev=>{ const arr=(prev[dow]||[]).slice(); arr.splice(i,1); return { ...prev, [dow]: arr }; }); setRowMenu(null); }} className="block px-2 py-1 rounded hover:bg-white/5">Delete</button>
                             </div>
-                          ); })()}
+                          ) : null}
                         </div>
-                        <div className="flex flex-col gap-1 items-start">
-                          <input type="text" placeholder="2:45" value={fmt12Input(br.end||'').replace(/\s?(AM|PM)$/,'')} onChange={e=>setBreaksByDow(prev=>{ const arr=(prev[dow]||[]).slice(); arr[i]={...arr[i], end:e.target.value}; return { ...prev, [dow]: arr }; })} onBlur={e=>setBreaksByDow(prev=>{ const arr=(prev[dow]||[]).slice(); arr[i]={...arr[i], end: fmt12Input(e.target.value)}; return { ...prev, [dow]: arr }; })} className="w-full bg-[#0b1020] border border-[#1b2344] rounded px-2 py-2 text-sm" />
-                          {(() => { const hh = toMin(normHHMM(br.end||'')); const isPM = (hh ?? 0) >= 12*60; return (
-                            <div className="inline-flex gap-1">
-                              <button type="button" onClick={()=>{ const cur=normHHMM(br.end||'')||'13:30'; const [H,M]=cur.split(':').map(v=>parseInt(v,10)); const nextH=(H>=12?H-12:H); const nn=`${String(nextH).padStart(2,'0')}:${String(M).padStart(2,'0')}`; setBreaksByDow(prev=>{ const arr=(prev[dow]||[]).slice(); arr[i]={...arr[i], end: nn}; return { ...prev, [dow]: arr }; }); }} className={`px-2 py-1 text-[10px] border rounded ${!isPM?'bg-emerald-600 text-white':'border-[#1b2344]'}`}>AM</button>
-                              <button type="button" onClick={()=>{ const cur=normHHMM(br.end||'')||'13:30'; const [H,M]=cur.split(':').map(v=>parseInt(v,10)); const nextH=(H<12?H+12:H); const nn=`${String(nextH).padStart(2,'0')}:${String(M).padStart(2,'0')}`; setBreaksByDow(prev=>{ const arr=(prev[dow]||[]).slice(); arr[i]={...arr[i], end: nn}; return { ...prev, [dow]: arr }; }); }} className={`px-2 py-1 text-[10px] border rounded ${isPM?'bg-emerald-600 text-white':'border-[#1b2344]'}`}>PM</button>
+                        {timePicker && timePicker.dow===dow && timePicker.index===i && (timePicker.kind==='win-start'||timePicker.kind==='win-end') ? (
+                          <div className="col-span-3 mt-1">
+                            <div className="grid grid-cols-4 gap-1 text-xs">
+                              {Array.from({length: (24*60)/15},(_,k)=>k*15).filter(v=>v%60>=0).slice(24).map(min=>{ const label = fmt12Input(minutesToHHMM(min)); return (
+                                <button key={min} onClick={()=>{ setWindowsByDow(prev=>{ const arr=(prev[dow]||[]).slice(); if (timePicker.kind==='win-start') arr[i]={...arr[i], start: label}; else arr[i]={...arr[i], end: label}; return { ...prev, [dow]: arr }; }); setTimePicker(null); }} className="px-2 py-1 rounded border border-white/10 hover:bg-white/5">{label.replace(/\s?M$/,'')}</button>
+                              ); })}
                             </div>
-                          ); })()}
-                        </div>
-                        <div className="flex items-center gap-1">
-                          <button onClick={()=>setBreaksByDow(prev=>{ const arr=(prev[dow]||[]).slice(); arr.splice(i,1); return { ...prev, [dow]: arr }; })} className="px-2 py-1 rounded border border-[#1b2344] text-xs">✕</button>
-                        </div>
+                          </div>
+                        ) : null}
                       </div>
-                    ))}
-                    <div className="flex items-center gap-2">
-                      <button onClick={()=>setBreaksByDow(prev=>{ const arr=(prev[dow]||[]).slice(); arr.push({ start:'', end:'' }); return { ...prev, [dow]: arr }; })} className="px-2 py-1 rounded border border-[#1b2344] text-xs">+ Add break</button>
-                      <button onClick={()=>setBreaksByDow(prev=>{ const src=(prev[dow]||[]); const out: Record<number, any[]> = { 0:[],1:[],2:[],3:[],4:[],5:[],6:[] }; for (const k of [0,1,2,3,4,5,6]) out[k] = src.slice(); return out as any; })} className="px-2 py-1 rounded border border-[#1b2344] text-xs">Copy to weekdays</button>
+                    );})}
+                    <div>
+                      <button onClick={()=>setWindowsByDow(prev=>{ const arr=(prev[dow]||[]).slice(); arr.push({ start:'', end:'' }); return { ...prev, [dow]: arr }; })} className="mt-1 px-2 py-1 rounded border border-white/10 text-xs">+ Add window</button>
                     </div>
                   </div>
                 </div>
-                <div className="grid grid-cols-2 gap-2 mt-3">
-                  <div>
-                    <label className="block text-xs mb-1" htmlFor={`start-${dow}`}>Start</label>
-                    <div className="flex flex-col gap-1 items-start">
-                      <input id={`start-${dow}`} type="text" placeholder="7:00" value={fmt12Input(availStartByDow[dow]||'').replace(/\s?(AM|PM)$/,'')} onChange={e=>setAvailStartByDow(prev=>({ ...prev, [dow]: e.target.value }))} onBlur={e=>setAvailStartByDow(prev=>({ ...prev, [dow]: fmt12Input(e.target.value) }))} className="w-full bg-[#0b1020] border border-[#1b2344] rounded px-2 py-2 text-sm focus-visible:outline focus-visible:outline-2 focus-visible:outline-emerald-500" />
-                      {(() => { const hh = toMin(normHHMM(availStartByDow[dow]||'')); const isPM = (hh ?? 0) >= 12*60; return (
-                        <div className="inline-flex gap-1">
-                          <button type="button" onClick={()=>{ const cur = normHHMM(availStartByDow[dow]||'')||'09:00'; const [H,M]=cur.split(':').map(v=>parseInt(v,10)); const nextH = (H>=12?H-12:H); const nn = `${String(nextH).padStart(2,'0')}:${String(M).padStart(2,'0')}`; setAvailStartByDow(prev=>({ ...prev, [dow]: nn })); }} className={`px-2 py-1 text-[10px] border rounded ${!isPM?'bg-emerald-600 text-white':'border-[#1b2344]'}`}>AM</button>
-                          <button type="button" onClick={()=>{ const cur = normHHMM(availStartByDow[dow]||'')||'13:00'; const [H,M]=cur.split(':').map(v=>parseInt(v,10)); const nextH = (H<12?H+12:H); const nn = `${String(nextH).padStart(2,'0')}:${String(M).padStart(2,'0')}`; setAvailStartByDow(prev=>({ ...prev, [dow]: nn })); }} className={`px-2 py-1 text-[10px] border rounded ${isPM?'bg-emerald-600 text-white':'border-[#1b2344]'}`}>PM</button>
+                <div>
+                  <div className="text-xs text-white/70 mb-1">Breaks</div>
+                  <div className="space-y-2">
+                    {(breaksByDow[dow]||[]).map((br, i) => { const valid = (toMin(normHHMM(br.start||''))??0) < (toMin(normHHMM(br.end||''))??0); return (
+                      <div key={`b-${i}`} className="relative grid grid-cols-[1fr_1fr_auto] items-center gap-3">
+                        <input type="text" placeholder="2:15 PM" value={fmt12Input(br.start||'')} onChange={e=>setBreaksByDow(prev=>{ const arr=(prev[dow]||[]).slice(); arr[i]={...arr[i], start:e.target.value}; return { ...prev, [dow]: arr }; })} onKeyDown={e=>{ if(e.key==='ArrowUp'){ e.preventDefault(); setBreaksByDow(prev=>{ const arr=(prev[dow]||[]).slice(); arr[i]={...arr[i], start: adjustTimeText(arr[i].start||'', 5)}; return { ...prev, [dow]: arr }; }); } if(e.key==='ArrowDown'){ e.preventDefault(); setBreaksByDow(prev=>{ const arr=(prev[dow]||[]).slice(); arr[i]={...arr[i], start: adjustTimeText(arr[i].start||'', -5)}; return { ...prev, [dow]: arr }; }); } if(e.key==='PageUp'){ e.preventDefault(); setBreaksByDow(prev=>{ const arr=(prev[dow]||[]).slice(); arr[i]={...arr[i], start: adjustTimeText(arr[i].start||'', 15)}; return { ...prev, [dow]: arr }; }); } if(e.key==='PageDown'){ e.preventDefault(); setBreaksByDow(prev=>{ const arr=(prev[dow]||[]).slice(); arr[i]={...arr[i], start: adjustTimeText(arr[i].start||'', -15)}; return { ...prev, [dow]: arr }; }); } }} onClick={()=>setTimePicker(tp=> tp && tp.kind==='br-start' && tp.dow===dow && tp.index===i ? null : { kind:'br-start', dow, index:i })} className={`h-9 px-3 text-sm rounded-lg bg-white/10 border ${valid? 'border-white/10':'border-rose-600'} focus-visible:ring-2 focus-visible:ring-emerald-400`} />
+                        <input type="text" placeholder="2:45 PM" value={fmt12Input(br.end||'')} onChange={e=>setBreaksByDow(prev=>{ const arr=(prev[dow]||[]).slice(); arr[i]={...arr[i], end:e.target.value}; return { ...prev, [dow]: arr }; })} onKeyDown={e=>{ if(e.key==='ArrowUp'){ e.preventDefault(); setBreaksByDow(prev=>{ const arr=(prev[dow]||[]).slice(); arr[i]={...arr[i], end: adjustTimeText(arr[i].end||'', 5)}; return { ...prev, [dow]: arr }; }); } if(e.key==='ArrowDown'){ e.preventDefault(); setBreaksByDow(prev=>{ const arr=(prev[dow]||[]).slice(); arr[i]={...arr[i], end: adjustTimeText(arr[i].end||'', -5)}; return { ...prev, [dow]: arr }; }); } if(e.key==='PageUp'){ e.preventDefault(); setBreaksByDow(prev=>{ const arr=(prev[dow]||[]).slice(); arr[i]={...arr[i], end: adjustTimeText(arr[i].end||'', 15)}; return { ...prev, [dow]: arr }; }); } if(e.key==='PageDown'){ e.preventDefault(); setBreaksByDow(prev=>{ const arr=(prev[dow]||[]).slice(); arr[i]={...arr[i], end: adjustTimeText(arr[i].end||'', -15)}; return { ...prev, [dow]: arr }; }); } }} onClick={()=>setTimePicker(tp=> tp && tp.kind==='br-end' && tp.dow===dow && tp.index===i ? null : { kind:'br-end', dow, index:i })} className={`h-9 px-3 text-sm rounded-lg bg-white/10 border ${valid? 'border-white/10':'border-rose-600'} focus-visible:ring-2 focus-visible:ring-emerald-400`} />
+                        <div className="relative">
+                          <button aria-label="Row menu" onClick={()=>setRowMenu(m => m && m.kind==='br' && m.dow===dow && m.index===i ? null : { kind:'br', dow, index:i })} className="px-2 py-1 rounded border border-white/10 text-xs">…</button>
+                          {rowMenu && rowMenu.kind==='br' && rowMenu.dow===dow && rowMenu.index===i ? (
+                            <div className="absolute right-0 mt-2 z-10 rounded border border-white/10 bg-[#0b1020] p-2 text-xs space-y-1">
+                              <button onClick={()=>{ setBreaksByDow(prev=>{ const arr=(prev[dow]||[]).slice(); arr[i]={...arr[i], start: adjustTimeText(arr[i].start||'', -15), end: adjustTimeText(arr[i].end||'', -15)}; return { ...prev, [dow]: arr }; }); setRowMenu(null); }} className="block px-2 py-1 rounded hover:bg-white/5">−15</button>
+                              <button onClick={()=>{ setBreaksByDow(prev=>{ const arr=(prev[dow]||[]).slice(); arr[i]={...arr[i], start: adjustTimeText(arr[i].start||'', 15), end: adjustTimeText(arr[i].end||'', 15)}; return { ...prev, [dow]: arr }; }); setRowMenu(null); }} className="block px-2 py-1 rounded hover:bg-white/5">+15</button>
+                              <button onClick={()=>{ setBreaksByDow(prev=>{ const arr=(prev[dow]||[]).slice(); const copy = { ...arr[i] }; arr.splice(i+1,0,copy); return { ...prev, [dow]: arr }; }); setRowMenu(null); }} className="block px-2 py-1 rounded hover:bg-white/5">Duplicate</button>
+                              <button onClick={()=>{ setBreaksByDow(prev=>{ const arr=(prev[dow]||[]).slice(); arr.splice(i,1); return { ...prev, [dow]: arr }; }); setRowMenu(null); }} className="block px-2 py-1 rounded hover:bg-white/5">Delete</button>
+                            </div>
+                          ) : null}
                         </div>
-                      ); })()}
-                    </div>
-                  </div>
-                  <div>
-                    <label className="block text-xs mb-1" htmlFor={`end-${dow}`}>End</label>
-                    <div className="flex flex-col gap-1 items-start">
-                      <input id={`end-${dow}`} type="text" placeholder="5:00" value={fmt12Input(availEndByDow[dow]||'').replace(/\s?(AM|PM)$/,'')} onChange={e=>setAvailEndByDow(prev=>({ ...prev, [dow]: e.target.value }))} onBlur={e=>setAvailEndByDow(prev=>({ ...prev, [dow]: fmt12Input(e.target.value) }))} className="w-full bg-[#0b1020] border border-[#1b2344] rounded px-2 py-2 text-sm focus-visible:outline focus-visible:outline-2 focus-visible:outline-emerald-500" />
-                      {(() => { const hh = toMin(normHHMM(availEndByDow[dow]||'')); const isPM = (hh ?? 0) >= 12*60; return (
-                        <div className="inline-flex gap-1">
-                          <button type="button" onClick={()=>{ const cur = normHHMM(availEndByDow[dow]||'')||'17:00'; const [H,M]=cur.split(':').map(v=>parseInt(v,10)); const nextH = (H>=12?H-12:H); const nn = `${String(nextH).padStart(2,'0')}:${String(M).padStart(2,'0')}`; setAvailEndByDow(prev=>({ ...prev, [dow]: nn })); }} className={`px-2 py-1 text-[10px] border rounded ${!isPM?'bg-emerald-600 text-white':'border-[#1b2344]'}`}>AM</button>
-                          <button type="button" onClick={()=>{ const cur = normHHMM(availEndByDow[dow]||'')||'17:00'; const [H,M]=cur.split(':').map(v=>parseInt(v,10)); const nextH = (H<12?H+12:H); const nn = `${String(nextH).padStart(2,'0')}:${String(M).padStart(2,'0')}`; setAvailEndByDow(prev=>({ ...prev, [dow]: nn })); }} className={`px-2 py-1 text=[10px] border rounded ${isPM?'bg-emerald-600 text-white':'border-[#1b2344]'}`}>PM</button>
-                        </div>
-                      ); })()}
+                        {timePicker && timePicker.dow===dow && timePicker.index===i && (timePicker.kind==='br-start'||timePicker.kind==='br-end') ? (
+                          <div className="col-span-3 mt-1">
+                            <div className="grid grid-cols-4 gap-1 text-xs">
+                              {Array.from({length: (24*60)/15},(_,k)=>k*15).filter(v=>v%60>=0).slice(24).map(min=>{ const label = fmt12Input(minutesToHHMM(min)); return (
+                                <button key={min} onClick={()=>{ setBreaksByDow(prev=>{ const arr=(prev[dow]||[]).slice(); if (timePicker.kind==='br-start') arr[i]={...arr[i], start: label}; else arr[i]={...arr[i], end: label}; return { ...prev, [dow]: arr }; }); setTimePicker(null); }} className="px-2 py-1 rounded border border-white/10 hover:bg-white/5">{label.replace(/\s?M$/,'')}</button>
+                              ); })}
+                            </div>
+                          </div>
+                        ) : null}
+                      </div>
+                    );})}
+                    <div>
+                      <button onClick={()=>setBreaksByDow(prev=>{ const arr=(prev[dow]||[]).slice(); arr.push({ start:'', end:'' }); return { ...prev, [dow]: arr }; })} className="mt-1 px-2 py-1 rounded border border-white/10 text-xs">+ Add break</button>
                     </div>
                   </div>
                 </div>

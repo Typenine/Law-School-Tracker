@@ -51,6 +51,7 @@ function countPagesFromTitle(title: string): number {
     const a = parseInt(mm[1],10); const b = mm[2]? parseInt(mm[2],10): a;
     if (!isNaN(a) && !isNaN(b) && b >= a) pages += (b - a + 1);
   }
+
   return pages;
 }
 function minutesPerPageForCourse(course?: string | null): number {
@@ -156,12 +157,14 @@ function subtractIntervals(base: Interval[], cover: Interval[]): Interval[] {
   }
   return res;
 }
+
+// Label intervals: "p. a–b, c–d, e"
 function intervalsToLabel(arr: Interval[]): string {
   if (!arr.length) return '';
-  return 'p. ' + arr.map(([a,b]) => a===b ? String(a) : `${a}–${b}`).join(', ');
+  return 'p. ' + arr.map(([a,b]) => (a===b ? String(a) : `${a}–${b}`)).join(', ');
 }
 
-// Subtract a raw page count from the start of the intervals
+// Subtract a raw page count from the start of intervals
 function subtractCountFromFront(base: Interval[], count: number): Interval[] {
   if (count <= 0) return mergeIntervals(base);
   const arr = mergeIntervals(base).slice();
@@ -169,16 +172,68 @@ function subtractCountFromFront(base: Interval[], count: number): Interval[] {
   const out: Interval[] = [];
   for (const [s,e] of arr) {
     const len = Math.max(0, e - s + 1);
-    if (n >= len) {
-      n -= len; // consume entire interval
-      continue;
-    }
-    // consume part, keep remaining tail
-    const newStart = s + n;
-    out.push([newStart, e]);
-    n = 0;
+    if (n >= len) { n -= len; continue; }
+    const newStart = s + n; out.push([newStart, e]); n = 0;
   }
   return out;
+}
+
+// Additional pure helpers for assigned/completed math and formatting
+function stripControlChars(s: string): string { return (s||'').replace(/[\u0000-\u001F\u007F]/g, ''); }
+type Seg = { mode: 'read'|'skim'; ranges: Array<{ start: number; end: number }> };
+function normalizeRanges(segments?: Seg[] | null): { read: Interval[]; skim: Interval[] } {
+  const out = { read: [] as Interval[], skim: [] as Interval[] };
+  if (!Array.isArray(segments)) return out;
+  for (const s of segments) {
+    if (!s || !Array.isArray(s.ranges)) continue;
+    for (const r of s.ranges) {
+      const a = Number((r as any)?.start); const b = Number((r as any)?.end);
+      if (!isNaN(a) && !isNaN(b) && b>=a) (s.mode==='read'?out.read:out.skim).push([a,b]);
+    }
+  }
+  return { read: mergeIntervals(out.read), skim: mergeIntervals(out.skim) };
+}
+function union(ranges: Interval[]): Interval[] { return mergeIntervals(ranges||[]); }
+function minus(A: Interval[], B: Interval[]): Interval[] { return subtractIntervals(A||[], B||[]); }
+function compress(pages?: number[] | null): Interval[] {
+  const arr = Array.isArray(pages) ? pages.filter(x=>Number.isFinite(x)).map(x=>Number(x)).sort((a,b)=>a-b) : [];
+  const out: Interval[] = [];
+  for (const p of arr) { if (!out.length || p > out[out.length-1][1] + 1) out.push([p,p]); else out[out.length-1][1] = p; }
+  return out;
+}
+function assignedUnion(assigned: { read: Interval[]; skim: Interval[] }): Interval[] {
+  const R = union(assigned.read||[]);
+  const S = minus(union(assigned.skim||[]), R);
+  return union([...R, ...S]);
+}
+type LogEntry = { mode?: 'read'|'skim'|null; ranges?: Array<{ start:number; end:number }>|null; pages?: number[]|null; minutes?: number|null };
+function completedUnion(logs: LogEntry[]): { iv: Interval[]; hasPageInfo: boolean } {
+  const rIv: Interval[] = []; const sIv: Interval[] = []; let any=false;
+  for (const lg of (logs||[])) {
+    const mode = (lg?.mode==='skim')?'skim':'read';
+    let iv: Interval[] = [];
+    if (Array.isArray(lg?.ranges) && lg!.ranges!.length) iv = mergeIntervals(lg!.ranges!.map(r=>[Number((r as any).start), Number((r as any).end)]) as Interval[]);
+    else if (Array.isArray(lg?.pages) && lg!.pages!.length) iv = compress(lg!.pages as number[]);
+    if (iv.length) { any=true; if (mode==='read') rIv.push(...iv); else sIv.push(...iv); }
+  }
+  const R = union(rIv);
+  const S = minus(union(sIv), R);
+  return { iv: union([...R, ...S]), hasPageInfo: any };
+}
+function remainingUnion(assigned: Interval[], completed: Interval[]): Interval[] { return minus(union(assigned), union(completed)); }
+function countPages(iv: Interval[]): number { return pagesInIntervals(iv); }
+function formatRanges(iv: Interval[]): string { if (!iv.length) return ''; return iv.map(([a,b])=>a===b?`${a}`:`${a}–${b}`).join(', '); }
+function pagesPerHourForCourse(course?: string|null): number {
+  try {
+    if (typeof window !== 'undefined') {
+      const raw = window.localStorage.getItem('coursePphMap');
+      const map = raw ? JSON.parse(raw) as Record<string, { pph: number }> : null;
+      const key = (course||'').toString().trim().toLowerCase();
+      const val = key && map && map[key] && typeof map[key].pph === 'number' ? map[key].pph : null;
+      if (typeof val === 'number' && val > 0) return Math.max(1, Math.round(val));
+    }
+  } catch {}
+  return 18;
 }
 function isUUID(s: string): boolean {
   return /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(s);
@@ -941,46 +996,30 @@ export default function TodayPage() {
     return { isSlump: falling && n30 >= 10, n30 };
   }, [sessions, focus14, focus30, startYMD30]);
 
-  // Pages read per task id (for Today chips)
-  const pagesReadByTask = useMemo(() => {
-    const m: Record<string, number> = {};
-    for (const s of (sessions||[])) {
-      const tid = (s as any).taskId; const pr = Number((s as any).pagesRead || 0);
-      if (!tid) continue; if (!isNaN(pr) && pr>0) m[tid] = (m[tid] || 0) + pr;
-    }
-    return m;
-  }, [sessions]);
-
-  // Remaining ranges per plan item (assigned − completed), compressed to human label
-  const remainingByItem = useMemo(() => {
-    const out: Record<string, { label: string; pages: number; assignedLabel: string; assignedPages: number; etaMinutes: number }> = {};
+  // Reading stats per plan item using assignedSegments and logs (read beats skim)
+  const readingStatsByItem = useMemo(() => {
+    const out: Record<string, { assignedIv: Interval[]; assignedLabel: string; remainingIv: Interval[]; remainingLabel: string; pagesLeft: number|null; pph: number; etaMinutes: number; loggedMinutes: number; showRemaining: boolean }> = {};
     try {
-      const raw = typeof window!=='undefined' ? window.localStorage.getItem(LS_ORIG_RANGES) : null;
-      const origMap = raw ? (JSON.parse(raw) as Record<string, string>) : {};
       for (const it of plan.items) {
-        const chips = extractPageRanges(String(it.title||''));
-        const base = origMap[it.id] || (chips.length? ('p. ' + chips.join(', ')) : '');
-        const assignedIntervals = parseIntervalsFromRangeString(base);
-        const assignedPages = pagesInIntervals(assignedIntervals);
-        const taskId = canonicalTaskIdForItem(it, plan.dateKey, schedule, tasks) || it.id;
-        let prevPages = 0; let extraMins = 0;
-        for (const ss of (sessions||[])) {
-          if ((ss as any)?.taskId !== taskId) continue;
-          const pr = Number((ss as any)?.pagesRead || 0);
-          if (pr > 0) prevPages += pr; else extraMins += Math.max(0, Number((ss as any)?.minutes)||0);
-        }
-        const mpp = minutesPerPageForCourse(it.course);
-        const consumed = prevPages + Math.floor(extraMins / Math.max(1, Math.round(mpp)));
-        const remainingIntervals = subtractCountFromFront(assignedIntervals, consumed);
-        const pagesLeft = pagesInIntervals(remainingIntervals);
-        const label = intervalsToLabel(remainingIntervals);
-        const assignedLabel = intervalsToLabel(assignedIntervals);
-        const etaMinutes = pagesLeft>0 ? Math.max(1, Math.round(pagesLeft * mpp)) : Math.max(1, Math.round((it.minutes||0))) || 0;
-        out[it.id] = { label, pages: pagesLeft, assignedLabel, assignedPages, etaMinutes };
+        const canon = canonicalTaskIdForItem(it, plan.dateKey, schedule, tasks) || it.id;
+        const taskObj: any = (tasks||[]).find((t:any) => (t?.id===canon) || (t?.title===it.title && (t?.course||'')===(it.course||'')) ) || null;
+        const assignedNorm = normalizeRanges((taskObj as any)?.assignedSegments || null);
+        const assignedIv = assignedUnion(assignedNorm);
+        const assignedLabel = formatRanges(assignedIv);
+        // Build logs array for this task from sessions; our sessions may not include ranges/pages arrays -> hasPageInfo may be false
+        const logs: LogEntry[] = (sessions||[]).filter((s:any)=> (s?.taskId===canon)).map((s:any)=>({ mode: (s?.mode||null) as any, ranges: (Array.isArray(s?.ranges)?s.ranges:null), pages: (Array.isArray(s?.pages)?s.pages:null), minutes: Number(s?.minutes)||0 })) as LogEntry[];
+        const cmp = completedUnion(logs);
+        const remainingIv = remainingUnion(assignedIv, cmp.iv);
+        const pagesLeft = (assignedIv.length>0 && cmp.hasPageInfo) ? countPages(remainingIv) : (assignedIv.length>0 && cmp.hasPageInfo===false ? null : 0);
+        const pph = pagesPerHourForCourse(it.course) || 18;
+        const etaMinutes = (typeof pagesLeft==='number' && pagesLeft!=null) ? Math.ceil((pagesLeft / Math.max(pph,0.1)) * 60) : Math.max(1, Math.round(Number(it.minutes)||0));
+        const loggedMinutes = (sessions||[]).filter((s:any)=>s?.taskId===canon).reduce((sum:number,s:any)=>sum + Math.max(0, Number(s?.minutes)||0), 0);
+        const remainingLabel = (typeof pagesLeft==='number' && pagesLeft!=null) ? formatRanges(remainingIv) : '';
+        out[it.id] = { assignedIv, assignedLabel, remainingIv, remainingLabel, pagesLeft, pph: Math.round(pph), etaMinutes, loggedMinutes, showRemaining: (assignedIv.length>0 && cmp.hasPageInfo) };
       }
     } catch {}
     return out;
-  }, [plan.items, sessions, schedule, tasks, plan.dateKey]);
+  }, [plan.items, plan.dateKey, schedule, tasks, sessions]);
 
   // Streaks (Chicago local dates)
   const activeDaysSet = useMemo(() => {
@@ -1161,11 +1200,18 @@ export default function TodayPage() {
               <div className="rounded border border-[#1b2344] p-4 space-y-3">
                 <div className="text-sm font-medium">Step 2 · Confirm minutes & order</div>
                 <ul className="space-y-2">
-                  {plan.items.map((it, idx) => (
+                  {plan.items.map((it, idx) => { const st = readingStatsByItem[it.id]; return (
                     <li key={it.id} className="flex items-center gap-2">
                       <div className="flex-1 min-w-0">
-                        <div className="text-sm text-slate-200 truncate">{it.course ? `${it.course}: `:''}{it.title}</div>
-                        <div className="text-xs text-slate-300/70">{it.guessed? 'minutes (guessed)' : 'minutes'}</div>
+                        <div className="text-sm text-slate-200 truncate">{it.course ? `${it.course}: `:''}{stripControlChars(it.title)}</div>
+                        {st && st.assignedLabel ? (
+                          <div className="text-[11px] text-slate-300/70">Assigned: {st.assignedLabel}</div>
+                        ) : null}
+                        {st && st.showRemaining ? (
+                          <div className="text-[11px] text-slate-300/70">Remaining: {st.remainingLabel} ({st.pagesLeft}p)</div>
+                        ) : (
+                          <div className="text-[11px] text-slate-300/60">Est. {minutesToHM(Math.max(1, Math.round(Number(it.minutes)||0)))}</div>
+                        )}
                       </div>
                       <label htmlFor={`minutes-${it.id}`} className="sr-only">Minutes for {it.title}</label>
                       <input id={`minutes-${it.id}`} type="number" min={5} step={5} value={it.minutes} onChange={e=>setPlan(p=>({ ...p, items: p.items.map(x=>x.id===it.id?{...x, minutes: parseInt(e.target.value||'0',10)||0}:x) }))} className="w-20 bg-[#0b1020] border border-[#1b2344] rounded px-2 py-1 text-sm focus-visible:outline focus-visible:outline-2 focus-visible:outline-blue-500" />
@@ -1175,7 +1221,7 @@ export default function TodayPage() {
                         <button aria-label="Remove item" onClick={()=>removeItem(it.id)} className="px-2 py-1 rounded border border-rose-600 text-rose-400 text-xs focus-visible:outline focus-visible:outline-2 focus-visible:outline-blue-500">Remove</button>
                       </div>
                     </li>
-                  ))}
+                  );})}
                 </ul>
                 <div className="flex items-center gap-2">
                   <button aria-label="Back to Step 1" onClick={()=>setStep(1)} className="px-3 py-2 rounded border border-[#1b2344] text-sm focus-visible:outline focus-visible:outline-2 focus-visible:outline-emerald-500">Back</button>
@@ -1195,31 +1241,33 @@ export default function TodayPage() {
             ) : (
               <ul className="space-y-3">
                 {plan.items.map((it, i) => {
-                  const rem = remainingByItem[it.id] || { label: '', pages: 0, assignedLabel: '', assignedPages: 0, etaMinutes: Math.max(1, Math.round(Number(it.minutes)||0)) };
-                  const elapsedSec = Math.max(0, Number(itemSeconds[it.id]||0)) + ((activeItemId===it.id && itemStartAt[it.id]) ? Math.max(0, Math.floor((nowTs - itemStartAt[it.id]) / 1000)) : 0);
-                  const elapsedMin = Math.floor(elapsedSec/60);
-                  const estMin = Math.max(1, Math.round(Number(it.minutes)||0));
-                  const pct = Math.min(100, Math.round((elapsedMin/Math.max(estMin,1))*100));
+                  const st = readingStatsByItem[it.id] || { assignedIv: [], assignedLabel: '', remainingIv: [], remainingLabel: '', pagesLeft: null as number|null, pph: pagesPerHourForCourse(it.course), etaMinutes: Math.max(1, Math.round(Number(it.minutes)||0)), loggedMinutes: (sessions||[]).filter((s:any)=>s?.taskId===it.id).reduce((a:number,s:any)=>a+(Number(s?.minutes)||0),0), showRemaining: false };
+                  const pct = Math.min(100, Math.round((st.loggedMinutes/Math.max(st.etaMinutes,1))*100));
                   return (
                     <li key={it.id} className="rounded-2xl p-5 md:p-6 border border-white/10 bg-white/5">
                       <div className="flex items-start justify-between gap-4">
                         <div className="flex-1 min-w-0">
                           <div className="mb-1">
                             {it.course ? <span className="mr-2 inline-flex items-center text-[11px] px-1.5 py-0.5 rounded border border-white/10 text-white/80">{it.course}</span> : null}
-                            <span className="text-lg font-semibold align-middle line-clamp-2" title={it.title}>{i+1}. {(() => { const c = String(it.course||''); const raw = String(it.title||''); const lc = c.toLowerCase(); const lraw = raw.toLowerCase(); if (lc && (lraw.startsWith(lc+':') || lraw.startsWith(lc+' -') || lraw.startsWith(lc+' —') || lraw.startsWith(lc+' –'))) { return raw.slice(c.length+1).trimStart(); } return raw; })()}</span>
+                            <span className="text-lg font-semibold align-middle line-clamp-2" title={stripControlChars(it.title)}>{i+1}. {(() => { const c = String(it.course||''); const raw = stripControlChars(String(it.title||'')); const lc = c.toLowerCase(); const lraw = raw.toLowerCase(); if (lc && (lraw.startsWith(lc+':') || lraw.startsWith(lc+' -') || lraw.startsWith(lc+' —') || lraw.startsWith(lc+' –'))) { return raw.slice(c.length+1).trimStart(); } return raw; })()}</span>
                           </div>
-                          {rem.label ? (
-                            <div className="text-sm text-slate-200"><span className="font-medium">Remaining:</span> {rem.label} <span className="text-slate-300/70">({rem.pages}p)</span></div>
+                          {st.showRemaining ? (
+                            <div className="text-sm text-slate-200"><span className="font-medium">Remaining:</span> {st.remainingLabel} <span className="text-slate-300/70">({st.pagesLeft}p)</span></div>
                           ) : null}
-                          {rem.assignedLabel ? (
-                            <div className="text-xs text-white/60 mt-0.5">Assigned: {rem.assignedLabel}</div>
+                          {st.assignedLabel ? (
+                            <div className="text-xs text-white/60 mt-0.5">Assigned: {st.assignedLabel}</div>
                           ) : null}
                           <div className="mt-3 h-1 bg-white/10 rounded overflow-hidden" role="progressbar" aria-valuemin={0} aria-valuemax={100} aria-valuenow={pct} aria-label="Elapsed vs estimate">
                             <div className="h-full bg-emerald-600" style={{ width: `${pct}%` }} />
                           </div>
                         </div>
                         <div className="w-[420px] min-w-[420px] flex-shrink-0 flex flex-col items-end gap-2">
-                          <div className="inline-flex items-center px-2 py-0.5 rounded-md text-sm bg-white/10">ETA {minutesToHM(rem.etaMinutes)}</div>
+                          <div className="inline-flex items-center px-2 py-0.5 rounded-md text-sm bg-white/10 leading-tight">
+                            <div className="text-right">
+                              <div className="font-medium">{st.pagesLeft==null?`Est. ${minutesToHM(st.etaMinutes)}`:minutesToHM(st.etaMinutes)}</div>
+                              {typeof st.pagesLeft==='number' ? (<div className="text-[11px] text-white/70">{st.pagesLeft}p @ {st.pph}pph</div>) : null}
+                            </div>
+                          </div>
                           <div className="flex items-center gap-2 flex-nowrap">
                             {activeItemId === it.id ? (
                               <button aria-label="Pause item timer" onClick={pauseItemTimer} className="px-2 py-1 rounded border border-[#1b2344] text-xs">Stop</button>
