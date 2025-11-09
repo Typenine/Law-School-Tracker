@@ -49,6 +49,7 @@ const LS_WEEK_START = "weekPlanWeekStartYmd";
 const LS_TWO_WEEKS = "weekPlanTwoWeeksOnly";
 const LS_AVAIL_START = "availabilityStartHHMM";
 const LS_AVAIL_END = "availabilityEndHHMM";
+const LS_AVAIL_BREAKS = "availabilityBreaksV1";
 
 type WeeklyGoal = { id: string; scope: 'global'|'course'; weeklyMinutes: number; course?: string | null };
 
@@ -158,6 +159,7 @@ export default function WeekPlanPage() {
   const [tasks, setTasks] = useState<Task[]>([]);
   const [sessions, setSessions] = useState<any[]>([]);
   const [goals, setGoals] = useState<WeeklyGoal[]>([]);
+  const [breaksByDow, setBreaksByDow] = useState<Record<number, Array<{ start?: string; end?: string }>>>({ 0:[],1:[],2:[],3:[],4:[],5:[],6:[] });
   const [courses, setCourses] = useState<any[]>([]);
   const [showConflicts, setShowConflicts] = useState<boolean>(true);
   const [twoWeeksOnly, setTwoWeeksOnly] = useState<boolean>(false);
@@ -195,7 +197,7 @@ export default function WeekPlanPage() {
       try {
         const [schRes, setRes] = await Promise.all([
           fetch('/api/schedule', { cache: 'no-store' }),
-          fetch('/api/settings?keys=availabilityTemplateV1,weeklyGoalsV1,weekPlanShowConflicts,weekPlanWeekStartYmd,weekPlanTwoWeeksOnly,internshipColor,sportsLawReviewColor,availabilityStartHHMM,availabilityEndHHMM,weekScheduleV1', { cache: 'no-store' })
+          fetch('/api/settings?keys=availabilityTemplateV1,weeklyGoalsV1,weekPlanShowConflicts,weekPlanWeekStartYmd,weekPlanTwoWeeksOnly,internshipColor,sportsLawReviewColor,availabilityStartHHMM,availabilityEndHHMM,availabilityBreaksV1,weekScheduleV1', { cache: 'no-store' })
         ]);
         if (canceled) return;
         if (setRes.ok) {
@@ -219,6 +221,8 @@ export default function WeekPlanPage() {
           else if (typeof sStart === 'string') setAvailStartByDow({0:sStart,1:sStart,2:sStart,3:sStart,4:sStart,5:sStart,6:sStart});
           if (sEnd && typeof sEnd === 'object') setAvailEndByDow(sEnd as Record<number,string>);
           else if (typeof sEnd === 'string') setAvailEndByDow({0:sEnd,1:sEnd,2:sEnd,3:sEnd,4:sEnd,5:sEnd,6:sEnd});
+          const br = (settings as any).availabilityBreaksV1;
+          if (br && typeof br === 'object') setBreaksByDow(br as Record<number, Array<{ start?: string; end?: string }>>);
           // Mirror virtual course colors to localStorage so colorForCourse picks them up on all pages
           try {
             if (typeof window !== 'undefined') {
@@ -266,6 +270,7 @@ export default function WeekPlanPage() {
   useEffect(() => { try { void fetch('/api/settings', { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ weeklyGoalsV1: goals }) }); } catch {} }, [goals]);
   useEffect(() => { try { if (typeof window!=='undefined') window.localStorage.setItem(LS_AVAIL_START, JSON.stringify(availStartByDow)); void fetch('/api/settings', { method:'PATCH', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ availabilityStartHHMM: availStartByDow }) }); } catch {} }, [availStartByDow]);
   useEffect(() => { try { if (typeof window!=='undefined') window.localStorage.setItem(LS_AVAIL_END, JSON.stringify(availEndByDow)); void fetch('/api/settings', { method:'PATCH', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ availabilityEndHHMM: availEndByDow }) }); } catch {} }, [availEndByDow]);
+  useEffect(() => { try { if (typeof window!=='undefined') window.localStorage.setItem(LS_AVAIL_BREAKS, JSON.stringify(breaksByDow)); void fetch('/api/settings', { method:'PATCH', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ availabilityBreaksV1: breaksByDow }) }); } catch {} }, [breaksByDow]);
 
   // Fetch tasks for Catch-Up
   useEffect(() => {
@@ -400,11 +405,24 @@ export default function WeekPlanPage() {
       const baseLen = Math.max(0, winEnd - winStart);
       let busyOverlap = 0;
       for (const ev of (busyByDay.items[k] || [])) busyOverlap += overlap(winStart, winEnd, (ev as any).sMin ?? null, (ev as any).eMin ?? null);
-      const windowCap = Math.max(0, baseLen - busyOverlap);
+      if (busyOverlap === 0 && (busyByDay.minutes[k]||0) > 0) busyOverlap = Math.min(baseLen, busyByDay.minutes[k]||0);
+      // Breaks overlap
+      const brs = breaksByDow[d.getDay()] || [];
+      const norm = (v?: string | null) => normHHMM(v||'');
+      const toI = (v?: string | null) => toMin(norm(v));
+      const rawIntervals: Array<[number,number]> = brs.map(b => [toI(b.start)??-1, toI(b.end)??-1]).filter(([a,b]) => a>=0 && b>=0 && b>a) as Array<[number,number]>;
+      rawIntervals.sort((a,b)=>a[0]-b[0]);
+      const merged: Array<[number,number]> = [];
+      for (const iv of rawIntervals) {
+        if (!merged.length || iv[0] > merged[merged.length-1][1]) merged.push([iv[0], iv[1]]);
+        else merged[merged.length-1][1] = Math.max(merged[merged.length-1][1], iv[1]);
+      }
+      let breakOverlap = 0; for (const [a,b] of merged) breakOverlap += overlap(winStart, winEnd, a, b);
+      const windowCap = Math.max(0, baseLen - busyOverlap - breakOverlap);
       m[k] = Math.min(req, windowCap);
     }
     return m;
-  }, [days, availability, availStartByDow, availEndByDow, busyByDay]);
+  }, [days, availability, availStartByDow, availEndByDow, busyByDay, breaksByDow]);
 
   function dayHasConflict(k: string, dow: number): boolean {
     if (!showConflicts) return false;
@@ -724,6 +742,40 @@ function overlap(a0:number,a1:number,b0:number|null,b1:number|null): number { if
                     <button aria-label="Minus 15 minutes" onClick={()=>bumpAvail(dow,-15)} className="px-2 py-1 rounded border border-[#1b2344] text-xs">-15</button>
                     <button aria-label="Plus 15 minutes" onClick={()=>bumpAvail(dow,15)} className="px-2 py-1 rounded border border-[#1b2344] text-xs">+15</button>
                     <button aria-label="Plus 30 minutes" onClick={()=>bumpAvail(dow,30)} className="px-2 py-1 rounded border border-[#1b2344] text-xs">+30</button>
+                  </div>
+                </div>
+                <div className="mt-2">
+                  <div className="text-[10px] mb-1">Breaks</div>
+                  <div className="space-y-1">
+                    {(breaksByDow[dow]||[]).map((br, i) => (
+                      <div key={i} className="grid grid-cols-2 gap-2 items-start">
+                        <div className="flex flex-col gap-1 items-start">
+                          <input type="text" placeholder="2:15" value={fmt12Input(br.start||'').replace(/\s?(AM|PM)$/,'')} onChange={e=>setBreaksByDow(prev=>{ const arr=(prev[dow]||[]).slice(); arr[i]={...arr[i], start:e.target.value}; return { ...prev, [dow]: arr }; })} onBlur={e=>setBreaksByDow(prev=>{ const arr=(prev[dow]||[]).slice(); arr[i]={...arr[i], start: fmt12Input(e.target.value)}; return { ...prev, [dow]: arr }; })} className="w-full bg-[#0b1020] border border-[#1b2344] rounded px-2 py-1 text-sm" />
+                          {(() => { const hh = toMin(normHHMM(br.start||'')); const isPM = (hh ?? 0) >= 12*60; return (
+                            <div className="inline-flex gap-1">
+                              <button type="button" onClick={()=>{ const cur=normHHMM(br.start||'')||'13:00'; const [H,M]=cur.split(':').map(v=>parseInt(v,10)); const nextH=(H>=12?H-12:H); const nn=`${String(nextH).padStart(2,'0')}:${String(M).padStart(2,'0')}`; setBreaksByDow(prev=>{ const arr=(prev[dow]||[]).slice(); arr[i]={...arr[i], start: nn}; return { ...prev, [dow]: arr }; }); }} className={`px-2 py-0.5 text-[10px] border rounded ${!isPM?'bg-blue-600 text-white':'border-[#1b2344]'}`}>AM</button>
+                              <button type="button" onClick={()=>{ const cur=normHHMM(br.start||'')||'13:00'; const [H,M]=cur.split(':').map(v=>parseInt(v,10)); const nextH=(H<12?H+12:H); const nn=`${String(nextH).padStart(2,'0')}:${String(M).padStart(2,'0')}`; setBreaksByDow(prev=>{ const arr=(prev[dow]||[]).slice(); arr[i]={...arr[i], start: nn}; return { ...prev, [dow]: arr }; }); }} className={`px-2 py-0.5 text-[10px] border rounded ${isPM?'bg-blue-600 text-white':'border-[#1b2344]'}`}>PM</button>
+                            </div>
+                          ); })()}
+                        </div>
+                        <div className="flex flex-col gap-1 items-start">
+                          <input type="text" placeholder="2:45" value={fmt12Input(br.end||'').replace(/\s?(AM|PM)$/,'')} onChange={e=>setBreaksByDow(prev=>{ const arr=(prev[dow]||[]).slice(); arr[i]={...arr[i], end:e.target.value}; return { ...prev, [dow]: arr }; })} onBlur={e=>setBreaksByDow(prev=>{ const arr=(prev[dow]||[]).slice(); arr[i]={...arr[i], end: fmt12Input(e.target.value)}; return { ...prev, [dow]: arr }; })} className="w-full bg-[#0b1020] border border-[#1b2344] rounded px-2 py-1 text-sm" />
+                          {(() => { const hh = toMin(normHHMM(br.end||'')); const isPM = (hh ?? 0) >= 12*60; return (
+                            <div className="inline-flex gap-1">
+                              <button type="button" onClick={()=>{ const cur=normHHMM(br.end||'')||'13:30'; const [H,M]=cur.split(':').map(v=>parseInt(v,10)); const nextH=(H>=12?H-12:H); const nn=`${String(nextH).padStart(2,'0')}:${String(M).padStart(2,'0')}`; setBreaksByDow(prev=>{ const arr=(prev[dow]||[]).slice(); arr[i]={...arr[i], end: nn}; return { ...prev, [dow]: arr }; }); }} className={`px-2 py-0.5 text-[10px] border rounded ${!isPM?'bg-blue-600 text-white':'border-[#1b2344]'}`}>AM</button>
+                              <button type="button" onClick={()=>{ const cur=normHHMM(br.end||'')||'13:30'; const [H,M]=cur.split(':').map(v=>parseInt(v,10)); const nextH=(H<12?H+12:H); const nn=`${String(nextH).padStart(2,'0')}:${String(M).padStart(2,'0')}`; setBreaksByDow(prev=>{ const arr=(prev[dow]||[]).slice(); arr[i]={...arr[i], end: nn}; return { ...prev, [dow]: arr }; }); }} className={`px-2 py-0.5 text-[10px] border rounded ${isPM?'bg-blue-600 text-white':'border-[#1b2344]'}`}>PM</button>
+                            </div>
+                          ); })()}
+                        </div>
+                        <div className="flex items-center gap-1">
+                          <button onClick={()=>setBreaksByDow(prev=>{ const arr=(prev[dow]||[]).slice(); arr.splice(i,1); return { ...prev, [dow]: arr }; })} className="px-2 py-1 rounded border border-[#1b2344] text-xs">✕</button>
+                        </div>
+                      </div>
+                    ))}
+                    <div className="flex items-center gap-2">
+                      <button onClick={()=>setBreaksByDow(prev=>{ const arr=(prev[dow]||[]).slice(); arr.push({ start:'', end:'' }); return { ...prev, [dow]: arr }; })} className="px-2 py-1 rounded border border-[#1b2344] text-xs">+ Add break</button>
+                      <button onClick={()=>setBreaksByDow(prev=>{ const src=(prev[dow]||[]); const out: Record<number, any[]> = { 0:[],1:[],2:[],3:[],4:[],5:[],6:[] }; for (const k of [0,1,2,3,4,5,6]) out[k] = src.slice(); return out as any; })} className="px-2 py-1 rounded border border-[#1b2344] text-xs">Copy to all weekdays</button>
+                    </div>
                   </div>
                 </div>
                 <div className="grid grid-cols-2 gap-2 mt-2">
