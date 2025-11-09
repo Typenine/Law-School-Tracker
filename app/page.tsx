@@ -542,6 +542,7 @@ export default function TodayPage() {
 
   // KPIs & Goals
   const plannedToday = useMemo(() => plan.items.reduce((s,it)=>s+(Number(it.minutes)||0),0), [plan.items]);
+  const totalPlannedLabel = useMemo(() => minutesStr(plannedToday), [plannedToday]);
   const weekKeys = useMemo(() => weekKeysChicago(new Date()), []);
   const loggedWeek = useMemo(() => (sessions||[]).filter((s:any) => weekKeys.includes(chicagoYmd(new Date(s.when)))).reduce((sum:number, s:any)=>sum+(s.minutes||0),0), [sessions, weekKeys]);
   const weekOnPace = useMemo(() => {
@@ -747,8 +748,6 @@ export default function TodayPage() {
       return arr;
     });
   }
-
-  const totalPlannedLabel = minutesStr(plannedToday);
 
   // UI
   return (
