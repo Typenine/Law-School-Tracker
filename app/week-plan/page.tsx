@@ -632,13 +632,31 @@ export default function WeekPlanPage() {
   function pushBlockToTomorrow(b: ScheduledBlock) {
     const tryDays = 21; // look ahead up to 3 weeks
     const base = new Date(`${b.day}T12:00:00`);
-    const withoutThis = new Map<string, number>(Object.entries(plannedByDay));
-    withoutThis.set(b.day, Math.max(0, (plannedByDay[b.day]||0) - b.plannedMinutes));
-    for (let i=1;i<=tryDays;i++) {
-      const d = new Date(base); d.setDate(d.getDate()+i);
-      const k = ymd(d); const dow = d.getDay();
-    const normEnd = normHHMM(fallbackEnd) || '17:00';
-    setWindowsByDow(prev => ({ ...prev, [dow]: [...(prev[dow]||[]), { id: uid(), start: fallbackStart, end: normEnd }] }));
+    setBlocks(prev => {
+      const remaining = prev.filter(x => x.id !== b.id);
+      let targetDay = '';
+
+      for (let i = 1; i <= tryDays; i++) {
+        const candidate = new Date(base);
+        candidate.setDate(candidate.getDate() + i);
+        const candKey = ymd(candidate);
+        const alreadyPlanned = remaining.reduce((sum, block) => block.day === candKey ? sum + block.plannedMinutes : sum, 0);
+        const cap = availability[candidate.getDay()] ?? 0;
+        if (cap === 0) continue;
+        if (alreadyPlanned + b.plannedMinutes <= cap) {
+          targetDay = candKey;
+          break;
+        }
+      }
+
+      if (!targetDay) {
+        const next = new Date(base);
+        next.setDate(next.getDate() + 1);
+        targetDay = ymd(next);
+      }
+
+      return [...remaining, { ...b, day: targetDay }];
+    });
   }
 
   function addBreakRow(dow: number) {
