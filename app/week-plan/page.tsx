@@ -740,18 +740,18 @@ function overlap(a0:number,a1:number,b0:number|null,b1:number|null): number { if
   return (
     <main className="flex flex-col space-y-6">
       <section className="card p-6 space-y-4 order-1">
-        <div className="flex flex-col gap-2 md:flex-row md:items-center md:justify-between">
+        <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
           <div className="flex items-center gap-2">
-            <button aria-label="Previous week" onClick={()=>shiftWeek(-1)} className="px-2 py-1 rounded border border-[#1b2344] focus-visible:outline focus-visible:outline-2 focus-visible:outline-blue-500">◀</button>
+            <button aria-label="Previous week" onClick={()=>shiftWeek(-1)} className="px-2 py-1 rounded border border-[#1b2344] focus-visible:outline focus-visible:outline-2 focus-visible:outline-emerald-500">◀</button>
             <div className="text-sm" aria-live="polite">Week of {dayLabel(weekStart)}</div>
-            <button aria-label="Jump to this week" onClick={()=>setWeekStart(saturdayOf(new Date()))} className="px-2 py-1 rounded border border-[#1b2344] focus-visible:outline focus-visible:outline-2 focus-visible:outline-blue-500">This week</button>
-            <button aria-label="Next week" onClick={()=>shiftWeek(1)} className="px-2 py-1 rounded border border-[#1b2344] focus-visible:outline focus-visible:outline-2 focus-visible:outline-blue-500">▶</button>
+            <button aria-label="Jump to this week" onClick={()=>setWeekStart(saturdayOf(new Date()))} className="px-2 py-1 rounded border border-[#1b2344] focus-visible:outline focus-visible:outline-2 focus-visible:outline-emerald-500">This week</button>
+            <button aria-label="Next week" onClick={()=>shiftWeek(1)} className="px-2 py-1 rounded border border-[#1b2344] focus-visible:outline focus-visible:outline-2 focus-visible:outline-emerald-500">▶</button>
           </div>
-          <div className="flex items-center gap-2">
-            <button onClick={autopackWeek} className="px-3 py-2 rounded bg-blue-600 hover:bg-blue-500 text-sm focus-visible:outline focus-visible:outline-2 focus-visible:outline-blue-500">Autopack Week</button>
-            <button onClick={clearThisWeek} className="px-3 py-2 rounded border border-[#1b2344] text-sm focus-visible:outline focus-visible:outline-2 focus-visible:outline-blue-500">Clear This Week</button>
-            <button onClick={promoteWeekToTasks} className="px-3 py-2 rounded border border-emerald-600 text-emerald-400 text-sm focus-visible:outline focus-visible:outline-2 focus-visible:outline-blue-500">Promote Week → Tasks</button>
-            <button onClick={computeCatchUpPreview} className="px-3 py-2 rounded border border-[#1b2344] text-sm focus-visible:outline focus-visible:outline-2 focus-visible:outline-blue-500">Catch-Up</button>
+          <div className="flex items-center gap-3">
+            <button onClick={autopackWeek} className="px-3 py-2 rounded bg-emerald-600 hover:bg-emerald-500 text-sm focus-visible:outline focus-visible:outline-2 focus-visible:outline-emerald-500">Autopack Week</button>
+            <button onClick={clearThisWeek} className="px-3 py-2 rounded border border-[#1b2344] text-sm focus-visible:outline focus-visible:outline-2 focus-visible:outline-emerald-500">Clear This Week</button>
+            <button onClick={promoteWeekToTasks} className="px-3 py-2 rounded border border-emerald-600 text-emerald-400 text-sm focus-visible:outline focus-visible:outline-2 focus-visible:outline-emerald-500">Promote Week → Tasks</button>
+            <button onClick={computeCatchUpPreview} className="px-3 py-2 rounded border border-[#1b2344] text-sm focus-visible:outline focus-visible:outline-2 focus-visible:outline-emerald-500">Catch-Up</button>
             <button onClick={undoCatchUp} className="px-3 py-2 rounded border border-[#1b2344] text-sm disabled:opacity-50" disabled={!undoSnapshot}>Undo Last</button>
             <div className="text-xs text-slate-300/80 ml-2">Need ~{minutesToHM(dailyQuotaCur)}/day to hit goal · <button onClick={autopackWeek} className="underline">Autopack</button></div>
             <label className="ml-2 inline-flex items-center gap-1 text-xs">
@@ -762,14 +762,17 @@ function overlap(a0:number,a1:number,b0:number|null,b1:number|null): number { if
             </label>
           </div>
         </div>
-        <div className="space-y-2">
-          <div className="text-xs text-slate-300/70">Availability (hours:minutes per weekday)</div>
-          <div className="grid grid-cols-2 sm:grid-cols-4 md:grid-cols-7 gap-2">
+        <div className="space-y-3">
+          <div className="text-sm text-slate-300/70">Availability (hours:minutes per weekday)</div>
+          <div className="grid grid-cols-2 sm:grid-cols-4 md:grid-cols-7 gap-3">
             {[6,0,1,2,3,4,5].map(dow => (
-              <div key={dow} className="rounded border border-[#1b2344] p-2">
-                <label className="block text-xs mb-1" htmlFor={`avail-${dow}`}>{['Sun','Mon','Tue','Wed','Thu','Fri','Sat'][dow]}</label>
+              <div key={dow} className="rounded border border-[#1b2344] p-3">
+                <div className="flex items-center justify-between mb-1">
+                  <label className="block text-sm" htmlFor={`avail-${dow}`}>{['Sun','Mon','Tue','Wed','Thu','Fri','Sat'][dow]}</label>
+                  <div className="text-xs text-slate-300/70">{minutesToHM(availability[dow] ?? 0)}</div>
+                </div>
                 <div className="flex items-center gap-2">
-                  <input id={`avail-${dow}`} type="text" inputMode="numeric" placeholder="H:MM" value={minutesToHM(availability[dow] ?? 0)} onChange={e=>setAvailForDow(dow, e.target.value)} disabled={autoFromWindow} className="flex-1 bg-[#0b1020] border border-[#1b2344] rounded px-2 py-1 text-sm focus-visible:outline focus-visible:outline-2 focus-visible:outline-blue-500 disabled:opacity-50" />
+                  <input id={`avail-${dow}`} type="text" inputMode="numeric" placeholder="H:MM" value={minutesToHM(availability[dow] ?? 0)} onChange={e=>setAvailForDow(dow, e.target.value)} disabled={autoFromWindow} className="flex-1 bg-[#0b1020] border border-[#1b2344] rounded px-2 py-2 text-sm focus-visible:outline focus-visible:outline-2 focus-visible:outline-emerald-500 disabled:opacity-50" />
                   <div className="flex items-center gap-1">
                     <button aria-label="Minus 30 minutes" onClick={()=>bumpAvail(dow,-30)} disabled={autoFromWindow} className="px-2 py-1 rounded border border-[#1b2344] text-xs disabled:opacity-50">-30</button>
                     <button aria-label="Minus 15 minutes" onClick={()=>bumpAvail(dow,-15)} disabled={autoFromWindow} className="px-2 py-1 rounded border border-[#1b2344] text-xs disabled:opacity-50">-15</button>
@@ -777,26 +780,26 @@ function overlap(a0:number,a1:number,b0:number|null,b1:number|null): number { if
                     <button aria-label="Plus 30 minutes" onClick={()=>bumpAvail(dow,30)} disabled={autoFromWindow} className="px-2 py-1 rounded border border-[#1b2344] text-xs disabled:opacity-50">+30</button>
                   </div>
                 </div>
-                <div className="mt-2">
-                  <div className="text-[10px] mb-1">Breaks</div>
-                  <div className="space-y-1">
+                <div className="mt-3">
+                  <div className="text-xs mb-1">Breaks</div>
+                  <div className="space-y-2">
                     {(breaksByDow[dow]||[]).map((br, i) => (
                       <div key={i} className="grid grid-cols-2 gap-2 items-start">
                         <div className="flex flex-col gap-1 items-start">
-                          <input type="text" placeholder="2:15" value={fmt12Input(br.start||'').replace(/\s?(AM|PM)$/,'')} onChange={e=>setBreaksByDow(prev=>{ const arr=(prev[dow]||[]).slice(); arr[i]={...arr[i], start:e.target.value}; return { ...prev, [dow]: arr }; })} onBlur={e=>setBreaksByDow(prev=>{ const arr=(prev[dow]||[]).slice(); arr[i]={...arr[i], start: fmt12Input(e.target.value)}; return { ...prev, [dow]: arr }; })} className="w-full bg-[#0b1020] border border-[#1b2344] rounded px-2 py-1 text-sm" />
+                          <input type="text" placeholder="2:15" value={fmt12Input(br.start||'').replace(/\s?(AM|PM)$/,'')} onChange={e=>setBreaksByDow(prev=>{ const arr=(prev[dow]||[]).slice(); arr[i]={...arr[i], start:e.target.value}; return { ...prev, [dow]: arr }; })} onBlur={e=>setBreaksByDow(prev=>{ const arr=(prev[dow]||[]).slice(); arr[i]={...arr[i], start: fmt12Input(e.target.value)}; return { ...prev, [dow]: arr }; })} className="w-full bg-[#0b1020] border border-[#1b2344] rounded px-2 py-2 text-sm" />
                           {(() => { const hh = toMin(normHHMM(br.start||'')); const isPM = (hh ?? 0) >= 12*60; return (
                             <div className="inline-flex gap-1">
-                              <button type="button" onClick={()=>{ const cur=normHHMM(br.start||'')||'13:00'; const [H,M]=cur.split(':').map(v=>parseInt(v,10)); const nextH=(H>=12?H-12:H); const nn=`${String(nextH).padStart(2,'0')}:${String(M).padStart(2,'0')}`; setBreaksByDow(prev=>{ const arr=(prev[dow]||[]).slice(); arr[i]={...arr[i], start: nn}; return { ...prev, [dow]: arr }; }); }} className={`px-2 py-0.5 text-[10px] border rounded ${!isPM?'bg-blue-600 text-white':'border-[#1b2344]'}`}>AM</button>
-                              <button type="button" onClick={()=>{ const cur=normHHMM(br.start||'')||'13:00'; const [H,M]=cur.split(':').map(v=>parseInt(v,10)); const nextH=(H<12?H+12:H); const nn=`${String(nextH).padStart(2,'0')}:${String(M).padStart(2,'0')}`; setBreaksByDow(prev=>{ const arr=(prev[dow]||[]).slice(); arr[i]={...arr[i], start: nn}; return { ...prev, [dow]: arr }; }); }} className={`px-2 py-0.5 text-[10px] border rounded ${isPM?'bg-blue-600 text-white':'border-[#1b2344]'}`}>PM</button>
+                              <button type="button" onClick={()=>{ const cur=normHHMM(br.start||'')||'13:00'; const [H,M]=cur.split(':').map(v=>parseInt(v,10)); const nextH=(H>=12?H-12:H); const nn=`${String(nextH).padStart(2,'0')}:${String(M).padStart(2,'0')}`; setBreaksByDow(prev=>{ const arr=(prev[dow]||[]).slice(); arr[i]={...arr[i], start: nn}; return { ...prev, [dow]: arr }; }); }} className={`px-2 py-1 text-[10px] border rounded ${!isPM?'bg-emerald-600 text-white':'border-[#1b2344]'}`}>AM</button>
+                              <button type="button" onClick={()=>{ const cur=normHHMM(br.start||'')||'13:00'; const [H,M]=cur.split(':').map(v=>parseInt(v,10)); const nextH=(H<12?H+12:H); const nn=`${String(nextH).padStart(2,'0')}:${String(M).padStart(2,'0')}`; setBreaksByDow(prev=>{ const arr=(prev[dow]||[]).slice(); arr[i]={...arr[i], start: nn}; return { ...prev, [dow]: arr }; }); }} className={`px-2 py-1 text-[10px] border rounded ${isPM?'bg-emerald-600 text-white':'border-[#1b2344]'}`}>PM</button>
                             </div>
                           ); })()}
                         </div>
                         <div className="flex flex-col gap-1 items-start">
-                          <input type="text" placeholder="2:45" value={fmt12Input(br.end||'').replace(/\s?(AM|PM)$/,'')} onChange={e=>setBreaksByDow(prev=>{ const arr=(prev[dow]||[]).slice(); arr[i]={...arr[i], end:e.target.value}; return { ...prev, [dow]: arr }; })} onBlur={e=>setBreaksByDow(prev=>{ const arr=(prev[dow]||[]).slice(); arr[i]={...arr[i], end: fmt12Input(e.target.value)}; return { ...prev, [dow]: arr }; })} className="w-full bg-[#0b1020] border border-[#1b2344] rounded px-2 py-1 text-sm" />
+                          <input type="text" placeholder="2:45" value={fmt12Input(br.end||'').replace(/\s?(AM|PM)$/,'')} onChange={e=>setBreaksByDow(prev=>{ const arr=(prev[dow]||[]).slice(); arr[i]={...arr[i], end:e.target.value}; return { ...prev, [dow]: arr }; })} onBlur={e=>setBreaksByDow(prev=>{ const arr=(prev[dow]||[]).slice(); arr[i]={...arr[i], end: fmt12Input(e.target.value)}; return { ...prev, [dow]: arr }; })} className="w-full bg-[#0b1020] border border-[#1b2344] rounded px-2 py-2 text-sm" />
                           {(() => { const hh = toMin(normHHMM(br.end||'')); const isPM = (hh ?? 0) >= 12*60; return (
                             <div className="inline-flex gap-1">
-                              <button type="button" onClick={()=>{ const cur=normHHMM(br.end||'')||'13:30'; const [H,M]=cur.split(':').map(v=>parseInt(v,10)); const nextH=(H>=12?H-12:H); const nn=`${String(nextH).padStart(2,'0')}:${String(M).padStart(2,'0')}`; setBreaksByDow(prev=>{ const arr=(prev[dow]||[]).slice(); arr[i]={...arr[i], end: nn}; return { ...prev, [dow]: arr }; }); }} className={`px-2 py-0.5 text-[10px] border rounded ${!isPM?'bg-blue-600 text-white':'border-[#1b2344]'}`}>AM</button>
-                              <button type="button" onClick={()=>{ const cur=normHHMM(br.end||'')||'13:30'; const [H,M]=cur.split(':').map(v=>parseInt(v,10)); const nextH=(H<12?H+12:H); const nn=`${String(nextH).padStart(2,'0')}:${String(M).padStart(2,'0')}`; setBreaksByDow(prev=>{ const arr=(prev[dow]||[]).slice(); arr[i]={...arr[i], end: nn}; return { ...prev, [dow]: arr }; }); }} className={`px-2 py-0.5 text-[10px] border rounded ${isPM?'bg-blue-600 text-white':'border-[#1b2344]'}`}>PM</button>
+                              <button type="button" onClick={()=>{ const cur=normHHMM(br.end||'')||'13:30'; const [H,M]=cur.split(':').map(v=>parseInt(v,10)); const nextH=(H>=12?H-12:H); const nn=`${String(nextH).padStart(2,'0')}:${String(M).padStart(2,'0')}`; setBreaksByDow(prev=>{ const arr=(prev[dow]||[]).slice(); arr[i]={...arr[i], end: nn}; return { ...prev, [dow]: arr }; }); }} className={`px-2 py-1 text-[10px] border rounded ${!isPM?'bg-emerald-600 text-white':'border-[#1b2344]'}`}>AM</button>
+                              <button type="button" onClick={()=>{ const cur=normHHMM(br.end||'')||'13:30'; const [H,M]=cur.split(':').map(v=>parseInt(v,10)); const nextH=(H<12?H+12:H); const nn=`${String(nextH).padStart(2,'0')}:${String(M).padStart(2,'0')}`; setBreaksByDow(prev=>{ const arr=(prev[dow]||[]).slice(); arr[i]={...arr[i], end: nn}; return { ...prev, [dow]: arr }; }); }} className={`px-2 py-1 text-[10px] border rounded ${isPM?'bg-emerald-600 text-white':'border-[#1b2344]'}`}>PM</button>
                             </div>
                           ); })()}
                         </div>
@@ -807,31 +810,31 @@ function overlap(a0:number,a1:number,b0:number|null,b1:number|null): number { if
                     ))}
                     <div className="flex items-center gap-2">
                       <button onClick={()=>setBreaksByDow(prev=>{ const arr=(prev[dow]||[]).slice(); arr.push({ start:'', end:'' }); return { ...prev, [dow]: arr }; })} className="px-2 py-1 rounded border border-[#1b2344] text-xs">+ Add break</button>
-                      <button onClick={()=>setBreaksByDow(prev=>{ const src=(prev[dow]||[]); const out: Record<number, any[]> = { 0:[],1:[],2:[],3:[],4:[],5:[],6:[] }; for (const k of [0,1,2,3,4,5,6]) out[k] = src.slice(); return out as any; })} className="px-2 py-1 rounded border border-[#1b2344] text-xs">Copy to all weekdays</button>
+                      <button onClick={()=>setBreaksByDow(prev=>{ const src=(prev[dow]||[]); const out: Record<number, any[]> = { 0:[],1:[],2:[],3:[],4:[],5:[],6:[] }; for (const k of [0,1,2,3,4,5,6]) out[k] = src.slice(); return out as any; })} className="px-2 py-1 rounded border border-[#1b2344] text-xs">Copy to weekdays</button>
                     </div>
                   </div>
                 </div>
-                <div className="grid grid-cols-2 gap-2 mt-2">
+                <div className="grid grid-cols-2 gap-2 mt-3">
                   <div>
-                    <label className="block text-[10px] mb-1" htmlFor={`start-${dow}`}>Start</label>
+                    <label className="block text-xs mb-1" htmlFor={`start-${dow}`}>Start</label>
                     <div className="flex flex-col gap-1 items-start">
-                      <input id={`start-${dow}`} type="text" placeholder="7:00" value={fmt12Input(availStartByDow[dow]||'').replace(/\s?(AM|PM)$/,'')} onChange={e=>setAvailStartByDow(prev=>({ ...prev, [dow]: e.target.value }))} onBlur={e=>setAvailStartByDow(prev=>({ ...prev, [dow]: fmt12Input(e.target.value) }))} className="w-full bg-[#0b1020] border border-[#1b2344] rounded px-2 py-1 text-sm focus-visible:outline focus-visible:outline-2 focus-visible:outline-blue-500" />
+                      <input id={`start-${dow}`} type="text" placeholder="7:00" value={fmt12Input(availStartByDow[dow]||'').replace(/\s?(AM|PM)$/,'')} onChange={e=>setAvailStartByDow(prev=>({ ...prev, [dow]: e.target.value }))} onBlur={e=>setAvailStartByDow(prev=>({ ...prev, [dow]: fmt12Input(e.target.value) }))} className="w-full bg-[#0b1020] border border-[#1b2344] rounded px-2 py-2 text-sm focus-visible:outline focus-visible:outline-2 focus-visible:outline-emerald-500" />
                       {(() => { const hh = toMin(normHHMM(availStartByDow[dow]||'')); const isPM = (hh ?? 0) >= 12*60; return (
                         <div className="inline-flex gap-1">
-                          <button type="button" onClick={()=>{ const cur = normHHMM(availStartByDow[dow]||'')||'09:00'; const [H,M]=cur.split(':').map(v=>parseInt(v,10)); const nextH = (H>=12?H-12:H); const nn = `${String(nextH).padStart(2,'0')}:${String(M).padStart(2,'0')}`; setAvailStartByDow(prev=>({ ...prev, [dow]: nn })); }} className={`px-2 py-0.5 text-[10px] border rounded ${!isPM?'bg-blue-600 text-white':'border-[#1b2344]'}`}>AM</button>
-                          <button type="button" onClick={()=>{ const cur = normHHMM(availStartByDow[dow]||'')||'13:00'; const [H,M]=cur.split(':').map(v=>parseInt(v,10)); const nextH = (H<12?H+12:H); const nn = `${String(nextH).padStart(2,'0')}:${String(M).padStart(2,'0')}`; setAvailStartByDow(prev=>({ ...prev, [dow]: nn })); }} className={`px-2 py-0.5 text-[10px] border rounded ${isPM?'bg-blue-600 text-white':'border-[#1b2344]'}`}>PM</button>
+                          <button type="button" onClick={()=>{ const cur = normHHMM(availStartByDow[dow]||'')||'09:00'; const [H,M]=cur.split(':').map(v=>parseInt(v,10)); const nextH = (H>=12?H-12:H); const nn = `${String(nextH).padStart(2,'0')}:${String(M).padStart(2,'0')}`; setAvailStartByDow(prev=>({ ...prev, [dow]: nn })); }} className={`px-2 py-1 text-[10px] border rounded ${!isPM?'bg-emerald-600 text-white':'border-[#1b2344]'}`}>AM</button>
+                          <button type="button" onClick={()=>{ const cur = normHHMM(availStartByDow[dow]||'')||'13:00'; const [H,M]=cur.split(':').map(v=>parseInt(v,10)); const nextH = (H<12?H+12:H); const nn = `${String(nextH).padStart(2,'0')}:${String(M).padStart(2,'0')}`; setAvailStartByDow(prev=>({ ...prev, [dow]: nn })); }} className={`px-2 py-1 text-[10px] border rounded ${isPM?'bg-emerald-600 text-white':'border-[#1b2344]'}`}>PM</button>
                         </div>
                       ); })()}
                     </div>
                   </div>
                   <div>
-                    <label className="block text-[10px] mb-1" htmlFor={`end-${dow}`}>End</label>
+                    <label className="block text-xs mb-1" htmlFor={`end-${dow}`}>End</label>
                     <div className="flex flex-col gap-1 items-start">
-                      <input id={`end-${dow}`} type="text" placeholder="5:00" value={fmt12Input(availEndByDow[dow]||'').replace(/\s?(AM|PM)$/,'')} onChange={e=>setAvailEndByDow(prev=>({ ...prev, [dow]: e.target.value }))} onBlur={e=>setAvailEndByDow(prev=>({ ...prev, [dow]: fmt12Input(e.target.value) }))} className="w-full bg-[#0b1020] border border-[#1b2344] rounded px-2 py-1 text-sm focus-visible:outline focus-visible:outline-2 focus-visible:outline-blue-500" />
+                      <input id={`end-${dow}`} type="text" placeholder="5:00" value={fmt12Input(availEndByDow[dow]||'').replace(/\s?(AM|PM)$/,'')} onChange={e=>setAvailEndByDow(prev=>({ ...prev, [dow]: e.target.value }))} onBlur={e=>setAvailEndByDow(prev=>({ ...prev, [dow]: fmt12Input(e.target.value) }))} className="w-full bg-[#0b1020] border border-[#1b2344] rounded px-2 py-2 text-sm focus-visible:outline focus-visible:outline-2 focus-visible:outline-emerald-500" />
                       {(() => { const hh = toMin(normHHMM(availEndByDow[dow]||'')); const isPM = (hh ?? 0) >= 12*60; return (
                         <div className="inline-flex gap-1">
-                          <button type="button" onClick={()=>{ const cur = normHHMM(availEndByDow[dow]||'')||'17:00'; const [H,M]=cur.split(':').map(v=>parseInt(v,10)); const nextH = (H>=12?H-12:H); const nn = `${String(nextH).padStart(2,'0')}:${String(M).padStart(2,'0')}`; setAvailEndByDow(prev=>({ ...prev, [dow]: nn })); }} className={`px-2 py-0.5 text-[10px] border rounded ${!isPM?'bg-blue-600 text-white':'border-[#1b2344]'}`}>AM</button>
-                          <button type="button" onClick={()=>{ const cur = normHHMM(availEndByDow[dow]||'')||'17:00'; const [H,M]=cur.split(':').map(v=>parseInt(v,10)); const nextH = (H<12?H+12:H); const nn = `${String(nextH).padStart(2,'0')}:${String(M).padStart(2,'0')}`; setAvailEndByDow(prev=>({ ...prev, [dow]: nn })); }} className={`px-2 py-0.5 text-[10px] border rounded ${isPM?'bg-blue-600 text-white':'border-[#1b2344]'}`}>PM</button>
+                          <button type="button" onClick={()=>{ const cur = normHHMM(availEndByDow[dow]||'')||'17:00'; const [H,M]=cur.split(':').map(v=>parseInt(v,10)); const nextH = (H>=12?H-12:H); const nn = `${String(nextH).padStart(2,'0')}:${String(M).padStart(2,'0')}`; setAvailEndByDow(prev=>({ ...prev, [dow]: nn })); }} className={`px-2 py-1 text-[10px] border rounded ${!isPM?'bg-emerald-600 text-white':'border-[#1b2344]'}`}>AM</button>
+                          <button type="button" onClick={()=>{ const cur = normHHMM(availEndByDow[dow]||'')||'17:00'; const [H,M]=cur.split(':').map(v=>parseInt(v,10)); const nextH = (H<12?H+12:H); const nn = `${String(nextH).padStart(2,'0')}:${String(M).padStart(2,'0')}`; setAvailEndByDow(prev=>({ ...prev, [dow]: nn })); }} className={`px-2 py-1 text=[10px] border rounded ${isPM?'bg-emerald-600 text-white':'border-[#1b2344]'}`}>PM</button>
                         </div>
                       ); })()}
                     </div>
@@ -903,7 +906,7 @@ function overlap(a0:number,a1:number,b0:number|null,b1:number|null): number { if
                   </div>
                 </div>
                 <div className="h-2 w-full bg-[#0b1020] border border-[#1b2344] rounded overflow-hidden mb-2" role="progressbar" aria-valuemin={0} aria-valuemax={cap||0} aria-valuenow={planned} aria-label="Planned minutes">
-                  <div className={`${overBy>0?'bg-rose-600':'bg-blue-600'}`} style={{ width: `${pct}%`, height: '100%' }} />
+                  <div className={`${overBy>0?'bg-rose-600':'bg-emerald-600'}`} style={{ width: `${pct}%`, height: '100%' }} />
                 </div>
                 {overBy>0 ? <div className="text-[11px] text-rose-400 mb-2">Over by {minutesToHM(overBy)}</div> : null}
                 <div className="mb-2">
