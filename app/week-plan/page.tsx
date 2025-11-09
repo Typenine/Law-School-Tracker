@@ -165,6 +165,7 @@ export default function WeekPlanPage() {
   const [timePicker, setTimePicker] = useState<{ kind: 'win-start'|'win-end'|'br-start'|'br-end'; dow: number; index: number } | null>(null);
   const [rowMenu, setRowMenu] = useState<{ kind: 'win'|'br'; dow: number; index: number } | null>(null);
   const [toolbarMenu, setToolbarMenu] = useState<{ dow: number } | null>(null);
+  const [addWinModal, setAddWinModal] = useState<{ dow: number; start: string; end: string } | null>(null);
   const [courses, setCourses] = useState<any[]>([]);
   const [twoWeeksOnly, setTwoWeeksOnly] = useState<boolean>(false);
   const [undoSnapshot, setUndoSnapshot] = useState<ScheduledBlock[] | null>(null);
@@ -323,6 +324,30 @@ export default function WeekPlanPage() {
       return changed ? next : prev;
     });
   }, [windowsByDow, breaksByDow, autoFromWindow]);
+
+  // Helper: compute availability minutes for a DOW given candidate windows
+  function computeAvailForWins(dow: number, winsArr: Array<{ start?: string; end?: string }>, brArr: Array<{ start?: string; end?: string }>): number {
+    const winIntervals: Array<[number,number]> = (winsArr||[])
+      .map(w => [toMin(normHHMM(w.start||''))??-1, toMin(normHHMM(w.end||''))??-1])
+      .filter(([a,b]) => a>=0 && b>=0 && b>a) as Array<[number,number]>;
+    winIntervals.sort((a,b)=>a[0]-b[0]);
+    const mergedWins: Array<[number,number]> = [];
+    for (const iv of winIntervals) { if (!mergedWins.length || iv[0] > mergedWins[mergedWins.length-1][1]) mergedWins.push([iv[0], iv[1]]); else mergedWins[mergedWins.length-1][1] = Math.max(mergedWins[mergedWins.length-1][1], iv[1]); }
+    const brIntervals: Array<[number,number]> = (brArr||[])
+      .map(b => [toMin(normHHMM(b.start||''))??-1, toMin(normHHMM(b.end||''))??-1])
+      .filter(([a,b]) => a>=0 && b>=0 && b>a) as Array<[number,number]>;
+    brIntervals.sort((a,b)=>a[0]-b[0]);
+    const mergedBr: Array<[number,number]> = [];
+    for (const iv of brIntervals) { if (!mergedBr.length || iv[0] > mergedBr[mergedBr.length-1][1]) mergedBr.push([iv[0], iv[1]]); else mergedBr[mergedBr.length-1][1] = Math.max(mergedBr[mergedBr.length-1][1], iv[1]); }
+    let total = 0; for (const [ws,we] of mergedWins) { const base = Math.max(0, we - ws); let over = 0; for (const [bs,be] of mergedBr) { const sC = Math.max(ws, bs); const eC = Math.min(we, be); if (eC>sC) over += (eC - sC); } total += Math.max(0, base - over); }
+    return total;
+  }
+
+  // Helper: date string (YYYY-MM-DD) for given DOW in current week
+  function ymdForDow(dow: number): string {
+    for (const d of days) if (d.getDay() === dow) return ymd(d);
+    return ymd(days[0]);
+  }
 
   // On first load, hydrate Windows from Start/End +/- Breaks (complement of breaks within [start,end])
   useEffect(() => {
@@ -744,7 +769,7 @@ function parseAvailFlexible(input: string): number | null {
                       <button aria-label="Open day actions" onClick={()=>setToolbarMenu(m => (m && m.dow===dow)? null : { dow })} className="px-2 py-1 rounded border border-white/10 text-xs">…</button>
                       {toolbarMenu && toolbarMenu.dow===dow ? (
                         <div className="absolute right-0 mt-2 z-30 w-40 rounded border border-white/10 bg-[#0b1020] p-2 text-xs space-y-1 shadow-lg">
-                          <button onClick={()=>{ setWindowsByDow(prev=>{ const arr=(prev[dow]||[]).slice(); arr.push({ start:'', end:'' }); return { ...prev, [dow]: arr }; }); setToolbarMenu(null); }} className="block w-full text-left px-2 py-1 rounded hover:bg-white/5">Add window</button>
+                          <button onClick={()=>{ setAddWinModal({ dow, start: '9:00 AM', end: '5:00 PM' }); setToolbarMenu(null); }} className="block w-full text-left px-2 py-1 rounded hover:bg-white/5">Add window</button>
                           <button onClick={()=>{ setBreaksByDow(prev=>{ const arr=(prev[dow]||[]).slice(); arr.push({ start:'', end:'' }); return { ...prev, [dow]: arr }; }); setToolbarMenu(null); }} className="block w-full text-left px-2 py-1 rounded hover:bg-white/5">Add break</button>
                           <button onClick={()=>{ setWindowsByDow(prev=>{ const wins=(prev[dow]||[]).slice(); const out: Record<number, any[]> = {0:[],1:[],2:[],3:[],4:[],5:[],6:[]}; for(const k of [1,2,3,4,5]) out[k]=wins.slice(); return { ...prev, ...out } as any; }); setBreaksByDow(prev=>{ const br=(prev[dow]||[]).slice(); const out: Record<number, any[]> = {0:(prev[0]||[]),1:[],2:[],3:[],4:[],5:[],6:(prev[6]||[])}; for(const k of [1,2,3,4,5]) out[k]=br.slice(); return out as any; }); setToolbarMenu(null); }} className="block w-full text-left px-2 py-1 rounded hover:bg-white/5">Copy to weekdays</button>
                         </div>
@@ -782,7 +807,7 @@ function parseAvailFlexible(input: string): number | null {
                       </div>
                     );})}
                     <div>
-                      <button onClick={()=>setWindowsByDow(prev=>{ const arr=(prev[dow]||[]).slice(); arr.push({ start:'', end:'' }); return { ...prev, [dow]: arr }; })} className="mt-1 px-2 py-1 rounded border border-white/10 text-xs">+ Add window</button>
+                      <button onClick={()=>setAddWinModal({ dow, start: '9:00 AM', end: '5:00 PM' })} className="mt-1 px-2 py-1 rounded border border-white/10 text-xs">+ Add window</button>
                     </div>
                   </div>
                 </div>
@@ -953,6 +978,50 @@ function parseAvailFlexible(input: string): number | null {
           </div>
         )}
       </section>
+
+      {addWinModal && (
+        <div role="dialog" aria-modal="true" className="fixed inset-0 z-50 flex items-center justify-center">
+          <div className="absolute inset-0 bg-black/60" onClick={()=>setAddWinModal(null)} />
+          {(() => { const dow = addWinModal.dow; const startVal = addWinModal.start; const endVal = addWinModal.end; const valid = (toMin(normHHMM(startVal||''))??0) < (toMin(normHHMM(endVal||''))??0); const curWins = (windowsByDow[dow]||[]); const brs = (breaksByDow[dow]||[]); const before = computeAvailForWins(dow, curWins, brs); const candWins = [...curWins, { start: startVal, end: endVal }]; const after = valid ? computeAvailForWins(dow, candWins, brs) : before; const k = ymdForDow(dow); const dayBlocks = blocks.filter(b => b.day === k); return (
+            <div className="relative z-10 w-[92vw] max-w-md bg-[#0b1020] border border-[#1b2344] rounded p-4">
+              <div className="flex items-center justify-between mb-2">
+                <div className="text-sm font-medium">Add window — {['Sun','Mon','Tue','Wed','Thu','Fri','Sat'][dow]}</div>
+                <button onClick={()=>setAddWinModal(null)} className="text-xs px-2 py-1 rounded border border-[#1b2344]">Close</button>
+              </div>
+              <div className="grid grid-cols-1 gap-2 text-sm">
+                <label className="block">
+                  <span className="block text-xs text-slate-300/70 mb-1">Start</span>
+                  <input type="text" placeholder="9:00 AM" value={startVal} onChange={e=>setAddWinModal(m=>m?{...m,start:e.target.value}:m)} className={`w-full h-9 px-3 rounded-lg bg-white/10 border ${valid? 'border-white/10':'border-rose-600'}`} />
+                </label>
+                <label className="block">
+                  <span className="block text-xs text-slate-300/70 mb-1">End</span>
+                  <input type="text" placeholder="5:00 PM" value={endVal} onChange={e=>setAddWinModal(m=>m?{...m,end:e.target.value}:m)} className={`w-full h-9 px-3 rounded-lg bg-white/10 border ${valid? 'border-white/10':'border-rose-600'}`} />
+                </label>
+                <div className="text-xs text-slate-300/70">Availability: <span className="text-slate-200">{minutesToHM(before)}</span> → <span className="text-emerald-400">{minutesToHM(after)}</span></div>
+                <div className="text-xs text-slate-300/70">Scheduled that day: <span className="text-slate-200">{minutesToHM(dayBlocks.reduce((s,b)=>s+b.plannedMinutes,0))}</span></div>
+                <div className="max-h-40 overflow-auto border border-[#1b2344] rounded p-2">
+                  {dayBlocks.length===0 ? (
+                    <div className="text-[11px] text-slate-300/50">No items planned</div>
+                  ) : (
+                    <ul className="text-[11px] space-y-1">
+                      {dayBlocks.map(b => (
+                        <li key={b.id} className="flex items-center justify-between">
+                          <span className="truncate mr-2">{b.course ? `${b.course}: `:''}{b.title}</span>
+                          <span>{minutesToHM(b.plannedMinutes)}</span>
+                        </li>
+                      ))}
+                    </ul>
+                  )}
+                </div>
+                <div className="flex items-center justify-end gap-2 mt-1">
+                  <button onClick={()=>setAddWinModal(null)} className="px-3 py-2 rounded border border-[#1b2344] text-sm">Cancel</button>
+                  <button disabled={!valid} onClick={()=>{ if(!valid) return; const st = fmt12Input(normHHMM(startVal||'')||''); const en = fmt12Input(normHHMM(endVal||'')||''); setWindowsByDow(prev=>{ const arr=(prev[dow]||[]).slice(); arr.push({ start: st, end: en }); return { ...prev, [dow]: arr }; }); setAddWinModal(null); }} className={`px-3 py-2 rounded text-sm ${valid? 'bg-emerald-600 hover:bg-emerald-500':'bg-[#1b2344] text-slate-400'}`}>Add window</button>
+                </div>
+              </div>
+            </div>
+          ); })()}
+        </div>
+      )}
 
       {showCatchup && catchupPreview && (
         <div role="dialog" aria-modal="true" className="fixed inset-0 z-50 flex items-center justify-center">
