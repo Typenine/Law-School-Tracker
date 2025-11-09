@@ -50,6 +50,7 @@ const LS_TWO_WEEKS = "weekPlanTwoWeeksOnly";
 const LS_AVAIL_START = "availabilityStartHHMM";
 const LS_AVAIL_END = "availabilityEndHHMM";
 const LS_AVAIL_BREAKS = "availabilityBreaksV1";
+const LS_AVAIL_AUTO = "availabilityAutoFromWindow";
 
 type WeeklyGoal = { id: string; scope: 'global'|'course'; weeklyMinutes: number; course?: string | null };
 
@@ -167,6 +168,7 @@ export default function WeekPlanPage() {
   const [showCatchup, setShowCatchup] = useState(false);
   const [availStartByDow, setAvailStartByDow] = useState<Record<number, string>>({ 0:'',1:'',2:'',3:'',4:'',5:'',6:'' });
   const [availEndByDow, setAvailEndByDow] = useState<Record<number, string>>({ 0:'',1:'',2:'',3:'',4:'',5:'',6:'' });
+  const [autoFromWindow, setAutoFromWindow] = useState<boolean>(true);
   const [catchupPreview, setCatchupPreview] = useState<{
     days: Array<{ day: string; total: number; usedBefore: number; usedAfter: number; items: Array<{ taskId: string; title: string; course: string; minutes: number; guessed: boolean }> }>;
     unschedulable: Array<{ taskId: string; title: string; remaining: number; dueYmd: string }>;
@@ -189,6 +191,7 @@ export default function WeekPlanPage() {
         if (!endObj && e) endObj = {0:e,1:e,2:e,3:e,4:e,5:e,6:e};
         if (startObj) setAvailStartByDow(startObj);
         if (endObj) setAvailEndByDow(endObj);
+        try { const auto = window.localStorage.getItem(LS_AVAIL_AUTO); if (auto != null) setAutoFromWindow(auto === 'true'); } catch {}
       }
     } catch {}
     let canceled = false;
@@ -197,7 +200,7 @@ export default function WeekPlanPage() {
       try {
         const [schRes, setRes] = await Promise.all([
           fetch('/api/schedule', { cache: 'no-store' }),
-          fetch('/api/settings?keys=availabilityTemplateV1,weeklyGoalsV1,weekPlanShowConflicts,weekPlanWeekStartYmd,weekPlanTwoWeeksOnly,internshipColor,sportsLawReviewColor,availabilityStartHHMM,availabilityEndHHMM,availabilityBreaksV1,weekScheduleV1', { cache: 'no-store' })
+          fetch('/api/settings?keys=availabilityTemplateV1,weeklyGoalsV1,weekPlanShowConflicts,weekPlanWeekStartYmd,weekPlanTwoWeeksOnly,internshipColor,sportsLawReviewColor,availabilityStartHHMM,availabilityEndHHMM,availabilityBreaksV1,weekScheduleV1,availabilityAutoFromWindow', { cache: 'no-store' })
         ]);
         if (canceled) return;
         if (setRes.ok) {
@@ -223,6 +226,7 @@ export default function WeekPlanPage() {
           else if (typeof sEnd === 'string') setAvailEndByDow({0:sEnd,1:sEnd,2:sEnd,3:sEnd,4:sEnd,5:sEnd,6:sEnd});
           const br = (settings as any).availabilityBreaksV1;
           if (br && typeof br === 'object') setBreaksByDow(br as Record<number, Array<{ start?: string; end?: string }>>);
+          if (typeof (settings as any).availabilityAutoFromWindow === 'boolean') setAutoFromWindow((settings as any).availabilityAutoFromWindow as boolean);
           // Mirror virtual course colors to localStorage so colorForCourse picks them up on all pages
           try {
             if (typeof window !== 'undefined') {
@@ -271,6 +275,37 @@ export default function WeekPlanPage() {
   useEffect(() => { try { if (typeof window!=='undefined') window.localStorage.setItem(LS_AVAIL_START, JSON.stringify(availStartByDow)); void fetch('/api/settings', { method:'PATCH', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ availabilityStartHHMM: availStartByDow }) }); } catch {} }, [availStartByDow]);
   useEffect(() => { try { if (typeof window!=='undefined') window.localStorage.setItem(LS_AVAIL_END, JSON.stringify(availEndByDow)); void fetch('/api/settings', { method:'PATCH', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ availabilityEndHHMM: availEndByDow }) }); } catch {} }, [availEndByDow]);
   useEffect(() => { try { if (typeof window!=='undefined') window.localStorage.setItem(LS_AVAIL_BREAKS, JSON.stringify(breaksByDow)); void fetch('/api/settings', { method:'PATCH', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ availabilityBreaksV1: breaksByDow }) }); } catch {} }, [breaksByDow]);
+  // Persist auto-from-window toggle
+  useEffect(() => { try { if (typeof window!=='undefined') window.localStorage.setItem(LS_AVAIL_AUTO, autoFromWindow ? 'true':'false'); void fetch('/api/settings', { method:'PATCH', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ availabilityAutoFromWindow: autoFromWindow }) }); } catch {} }, [autoFromWindow]);
+
+  // Auto derive availability minutes from Start/End minus breaks
+  useEffect(() => {
+    if (!autoFromWindow) return;
+    setAvailability(prev => {
+      const next: Record<number, number> = { ...prev } as any;
+      let changed = false;
+      for (const dow of [0,1,2,3,4,5,6]) {
+        const s = normHHMM(availStartByDow[dow]||'');
+        const e = normHHMM(availEndByDow[dow]||'');
+        const sMin = toMin(s); const eMin = toMin(e);
+        if (sMin==null || eMin==null || eMin<=sMin) continue; // require valid window
+        const winStart = sMin; const winEnd = eMin; const baseLen = Math.max(0, winEnd - winStart);
+        const brs = breaksByDow[dow] || [];
+        const toI = (v?: string | null) => toMin(normHHMM(v||''));
+        const rawIntervals: Array<[number,number]> = brs.map(b => [toI(b.start)??-1, toI(b.end)??-1]).filter(([a,b]) => a>=0 && b>=0 && b>a) as Array<[number,number]>;
+        rawIntervals.sort((a,b)=>a[0]-b[0]);
+        const merged: Array<[number,number]> = [];
+        for (const iv of rawIntervals) {
+          if (!merged.length || iv[0] > merged[merged.length-1][1]) merged.push([iv[0], iv[1]]);
+          else merged[merged.length-1][1] = Math.max(merged[merged.length-1][1], iv[1]);
+        }
+        let breakOverlap = 0; for (const [a,b] of merged) breakOverlap += overlap(winStart, winEnd, a, b);
+        const windowMinutes = Math.max(0, baseLen - breakOverlap);
+        if ((next as any)[dow] !== windowMinutes) { (next as any)[dow] = windowMinutes; changed = true; }
+      }
+      return changed ? next : prev;
+    });
+  }, [availStartByDow, availEndByDow, breaksByDow, autoFromWindow]);
 
   // Fetch tasks for Catch-Up
   useEffect(() => {
@@ -727,6 +762,9 @@ function overlap(a0:number,a1:number,b0:number|null,b1:number|null): number { if
             <label className="ml-2 inline-flex items-center gap-1 text-xs">
               <input type="checkbox" checked={showConflicts} onChange={e=>setShowConflicts(e.target.checked)} /> Show conflicts
             </label>
+            <label className="ml-2 inline-flex items-center gap-1 text-xs">
+              <input type="checkbox" checked={autoFromWindow} onChange={e=>setAutoFromWindow(e.target.checked)} /> Auto from Start/End
+            </label>
           </div>
         </div>
         <div className="space-y-2">
@@ -736,12 +774,12 @@ function overlap(a0:number,a1:number,b0:number|null,b1:number|null): number { if
               <div key={dow} className="rounded border border-[#1b2344] p-2">
                 <label className="block text-xs mb-1" htmlFor={`avail-${dow}`}>{['Sun','Mon','Tue','Wed','Thu','Fri','Sat'][dow]}</label>
                 <div className="flex items-center gap-2">
-                  <input id={`avail-${dow}`} type="text" inputMode="numeric" placeholder="H:MM" value={minutesToHM(availability[dow] ?? 0)} onChange={e=>setAvailForDow(dow, e.target.value)} className="flex-1 bg-[#0b1020] border border-[#1b2344] rounded px-2 py-1 text-sm focus-visible:outline focus-visible:outline-2 focus-visible:outline-blue-500" />
+                  <input id={`avail-${dow}`} type="text" inputMode="numeric" placeholder="H:MM" value={minutesToHM(availability[dow] ?? 0)} onChange={e=>setAvailForDow(dow, e.target.value)} disabled={autoFromWindow} className="flex-1 bg-[#0b1020] border border-[#1b2344] rounded px-2 py-1 text-sm focus-visible:outline focus-visible:outline-2 focus-visible:outline-blue-500 disabled:opacity-50" />
                   <div className="flex items-center gap-1">
-                    <button aria-label="Minus 30 minutes" onClick={()=>bumpAvail(dow,-30)} className="px-2 py-1 rounded border border-[#1b2344] text-xs">-30</button>
-                    <button aria-label="Minus 15 minutes" onClick={()=>bumpAvail(dow,-15)} className="px-2 py-1 rounded border border-[#1b2344] text-xs">-15</button>
-                    <button aria-label="Plus 15 minutes" onClick={()=>bumpAvail(dow,15)} className="px-2 py-1 rounded border border-[#1b2344] text-xs">+15</button>
-                    <button aria-label="Plus 30 minutes" onClick={()=>bumpAvail(dow,30)} className="px-2 py-1 rounded border border-[#1b2344] text-xs">+30</button>
+                    <button aria-label="Minus 30 minutes" onClick={()=>bumpAvail(dow,-30)} disabled={autoFromWindow} className="px-2 py-1 rounded border border-[#1b2344] text-xs disabled:opacity-50">-30</button>
+                    <button aria-label="Minus 15 minutes" onClick={()=>bumpAvail(dow,-15)} disabled={autoFromWindow} className="px-2 py-1 rounded border border-[#1b2344] text-xs disabled:opacity-50">-15</button>
+                    <button aria-label="Plus 15 minutes" onClick={()=>bumpAvail(dow,15)} disabled={autoFromWindow} className="px-2 py-1 rounded border border-[#1b2344] text-xs disabled:opacity-50">+15</button>
+                    <button aria-label="Plus 30 minutes" onClick={()=>bumpAvail(dow,30)} disabled={autoFromWindow} className="px-2 py-1 rounded border border-[#1b2344] text-xs disabled:opacity-50">+30</button>
                   </div>
                 </div>
                 <div className="mt-2">
