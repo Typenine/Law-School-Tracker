@@ -37,48 +37,6 @@ const LS_GOALS = "weeklyGoalsV1";
 const LS_ORIG_RANGES = "readOrigRangesMapV1";
 
 function minutesPerPage(): number { if (typeof window==='undefined') return 3; const s=window.localStorage.getItem('minutesPerPage'); const n=s?parseFloat(s):NaN; return !isNaN(n)&&n>0?n:3; }
-
-function computeRemainingPages(opts: {
-  title: string;
-  sessions: any[];
-  taskId: string | null;
-  baseline?: string | null;
-}) {
-  const chips = extractPageRanges(opts.title || '');
-  const baseline = (opts.baseline || '').trim();
-  const baselineIntervals = baseline ? parseIntervalsFromRangeString(baseline) : [];
-  const extractedIntervals = chips.length ? parseIntervalsFromRangeString(chips.join(', ')) : [];
-  const assignedUnion = baselineIntervals.length ? baselineIntervals : extractedIntervals;
-  let completedUnion: Interval[] = [];
-  for (const ss of opts.sessions || []) {
-    if (ss?.taskId !== opts.taskId) continue;
-    const notePortion = typeof ss?.notes === 'string' ? ss.notes.match(/Portion:\s*([^\n]+)/i)?.[1] : null;
-    const source = (ss?.pagesLabel || ss?.pageRanges || '') || notePortion || '';
-    const parsed = source ? parseIntervalsFromRangeString(source) : [];
-    if (parsed.length) {
-      completedUnion = unionIntervals(completedUnion, parsed);
-      continue;
-    }
-    const read = Number(ss?.pagesRead || 0);
-    if (read > 0) {
-      const backfill = subtractCountFromFront(assignedUnion, pagesInIntervals(completedUnion));
-      const front = subtractCountFromFront(backfill, read);
-      completedUnion = unionIntervals(completedUnion, subtractIntervals(backfill, front));
-    }
-  }
-  const remaining = subtractIntervals(assignedUnion, completedUnion);
-  const remainingLabel = remaining.length ? `p. ${remaining.map(([a,b]) => a===b?String(a):`${a}–${b}`).join(', ')}` : '';
-  const remainingCount = pagesInIntervals(remaining);
-  const assignedLabel = assignedUnion.length ? `p. ${assignedUnion.map(([a,b]) => a===b?String(a):`${a}–${b}`).join(', ')}` : '';
-  return {
-    chips,
-    assignedUnion,
-    assignedLabel,
-    remaining,
-    remainingCount,
-    remainingLabel,
-  };
-}
 // Count pages from title ranges like "p. 449–486, 505–520"
 function countPagesFromTitle(title: string): number {
   const s = (title || '').trim();
@@ -317,10 +275,6 @@ export default function TodayPage() {
   const [itemStartAt, setItemStartAt] = useState<Record<string, number>>({});
   const itemTickRef = useRef<NodeJS.Timeout|null>(null);
   const carryoverRef = useRef<boolean>(false);
-  const [origRangesMap, setOrigRangesMap] = useState<Record<string, string>>(() => {
-    if (typeof window === 'undefined') return {};
-    try { const raw = window.localStorage.getItem(LS_ORIG_RANGES); return raw ? JSON.parse(raw) : {}; } catch { return {}; }
-  });
   const [ctNow, setCtNow] = useState<string>(() => new Intl.DateTimeFormat('en-US',{ timeZone:'America/Chicago', hour:'numeric', minute:'2-digit', hour12:true }).format(new Date()));
   const [nowTs, setNowTs] = useState<number>(() => Date.now());
   const [logModal, setLogModal] = useState<{ mode: 'partial'|'finish'; itemId: string } | null>(null);
@@ -437,7 +391,6 @@ export default function TodayPage() {
       const nextItems: TodayPlanItem[] = [];
       const nextSched = (schedule||[]).slice();
       for (const it of plan.items) {
-        const taskId = canonicalTaskIdForItem(it, plan.dateKey, schedule, tasks) || it.id;
         const chips = extractPageRanges(String(it.title||''));
         if (chips.length === 0) { nextItems.push(it); continue; }
         const re = /\bp(?:p|ages?)?\.?\s*[0-9,\s–:\-]+(?:\s*,\s*[0-9–:\-]+)*/i;
@@ -448,7 +401,7 @@ export default function TodayPage() {
         // cumulative previously read (pagesRead if present; else derive from minutes)
         let prevPages = 0; let extraMins = 0;
         for (const ss of (sessions||[])) {
-          if (ss?.taskId !== taskId) continue;
+          if (ss?.taskId !== it.id) continue;
           const pr = Number(ss?.pagesRead || 0);
           if (pr > 0) prevPages += pr;
           else extraMins += Math.max(0, Number(ss?.minutes)||0);
@@ -462,23 +415,23 @@ export default function TodayPage() {
           // remove from plan
           changed = true;
           // mark schedule block to 0 if present
-          const si = nextSched.findIndex(b => b.taskId === taskId && b.day === plan.dateKey);
+          const si = nextSched.findIndex(b => b.taskId === it.id && b.day === plan.dateKey);
           if (si !== -1) { nextSched[si] = { ...nextSched[si], plannedMinutes: 0 }; scheduleChanged = true; }
           // best-effort mark task done
-          if (isUUID(taskId)) { try { void fetch(`/api/tasks/${taskId}`, { method:'PATCH', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ status: 'done' }) }); } catch {} }
+          if (isUUID(it.id)) { try { void fetch(`/api/tasks/${it.id}`, { method:'PATCH', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ status: 'done' }) }); } catch {} }
           continue;
         }
         const newMinutes = Math.max(1, Math.round(pagesLeft * minutesPerPageForCourse(it.course)));
         const currentLabel = String(it.title||'').match(re)?.[0] || '';
-        const desiredTitle = re.test(it.title) ? String(it.title).replace(re, remainLabel) : `${it.title} — ${remainLabel}`;
+        const desiredTitle = re.test(it.title||'') ? String(it.title).replace(re, remainLabel) : `${it.title} — ${remainLabel}`;
         if (currentLabel !== remainLabel || Number(it.minutes)!==newMinutes || it.guessed===true) {
           nextItems.push({ ...it, title: desiredTitle, minutes: newMinutes, guessed: false });
           changed = true;
           // schedule
-          const si = nextSched.findIndex(b => b.taskId === taskId && b.day === plan.dateKey);
+          const si = nextSched.findIndex(b => b.taskId === it.id && b.day === plan.dateKey);
           if (si !== -1) { nextSched[si] = { ...nextSched[si], title: desiredTitle, plannedMinutes: newMinutes, guessed: false }; scheduleChanged = true; }
           // persist task
-          if (isUUID(taskId)) { try { void fetch(`/api/tasks/${taskId}`, { method:'PATCH', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ title: desiredTitle, estimatedMinutes: newMinutes }) }); } catch {} }
+          if (isUUID(it.id)) { try { void fetch(`/api/tasks/${it.id}`, { method:'PATCH', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ title: desiredTitle, estimatedMinutes: newMinutes }) }); } catch {} }
         } else {
           nextItems.push(it);
         }
@@ -489,7 +442,6 @@ export default function TodayPage() {
         try { void fetch('/api/schedule', { method:'PUT', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ blocks: nextSched }) }); } catch {}
       }
       window.localStorage.setItem(LS_ORIG_RANGES, JSON.stringify(origMap));
-      setOrigRangesMap(origMap);
     } catch {}
   }, [sessions, plan.dateKey, plan.items.length]);
   // Tasks for tomorrow preview
@@ -722,7 +674,6 @@ export default function TodayPage() {
         } catch {}
       }
       window.localStorage.setItem(LS_ORIG_RANGES, JSON.stringify(origMap));
-      setOrigRangesMap(origMap);
     } catch {}
   }
 
@@ -734,7 +685,7 @@ export default function TodayPage() {
     const it = plan.items.find(x => x.id === itemId); if (!it) return;
     const secs = Math.max(0, Number(itemSeconds[itemId] || 0));
     const minsFromTimer = Math.floor(secs / 60);
-    const def = mode === 'finish' ? Math.max(1, minsFromTimer || (Number(it.minutes)||0)) : Math.max(1, minsFromTimer || Math.max(1, Math.round((Number(it.minutes)||0) / 2)));
+    const def = mode === 'finish' ? Math.max(1, minsFromTimer || (Number(it.minutes)||0)) : Math.max(1, minsFromTimer || Math.max(1, Math.round((Number(it.minutes)||0)/2)));
     const df = (typeof window !== 'undefined' ? (window.localStorage.getItem('defaultFocus') || '5') : '5');
     setLogForm({ minutes: minutesToHM(def), focus: df, notes: '', pages: '', portion: '' });
     setLogModal({ mode, itemId });
@@ -1187,7 +1138,7 @@ export default function TodayPage() {
                       </div>
                       <label htmlFor={`minutes-${it.id}`} className="sr-only">Minutes for {it.title}</label>
                       <input id={`minutes-${it.id}`} type="number" min={5} step={5} value={it.minutes} onChange={e=>setPlan(p=>({ ...p, items: p.items.map(x=>x.id===it.id?{...x, minutes: parseInt(e.target.value||'0',10)||0}:x) }))} className="w-20 bg-[#0b1020] border border-[#1b2344] rounded px-2 py-1 text-sm focus-visible:outline focus-visible:outline-2 focus-visible:outline-blue-500" />
-                      <div className="flex items-center gap-2 shrink-0">
+                      <div className="flex items-center gap-1">
                         <button aria-label="Move up" onClick={()=>moveItem(it.id,-1)} className="px-2 py-1 rounded border border-[#1b2344] text-xs focus-visible:outline focus-visible:outline-2 focus-visible:outline-blue-500" disabled={idx===0}>↑</button>
                         <button aria-label="Move down" onClick={()=>moveItem(it.id, 1)} className="px-2 py-1 rounded border border-[#1b2344] text-xs focus-visible:outline focus-visible:outline-2 focus-visible:outline-blue-500" disabled={idx===plan.items.length-1}>↓</button>
                         <button aria-label="Remove item" onClick={()=>removeItem(it.id)} className="px-2 py-1 rounded border border-rose-600 text-rose-400 text-xs focus-visible:outline focus-visible:outline-2 focus-visible:outline-blue-500">Remove</button>
@@ -1205,68 +1156,46 @@ export default function TodayPage() {
         )}
 
         {/* Plan + Tomorrow preview */}
-        <div className="grid grid-cols-1 xl:grid-cols-[1.7fr_1fr] gap-6 xl:max-w-[1600px] mx-auto px-6 md:px-8">
-          <div className="space-y-4">
-            {plan.items.length === 0 ? (
-              <div className="rounded-2xl p-5 md:p-6 border border-white/10 bg-white/5 text-base text-white/70">No tasks planned yet.</div>
+        <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
+          <div className="rounded border border-[#1b2344] p-4 min-h-[140px]">
+            <h3 className="text-sm font-medium mb-2">Today’s Plan</h3>
+            {plan.items.length===0 ? (
+              <div className="text-xs text-slate-300/80">No items in plan yet. Press <button onClick={()=>setStep(1)} className="underline focus-visible:outline focus-visible:outline-2 focus-visible:outline-blue-500">Plan Today</button> or add tasks in <a href="/tasks?tag=inbox" className="underline focus-visible:outline focus-visible:outline-2 focus-visible:outline-blue-500">Inbox</a>.</div>
             ) : (
-              plan.items.map((it, idx) => {
-                const taskId = canonicalTaskIdForItem(it, dateKey, schedule, tasks) || it.id;
-                const baseline = origRangesMap[it.id] || null;
-                const rem = computeRemainingPages({ title: it.title || '', sessions, taskId, baseline });
-                const assignedPages = pagesInIntervals(rem.assignedUnion);
-                const readPages = Math.max(0, assignedPages - rem.remainingCount);
-                const progressPct = assignedPages > 0 ? Math.round((readPages / assignedPages) * 100) : (rem.remainingCount > 0 ? 0 : 100);
-                const timerBase = Math.max(0, Number(itemSeconds[it.id]||0));
-                const live = (activeItemId===it.id && itemStartAt[it.id]) ? Math.max(0, Math.floor((nowTs - itemStartAt[it.id]) / 1000)) : 0;
-                const liveSec = timerBase + live;
-                const remainingText = rem.remainingLabel ? `${rem.remainingLabel.replace(/^p\.\s*/,'')} (${rem.remainingCount}p)` : 'None';
-                const assignedText = rem.assignedLabel ? rem.assignedLabel.replace(/^p\.\s*/,'') : '—';
-                return (
-                  <article key={it.id} className="rounded-2xl p-5 md:p-6 shadow-sm border border-white/10 bg-white/5 text-white">
-                    <div className="flex flex-col gap-4 lg:flex-row lg:items-start">
-                      <div className="flex-1 min-w-0 space-y-3">
-                        <div className="inline-flex items-center gap-2 text-sm bg-white/10 px-2 py-0.5 rounded-md text-white/90">
-                          <span className="inline-block w-2 h-2 rounded-full" style={{ backgroundColor: courseColor(it.course) }} />
-                          <span>{it.course || 'General'}</span>
-                        </div>
-                        <div className="space-y-1">
-                          <h4 className="text-lg font-semibold line-clamp-2" title={it.title}>{it.title}</h4>
-                          <div className="text-base"><span className="font-semibold">Remaining:</span> {remainingText}</div>
-                          <div className="text-xs text-white/60">Assigned: {assignedText}</div>
-                          <div className="text-xs text-white/60">Planned {minutesToHM(it.minutes)} · Position {idx+1}</div>
-                        </div>
-                        <div className="h-1.5 w-full bg-white/10 rounded-full overflow-hidden">
-                          <div className="h-full bg-emerald-500" style={{ width: `${Math.min(100, Math.max(0, progressPct))}%` }} />
-                        </div>
-                      </div>
-                      <div className="flex flex-col gap-3 w-full lg:w-56 xl:w-64 shrink-0">
-                        <div className="inline-flex items-center justify-between text-sm bg-emerald-600/20 border border-emerald-500 text-emerald-200 rounded-md px-3 py-1.5">
-                          <span>ETA</span>
-                          <span className="font-semibold">{minutesToHM(it.minutes)}</span>
-                        </div>
-                        <div className="inline-flex items-center justify-between text-sm bg-white/10 border border-white/20 text-white/80 rounded-md px-3 py-1.5">
-                          <span>Logged</span>
-                          <span className="tabular-nums">{mmss(liveSec)}</span>
-                        </div>
-                        <div className="flex flex-col gap-2">
-                          {activeItemId === it.id ? (
-                            <button aria-label="Pause item timer" onClick={pauseItemTimer} className="px-3 py-2 rounded-md border border-white/20 bg-white/10 text-sm">Pause</button>
-                          ) : (
-                            <button aria-label="Start item timer" onClick={()=>startItemTimer(it.id)} className="px-3 py-2 rounded-md border border-white/20 bg-white/10 text-sm">Start</button>
-                          )}
-                          <button aria-label="Recalculate from logs" onClick={()=>recalcFromSessions(it)} className="px-3 py-2 rounded-md border border-emerald-700 text-emerald-200 text-sm">Recalc</button>
-                          <button aria-label="Partial complete" onClick={()=>openLogFor(it.id,'partial')} className="px-3 py-2 rounded-md border border-white/20 bg-white/10 text-sm">Partial</button>
-                          <button aria-label="Finish task" onClick={()=>openLogFor(it.id,'finish')} className="px-3 py-2 rounded-md bg-emerald-600 hover:bg-emerald-500 text-sm">Finish</button>
-                        </div>
+              <ul className="space-y-1 text-sm">
+                {plan.items.map((it, i) => (
+                  <li key={it.id} className="space-y-0.5">
+                    <div className="flex items-center justify-between">
+                      <span className="truncate flex items-center gap-2">
+                        <span className="inline-block w-2 h-2 rounded-full" style={{ backgroundColor: courseColor(it.course) }} />
+                        <span>{i+1}. {it.course ? `${it.course}: `:''}{it.title}</span>
+                      </span>
+                      <div className="flex items-center gap-2 shrink-0">
+                        <span className="text-slate-300/70">{minutesToHM(it.minutes)}</span>
+                        <span className="text-slate-300/60 tabular-nums">{(() => { const base = Math.max(0, Number(itemSeconds[it.id]||0)); const live = (activeItemId===it.id && itemStartAt[it.id]) ? Math.max(0, Math.floor((nowTs - itemStartAt[it.id]) / 1000)) : 0; return mmss(base + live); })()}</span>
+                        {activeItemId === it.id ? (
+                          <button aria-label="Pause item timer" onClick={pauseItemTimer} className="px-2 py-1 rounded border border-[#1b2344] text-xs focus-visible:outline focus-visible:outline-2 focus-visible:outline-emerald-500">Pause</button>
+                        ) : (
+                          <button aria-label="Start item timer" onClick={()=>startItemTimer(it.id)} className="px-2 py-1 rounded border border-[#1b2344] text-xs focus-visible:outline focus-visible:outline-2 focus-visible:outline-emerald-500">Start</button>
+                        )}
+                        <button aria-label="Reset timer" onClick={() => { setItemSeconds(prev=>({ ...prev, [it.id]: 0 })); setItemStartAt(prev=>({ ...prev, [it.id]: 0 })); if (activeItemId===it.id) setActiveItemId(null); }} className="px-2 py-1 rounded border border-[#1b2344] text-xs">Reset</button>
+                        <button aria-label="Recalculate from logs" onClick={()=>recalcFromSessions(it)} className="px-2 py-1 rounded border border-emerald-700 text-emerald-300 text-xs">Recalc</button>
+                        <button aria-label="Partial complete" onClick={()=>openLogFor(it.id,'partial')} className="px-2 py-1 rounded border border-[#1b2344] text-xs focus-visible:outline focus-visible:outline-2 focus-visible:outline-blue-500">Partial</button>
+                        <button aria-label="Finish task" onClick={()=>openLogFor(it.id,'finish')} className="px-2 py-1 rounded bg-emerald-600 hover:bg-emerald-500 text-xs focus-visible:outline focus-visible:outline-2 focus-visible:outline-blue-500">Finish</button>
                       </div>
                     </div>
-                  </article>
-                );
-              })
+                    {(() => { const chips = (() => { const arr = extractPageRanges(String(it.title||'')); return arr; })(); const tid = canonicalTaskIdForItem(it, dateKey, schedule, tasks) || it.id; const pr = pagesReadByTask[tid]||0; const total = countPagesFromTitle(String(it.title||'')); return (chips.length || pr>0) ? (
+                      <div className="flex flex-wrap gap-1 text-[11px] text-slate-300/80 pl-4">
+                        {chips.map((ch:string, j:number) => (<span key={j} className="px-1.5 py-0.5 rounded border border-[#1b2344]">{ch}</span>))}
+                        {pr>0 ? (<span className="px-1.5 py-0.5 rounded border border-[#1b2344]">{total>0?`${pr}/${total}p`:`${pr}p`}</span>) : null}
+                      </div>
+                    ) : null; })()}
+                  </li>
+                ))}
+              </ul>
             )}
             {plan.locked && (
-              <div className="text-xs text-white/60">Locked · Total {totalPlannedLabel}</div>
+              <div className="text-xs text-slate-300/70 mt-2">Locked · Total {totalPlannedLabel}</div>
             )}
           </div>
           <div className="rounded border border-[#1b2344] p-4 min-h-[140px]">
