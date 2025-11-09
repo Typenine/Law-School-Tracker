@@ -765,10 +765,10 @@ function parseAvailFlexible(input: string): number | null {
                           ) : null}
                         </div>
                         {timePicker && timePicker.dow===dow && timePicker.index===i && (timePicker.kind==='win-start'||timePicker.kind==='win-end') ? (
-                          <div className="col-span-3 mt-1">
-                            <div className="grid grid-cols-4 gap-1 text-xs">
+                          <div className={`absolute ${timePicker.kind==='win-end'?'right-0':'left-0'} top-full mt-1 z-30 w-56 rounded border border-white/10 bg-[#0b1020] p-2 shadow-lg`}>
+                            <div className="grid grid-cols-4 gap-1 text-xs max-h-56 overflow-auto">
                               {Array.from({length: (24*60)/15},(_,k)=>k*15).filter(v=>v%60>=0).slice(24).map(min=>{ const label = fmt12Input(minutesToHHMM(min)); return (
-                                <button key={min} onClick={()=>{ setWindowsByDow(prev=>{ const arr=(prev[dow]||[]).slice(); if (timePicker.kind==='win-start') arr[i]={...arr[i], start: label}; else arr[i]={...arr[i], end: label}; return { ...prev, [dow]: arr }; }); setTimePicker(null); }} className="px-2 py-1 rounded border border-white/10 hover:bg-white/5">{label.replace(/\s?M$/,'')}</button>
+                                <button key={min} onClick={()=>{ setWindowsByDow(prev=>{ const arr=(prev[dow]||[]).slice(); if (timePicker.kind==='win-start') arr[i]={...arr[i], start: label}; else arr[i]={...arr[i], end: label}; return { ...prev, [dow]: arr }; }); setTimePicker(null); }} className="px-2 py-1 rounded border border-white/10 hover:bg-white/5 w-full text-left">{label.replace(/\s?M$/,'')}</button>
                               ); })}
                             </div>
                           </div>
@@ -799,10 +799,10 @@ function parseAvailFlexible(input: string): number | null {
                           ) : null}
                         </div>
                         {timePicker && timePicker.dow===dow && timePicker.index===i && (timePicker.kind==='br-start'||timePicker.kind==='br-end') ? (
-                          <div className="col-span-3 mt-1">
-                            <div className="grid grid-cols-4 gap-1 text-xs">
+                          <div className={`absolute ${timePicker.kind==='br-end'?'right-0':'left-0'} top-full mt-1 z-30 w-56 rounded border border-white/10 bg-[#0b1020] p-2 shadow-lg`}>
+                            <div className="grid grid-cols-4 gap-1 text-xs max-h-56 overflow-auto">
                               {Array.from({length: (24*60)/15},(_,k)=>k*15).filter(v=>v%60>=0).slice(24).map(min=>{ const label = fmt12Input(minutesToHHMM(min)); return (
-                                <button key={min} onClick={()=>{ setBreaksByDow(prev=>{ const arr=(prev[dow]||[]).slice(); if (timePicker.kind==='br-start') arr[i]={...arr[i], start: label}; else arr[i]={...arr[i], end: label}; return { ...prev, [dow]: arr }; }); setTimePicker(null); }} className="px-2 py-1 rounded border border-white/10 hover:bg-white/5">{label.replace(/\s?M$/,'')}</button>
+                                <button key={min} onClick={()=>{ setBreaksByDow(prev=>{ const arr=(prev[dow]||[]).slice(); if (timePicker.kind==='br-start') arr[i]={...arr[i], start: label}; else arr[i]={...arr[i], end: label}; return { ...prev, [dow]: arr }; }); setTimePicker(null); }} className="px-2 py-1 rounded border border-white/10 hover:bg-white/5 w-full text-left">{label.replace(/\s?M$/,'')}</button>
                               ); })}
                             </div>
                           </div>
