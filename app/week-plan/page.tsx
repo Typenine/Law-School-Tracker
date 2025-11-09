@@ -445,6 +445,62 @@ export default function WeekPlanPage() {
 
   
 
+  // Event intervals (minutes) by day key, merged and minutes totals — used in capacity math
+  const eventIntervalsByKey = useMemo(() => {
+    const map: Record<string, Array<[number,number]>> = {};
+    for (const d of days) map[ymd(d)] = [];
+    // Classes
+    for (const c of (courses||[])) {
+      const start = c.startDate ? new Date(c.startDate) : null;
+      const end = c.endDate ? new Date(c.endDate) : null;
+      const blocksArr = (Array.isArray(c.meetingBlocks) && c.meetingBlocks.length)
+        ? c.meetingBlocks
+        : ((Array.isArray(c.meetingDays) && c.meetingStart && c.meetingEnd) ? [{ days: c.meetingDays, start: c.meetingStart, end: c.meetingEnd }] : []);
+      if (!Array.isArray(blocksArr) || !blocksArr.length) continue;
+      for (const d of days) {
+        const within = (!start || d >= start) && (!end || d <= end);
+        if (!within) continue;
+        for (const b of blocksArr) {
+          if (!Array.isArray(b.days)) continue;
+          if (b.days.includes(d.getDay())) {
+            const sMin = toMin(normHHMM((b as any).start)); const eMin = toMin(normHHMM((b as any).end));
+            if (sMin!=null && eMin!=null && eMin>sMin) map[ymd(d)].push([sMin, eMin]);
+          }
+        }
+      }
+    }
+    // Timed tasks
+    for (const t of (tasks||[])) {
+      const k = ymd(new Date(t.dueDate)); if (!(k in map)) continue;
+      const sMin = toMin(normHHMM((t as any).startTime)); const eMin = toMin(normHHMM((t as any).endTime));
+      if (sMin!=null && eMin!=null && eMin>sMin) map[k].push([sMin, eMin]);
+    }
+    // Merge per day
+    for (const k of Object.keys(map)) {
+      const arr = map[k].slice().sort((a,b)=>a[0]-b[0]);
+      const merged: Array<[number,number]> = [];
+      for (const iv of arr) {
+        if (!merged.length || iv[0] > merged[merged.length-1][1]) merged.push([iv[0], iv[1]]);
+        else merged[merged.length-1][1] = Math.max(merged[merged.length-1][1], iv[1]);
+      }
+      map[k] = merged;
+    }
+    return map;
+  }, [courses, tasks, days]);
+
+  const eventMinutesByKey = useMemo(() => {
+    const m: Record<string, number> = {};
+    for (const d of days) {
+      const k = ymd(d);
+      const iv = eventIntervalsByKey[k] || [];
+      let sum = 0; for (const [a,b] of iv) sum += Math.max(0, b-a);
+      m[k] = sum;
+    }
+    return m;
+  }, [days, eventIntervalsByKey]);
+
+  
+
   const effectiveCapByKey = useMemo(() => {
     const m: Record<string, number> = {};
     for (const d of days) {
@@ -534,59 +590,6 @@ export default function WeekPlanPage() {
     return map;
   }, [courses, tasks, days]);
 
-  // Event intervals (minutes) by day key, merged and minutes totals
-  const eventIntervalsByKey = useMemo(() => {
-    const map: Record<string, Array<[number,number]>> = {};
-    for (const d of days) map[ymd(d)] = [];
-    // Classes
-    for (const c of (courses||[])) {
-      const start = c.startDate ? new Date(c.startDate) : null;
-      const end = c.endDate ? new Date(c.endDate) : null;
-      const blocksArr = (Array.isArray(c.meetingBlocks) && c.meetingBlocks.length)
-        ? c.meetingBlocks
-        : ((Array.isArray(c.meetingDays) && c.meetingStart && c.meetingEnd) ? [{ days: c.meetingDays, start: c.meetingStart, end: c.meetingEnd }] : []);
-      if (!Array.isArray(blocksArr) || !blocksArr.length) continue;
-      for (const d of days) {
-        const within = (!start || d >= start) && (!end || d <= end);
-        if (!within) continue;
-        for (const b of blocksArr) {
-          if (!Array.isArray(b.days)) continue;
-          if (b.days.includes(d.getDay())) {
-            const sMin = toMin(normHHMM((b as any).start)); const eMin = toMin(normHHMM((b as any).end));
-            if (sMin!=null && eMin!=null && eMin>sMin) map[ymd(d)].push([sMin, eMin]);
-          }
-        }
-      }
-    }
-    // Timed tasks
-    for (const t of (tasks||[])) {
-      const k = ymd(new Date(t.dueDate)); if (!(k in map)) continue;
-      const sMin = toMin(normHHMM((t as any).startTime)); const eMin = toMin(normHHMM((t as any).endTime));
-      if (sMin!=null && eMin!=null && eMin>sMin) map[k].push([sMin, eMin]);
-    }
-    // Merge per day
-    for (const k of Object.keys(map)) {
-      const arr = map[k].slice().sort((a,b)=>a[0]-b[0]);
-      const merged: Array<[number,number]> = [];
-      for (const iv of arr) {
-        if (!merged.length || iv[0] > merged[merged.length-1][1]) merged.push([iv[0], iv[1]]);
-        else merged[merged.length-1][1] = Math.max(merged[merged.length-1][1], iv[1]);
-      }
-      map[k] = merged;
-    }
-    return map;
-  }, [courses, tasks, days]);
-
-  const eventMinutesByKey = useMemo(() => {
-    const m: Record<string, number> = {};
-    for (const d of days) {
-      const k = ymd(d);
-      const iv = eventIntervalsByKey[k] || [];
-      let sum = 0; for (const [a,b] of iv) sum += Math.max(0, b-a);
-      m[k] = sum;
-    }
-    return m;
-  }, [days, eventIntervalsByKey]);
 
   function moveBlockLaterToday(b: ScheduledBlock) {
     // Just reorder to end if same-day slack allows (cap - busy - others >= minutes); else no-op
