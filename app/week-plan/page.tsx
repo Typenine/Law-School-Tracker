@@ -229,7 +229,6 @@ export default function WeekPlanPage() {
           if (br && typeof br === 'object') setBreaksByDow(br as Record<number, Array<{ start?: string; end?: string }>>);
           if (typeof (settings as any).availabilityAutoFromWindow === 'boolean') setAutoFromWindow((settings as any).availabilityAutoFromWindow as boolean);
           setSettingsReady(true);
-          } catch {}
         }
         if (schRes.ok) {
           const bj = await schRes.json().catch(() => ({ blocks: [] }));

@@ -996,62 +996,20 @@ export default function TodayPage() {
                 </ul>
                 <div className="flex items-center gap-2">
                   <button aria-label="Back to Step 1" onClick={()=>setStep(1)} className="px-3 py-2 rounded border border-[#1b2344] text-sm focus-visible:outline focus-visible:outline-2 focus-visible:outline-blue-500">Back</button>
-                  <button aria-label="Confirm Plan" onClick={()=>lockPlan()} className="px-3 py-2 rounded bg-blue-600 hover:bg-blue-500 text-sm focus-visible:outline focus-visible:outline-2 focus-visible:outline-blue-500">Confirm</button>
-const d = new Date(y,(m as number)-1,da);
-const w = d.toLocaleDateString(undefined, { weekday: 'long' });
-const md = d.toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: 'numeric' });
-const isToday = selectedKey === chicagoYmd(new Date());
-return (
-<span>
-<span className="text-slate-200 font-medium">{w}</span> · {md}
-{isToday ? <span className="ml-2 text-[10px] px-1.5 py-0.5 rounded bg-blue-600/30 border border-blue-600/60 text-blue-300">Today</span> : null}
-</span>
-);
-})()}
-</div>
-<div className="space-y-3">
-<div>
-<div className="text-xs text-slate-300/70 mb-1">Scheduled</div>
-{selectedBlocks.length===0 ? (
-<div className="text-[11px] text-slate-300/60">—</div>
-) : (
-<ul className="text-sm space-y-1">
-{selectedBlocks.map(b => (
-<li key={b.id} className="flex items-center justify-between">
-<span className="truncate">{b.course ? `${b.course}: ` : ''}{b.title}</span>
-<span className="text-slate-300/70">{minutesToHM(b.plannedMinutes)}</span>
-</li>
-))}
-</ul>
-)}
-</div>
-<div>
-<div className="text-xs text-slate-300/70 mb-1">Due</div>
-{tasksDueSelected.length===0 ? (
-<div className="text-[11px] text-slate-300/60">—</div>
-) : (
-<ul className="text-sm space-y-2">
-{tasksDueSelected.map((t:any) => (
-<li key={t.id} className="space-y-0.5">
-<div className="text-slate-200 break-words whitespace-pre-wrap">
-<span className="mr-2 text-xs text-slate-300/70">{chicagoYmd(new Date(t.dueDate))}</span>
-{t.course ? <span className="mr-2 inline-flex items-center text-[11px] px-1.5 py-0.5 rounded border border-[#1b2344] text-slate-300/80">{t.course}</span> : null}
-{(() => { const raw = String(t.title || ''); const c = String(t.course||''); const lc = c.toLowerCase(); const lraw = raw.toLowerCase(); if (lc && (lraw.startsWith(lc+':') || lraw.startsWith(lc+' -') || lraw.startsWith(lc+' —') || lraw.startsWith(lc+' –'))) { return raw.slice(c.length+1).trimStart(); } return raw; })()}
-</div>
-{(() => { const chips = (() => { const arr = extractPageRanges(String(t.title||'')); if (arr.length===0 && typeof t.pagesRead==='number' && t.pagesRead>0) return [String(t.pagesRead)+'p']; return arr; })(); return chips.length ? (
-<div className="flex flex-wrap gap-1 text-[11px] text-slate-300/80">
-{chips.map((ch:string, i:number) => (<span key={i} className="px-1.5 py-0.5 rounded border border-[#1b2344]">{ch}</span>))}
-</div>
-) : null; })()}
-{typeof t.estimatedMinutes === 'number' ? <div className="text-xs text-slate-300/70">{minutesToHM(t.estimatedMinutes)}</div> : null}
-</li>
-))}
-</ul>
-)}
-</div>
-</div>
-</>
-) : (
+                  <button aria-label="Confirm Plan" onClick={lockPlan} className="px-3 py-2 rounded bg-blue-600 hover:bg-blue-500 text-sm focus-visible:outline focus-visible:outline-2 focus-visible:outline-blue-500">Confirm</button>
+                </div>
+              </div>
+            )}
+          </div>
+        )}
+
+        {/* Plan + Tomorrow preview */}
+        <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
+          <div className="rounded border border-[#1b2344] p-4 min-h-[140px]">
+            <h3 className="text-sm font-medium mb-2">Today’s Plan</h3>
+            {plan.items.length===0 ? (
+              <div className="text-xs text-slate-300/80">No items in plan yet. Press <button onClick={()=>setStep(1)} className="underline focus-visible:outline focus-visible:outline-2 focus-visible:outline-blue-500">Plan Today</button> or add tasks in <a href="/tasks?tag=inbox" className="underline focus-visible:outline focus-visible:outline-2 focus-visible:outline-blue-500">Inbox</a>.</div>
+            ) : (
 <>
 <div className="text-xs text-slate-300/70 mb-2">Week of {selectedWeekKeys[0]}—{selectedWeekKeys[6]}</div>
 <div className="space-y-3">
