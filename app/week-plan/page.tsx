@@ -718,25 +718,25 @@ function overlap(a0:number,a1:number,b0:number|null,b1:number|null): number { if
                 <div className="grid grid-cols-2 gap-2 mt-2">
                   <div>
                     <label className="block text-[10px] mb-1" htmlFor={`start-${dow}`}>Start</label>
-                    <div className="flex gap-2 items-center">
+                    <div className="flex flex-col gap-1 items-start">
                       <input id={`start-${dow}`} type="text" placeholder="7:00" value={fmt12Input(availStartByDow[dow]||'').replace(/\s?(AM|PM)$/,'')} onChange={e=>setAvailStartByDow(prev=>({ ...prev, [dow]: e.target.value }))} onBlur={e=>setAvailStartByDow(prev=>({ ...prev, [dow]: fmt12Input(e.target.value) }))} className="w-full bg-[#0b1020] border border-[#1b2344] rounded px-2 py-1 text-sm focus-visible:outline focus-visible:outline-2 focus-visible:outline-blue-500" />
                       {(() => { const hh = toMin(normHHMM(availStartByDow[dow]||'')); const isPM = (hh ?? 0) >= 12*60; return (
-                        <span className="inline-flex">
-                          <button type="button" onClick={()=>{ const cur = normHHMM(availStartByDow[dow]||'')||'09:00'; const [H,M]=cur.split(':').map(v=>parseInt(v,10)); const nextH = (H>=12?H-12:H); const nn = `${String(nextH).padStart(2,'0')}:${String(M).padStart(2,'0')}`; setAvailStartByDow(prev=>({ ...prev, [dow]: nn })); }} className={`px-2 py-1 text-xs border ${!isPM?'bg-blue-600 text-white':'border-[#1b2344]'}`}>AM</button>
-                          <button type="button" onClick={()=>{ const cur = normHHMM(availStartByDow[dow]||'')||'13:00'; const [H,M]=cur.split(':').map(v=>parseInt(v,10)); const nextH = (H<12?H+12:H); const nn = `${String(nextH).padStart(2,'0')}:${String(M).padStart(2,'0')}`; setAvailStartByDow(prev=>({ ...prev, [dow]: nn })); }} className={`px-2 py-1 text-xs border ${isPM?'bg-blue-600 text-white':'border-[#1b2344]'}`}>PM</button>
-                        </span>
+                        <div className="inline-flex gap-1">
+                          <button type="button" onClick={()=>{ const cur = normHHMM(availStartByDow[dow]||'')||'09:00'; const [H,M]=cur.split(':').map(v=>parseInt(v,10)); const nextH = (H>=12?H-12:H); const nn = `${String(nextH).padStart(2,'0')}:${String(M).padStart(2,'0')}`; setAvailStartByDow(prev=>({ ...prev, [dow]: nn })); }} className={`px-2 py-0.5 text-[10px] border rounded ${!isPM?'bg-blue-600 text-white':'border-[#1b2344]'}`}>AM</button>
+                          <button type="button" onClick={()=>{ const cur = normHHMM(availStartByDow[dow]||'')||'13:00'; const [H,M]=cur.split(':').map(v=>parseInt(v,10)); const nextH = (H<12?H+12:H); const nn = `${String(nextH).padStart(2,'0')}:${String(M).padStart(2,'0')}`; setAvailStartByDow(prev=>({ ...prev, [dow]: nn })); }} className={`px-2 py-0.5 text-[10px] border rounded ${isPM?'bg-blue-600 text-white':'border-[#1b2344]'}`}>PM</button>
+                        </div>
                       ); })()}
                     </div>
                   </div>
                   <div>
                     <label className="block text-[10px] mb-1" htmlFor={`end-${dow}`}>End</label>
-                    <div className="flex gap-2 items-center">
+                    <div className="flex flex-col gap-1 items-start">
                       <input id={`end-${dow}`} type="text" placeholder="5:00" value={fmt12Input(availEndByDow[dow]||'').replace(/\s?(AM|PM)$/,'')} onChange={e=>setAvailEndByDow(prev=>({ ...prev, [dow]: e.target.value }))} onBlur={e=>setAvailEndByDow(prev=>({ ...prev, [dow]: fmt12Input(e.target.value) }))} className="w-full bg-[#0b1020] border border-[#1b2344] rounded px-2 py-1 text-sm focus-visible:outline focus-visible:outline-2 focus-visible:outline-blue-500" />
                       {(() => { const hh = toMin(normHHMM(availEndByDow[dow]||'')); const isPM = (hh ?? 0) >= 12*60; return (
-                        <span className="inline-flex">
-                          <button type="button" onClick={()=>{ const cur = normHHMM(availEndByDow[dow]||'')||'17:00'; const [H,M]=cur.split(':').map(v=>parseInt(v,10)); const nextH = (H>=12?H-12:H); const nn = `${String(nextH).padStart(2,'0')}:${String(M).padStart(2,'0')}`; setAvailEndByDow(prev=>({ ...prev, [dow]: nn })); }} className={`px-2 py-1 text-xs border ${!isPM?'bg-blue-600 text-white':'border-[#1b2344]'}`}>AM</button>
-                          <button type="button" onClick={()=>{ const cur = normHHMM(availEndByDow[dow]||'')||'17:00'; const [H,M]=cur.split(':').map(v=>parseInt(v,10)); const nextH = (H<12?H+12:H); const nn = `${String(nextH).padStart(2,'0')}:${String(M).padStart(2,'0')}`; setAvailEndByDow(prev=>({ ...prev, [dow]: nn })); }} className={`px-2 py-1 text-xs border ${isPM?'bg-blue-600 text-white':'border-[#1b2344]'}`}>PM</button>
-                        </span>
+                        <div className="inline-flex gap-1">
+                          <button type="button" onClick={()=>{ const cur = normHHMM(availEndByDow[dow]||'')||'17:00'; const [H,M]=cur.split(':').map(v=>parseInt(v,10)); const nextH = (H>=12?H-12:H); const nn = `${String(nextH).padStart(2,'0')}:${String(M).padStart(2,'0')}`; setAvailEndByDow(prev=>({ ...prev, [dow]: nn })); }} className={`px-2 py-0.5 text-[10px] border rounded ${!isPM?'bg-blue-600 text-white':'border-[#1b2344]'}`}>AM</button>
+                          <button type="button" onClick={()=>{ const cur = normHHMM(availEndByDow[dow]||'')||'17:00'; const [H,M]=cur.split(':').map(v=>parseInt(v,10)); const nextH = (H<12?H+12:H); const nn = `${String(nextH).padStart(2,'0')}:${String(M).padStart(2,'0')}`; setAvailEndByDow(prev=>({ ...prev, [dow]: nn })); }} className={`px-2 py-0.5 text-[10px] border rounded ${isPM?'bg-blue-600 text-white':'border-[#1b2344]'}`}>PM</button>
+                        </div>
                       ); })()}
                     </div>
                   </div>
