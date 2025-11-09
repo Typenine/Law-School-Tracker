@@ -799,6 +799,16 @@ export default function TodayPage() {
     return { isSlump: falling && n30 >= 10, n30 };
   }, [sessions, focus14, focus30, startYMD30]);
 
+  // Pages read per task id (for Today chips)
+  const pagesReadByTask = useMemo(() => {
+    const m: Record<string, number> = {};
+    for (const s of (sessions||[])) {
+      const tid = (s as any).taskId; const pr = Number((s as any).pagesRead || 0);
+      if (!tid) continue; if (!isNaN(pr) && pr>0) m[tid] = (m[tid] || 0) + pr;
+    }
+    return m;
+  }, [sessions]);
+
   // Streaks (Chicago local dates)
   const activeDaysSet = useMemo(() => {
     const set = new Set<string>();
@@ -1009,54 +1019,6 @@ export default function TodayPage() {
             <h3 className="text-sm font-medium mb-2">Today’s Plan</h3>
             {plan.items.length===0 ? (
               <div className="text-xs text-slate-300/80">No items in plan yet. Press <button onClick={()=>setStep(1)} className="underline focus-visible:outline focus-visible:outline-2 focus-visible:outline-blue-500">Plan Today</button> or add tasks in <a href="/tasks?tag=inbox" className="underline focus-visible:outline focus-visible:outline-2 focus-visible:outline-blue-500">Inbox</a>.</div>
-            ) : (
-<>
-<div className="text-xs text-slate-300/70 mb-2">Week of {selectedWeekKeys[0]}—{selectedWeekKeys[6]}</div>
-<div className="space-y-3">
-<div>
-<div className="text-xs text-slate-300/70 mb-1">Scheduled (Week)</div>
-{weekBlocks.length===0 ? (
-<div className="text-[11px] text-slate-300/60">—</div>
-) : (
-<ul className="text-sm space-y-1">
-{weekBlocks.map(b => (
-<li key={b.id} className="flex items-center justify-between">
-<span className="truncate">{b.day} · {b.course ? `${b.course}: ` : ''}{b.title}</span>
-<span className="text-slate-300/70">{minutesToHM(b.plannedMinutes)}</span>
-</li>
-))}
-</ul>
-)}
-</div>
-<div>
-<div className="text-xs text-slate-300/70 mb-1">Due (Week)</div>
-{weekDueTasks.length===0 ? (
-<div className="text-[11px] text-slate-300/60">—</div>
-) : (
-<ul className="text-sm space-y-2">
-{weekDueTasks.map((t:any) => (
-<li key={t.id} className="space-y-0.5">
-<div className="text-slate-200 break-words whitespace-pre-wrap">
-<span className="mr-2 text-xs text-slate-300/70">{chicagoYmd(new Date(t.dueDate))}</span>
-{t.course ? <span className="mr-2 inline-flex items-center text-[11px] px-1.5 py-0.5 rounded border border-[#1b2344] text-slate-300/80">{t.course}</span> : null}
-{(() => { const raw = String(t.title || ''); const c = String(t.course||''); const lc = c.toLowerCase(); const lraw = raw.toLowerCase(); if (lc && (lraw.startsWith(lc+':') || lraw.startsWith(lc+' -') || lraw.startsWith(lc+' —') || lraw.startsWith(lc+' –'))) { return raw.slice(c.length+1).trimStart(); } return raw; })()}
-</div>
-{(() => { const chips = (() => { const arr = extractPageRanges(String(t.title||'')); if (arr.length===0 && typeof t.pagesRead==='number' && t.pagesRead>0) return [String(t.pagesRead)+'p']; return arr; })(); return chips.length ? (
-<div className="flex flex-wrap gap-1 text-[11px] text-slate-300/80">
-{chips.map((ch:string, i:number) => (<span key={i} className="px-1.5 py-0.5 rounded border border-[#1b2344]">{ch}</span>))}
-</div>
-) : null; })()}
-{typeof t.estimatedMinutes === 'number' ? <div className="text-xs text-slate-300/70">{minutesToHM(t.estimatedMinutes)}</div> : null}
-</li>
-))}
-</ul>
-)}
-</div>
-</div>
-</>
-)}
-</div>
-</div>
             ) : (
               <ul className="space-y-1 text-sm">
                 {plan.items.map((it, i) => (
