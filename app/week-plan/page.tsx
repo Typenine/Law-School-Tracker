@@ -164,6 +164,7 @@ export default function WeekPlanPage() {
   const [windowsByDow, setWindowsByDow] = useState<Record<number, Array<{ start?: string; end?: string }>>>({ 0:[],1:[],2:[],3:[],4:[],5:[],6:[] });
   const [timePicker, setTimePicker] = useState<{ kind: 'win-start'|'win-end'|'br-start'|'br-end'; dow: number; index: number } | null>(null);
   const [rowMenu, setRowMenu] = useState<{ kind: 'win'|'br'; dow: number; index: number } | null>(null);
+  const [toolbarMenu, setToolbarMenu] = useState<{ dow: number } | null>(null);
   const [courses, setCourses] = useState<any[]>([]);
   const [twoWeeksOnly, setTwoWeeksOnly] = useState<boolean>(false);
   const [undoSnapshot, setUndoSnapshot] = useState<ScheduledBlock[] | null>(null);
@@ -734,15 +735,20 @@ function parseAvailFlexible(input: string): number | null {
           <div className="text-sm text-slate-300/70">Availability (windows − breaks) per weekday</div>
           <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-7 gap-3">
             {[6,0,1,2,3,4,5].map(dow => (
-              <div key={dow} className="rounded-2xl p-5 md:p-6 border border-white/10 bg-white/5 space-y-3">
+              <div key={dow} className="relative rounded-2xl p-5 md:p-6 border border-white/10 bg-white/5 space-y-3">
                 <div className="flex items-center justify-between">
                   <div className="text-sm">{['Sun','Mon','Tue','Wed','Thu','Fri','Sat'][dow]}</div>
-                  <div className="flex items-center gap-2">
+                  <div className="flex items-center gap-2 flex-nowrap">
                     <div className="text-xs text-slate-300/70">{minutesToHM(availability[dow] ?? 0)}</div>
-                    <div className="hidden md:flex items-center gap-2">
-                      <button onClick={()=>setWindowsByDow(prev=>{ const arr=(prev[dow]||[]).slice(); arr.push({ start:'', end:'' }); return { ...prev, [dow]: arr }; })} className="px-2 py-1 rounded border border-white/10 text-xs">Add window</button>
-                      <button onClick={()=>setBreaksByDow(prev=>{ const arr=(prev[dow]||[]).slice(); arr.push({ start:'', end:'' }); return { ...prev, [dow]: arr }; })} className="px-2 py-1 rounded border border-white/10 text-xs">Add break</button>
-                      <button onClick={()=>{ setWindowsByDow(prev=>{ const wins=(prev[dow]||[]).slice(); const out: Record<number, any[]> = {0:[],1:[],2:[],3:[],4:[],5:[],6:[]}; for(const k of [1,2,3,4,5]) out[k]=wins.slice(); return { ...prev, ...out } as any; }); setBreaksByDow(prev=>{ const br=(prev[dow]||[]).slice(); const out: Record<number, any[]> = {0:(prev[0]||[]),1:[],2:[],3:[],4:[],5:[],6:(prev[6]||[])}; for(const k of [1,2,3,4,5]) out[k]=br.slice(); return out as any; }); }} className="px-2 py-1 rounded border border-white/10 text-xs">Copy to weekdays</button>
+                    <div className="block relative">
+                      <button aria-label="Open day actions" onClick={()=>setToolbarMenu(m => (m && m.dow===dow)? null : { dow })} className="px-2 py-1 rounded border border-white/10 text-xs">…</button>
+                      {toolbarMenu && toolbarMenu.dow===dow ? (
+                        <div className="absolute right-0 mt-2 z-30 w-40 rounded border border-white/10 bg-[#0b1020] p-2 text-xs space-y-1 shadow-lg">
+                          <button onClick={()=>{ setWindowsByDow(prev=>{ const arr=(prev[dow]||[]).slice(); arr.push({ start:'', end:'' }); return { ...prev, [dow]: arr }; }); setToolbarMenu(null); }} className="block w-full text-left px-2 py-1 rounded hover:bg-white/5">Add window</button>
+                          <button onClick={()=>{ setBreaksByDow(prev=>{ const arr=(prev[dow]||[]).slice(); arr.push({ start:'', end:'' }); return { ...prev, [dow]: arr }; }); setToolbarMenu(null); }} className="block w-full text-left px-2 py-1 rounded hover:bg-white/5">Add break</button>
+                          <button onClick={()=>{ setWindowsByDow(prev=>{ const wins=(prev[dow]||[]).slice(); const out: Record<number, any[]> = {0:[],1:[],2:[],3:[],4:[],5:[],6:[]}; for(const k of [1,2,3,4,5]) out[k]=wins.slice(); return { ...prev, ...out } as any; }); setBreaksByDow(prev=>{ const br=(prev[dow]||[]).slice(); const out: Record<number, any[]> = {0:(prev[0]||[]),1:[],2:[],3:[],4:[],5:[],6:(prev[6]||[])}; for(const k of [1,2,3,4,5]) out[k]=br.slice(); return out as any; }); setToolbarMenu(null); }} className="block w-full text-left px-2 py-1 rounded hover:bg-white/5">Copy to weekdays</button>
+                        </div>
+                      ) : null}
                     </div>
                   </div>
                 </div>
