@@ -36,6 +36,34 @@ const LS_TODAY = "todayPlanV1";
 const LS_GOALS = "weeklyGoalsV1";
 
 function minutesPerPage(): number { if (typeof window==='undefined') return 3; const s=window.localStorage.getItem('minutesPerPage'); const n=s?parseFloat(s):NaN; return !isNaN(n)&&n>0?n:3; }
+// Count pages from title ranges like "p. 449–486, 505–520"
+function countPagesFromTitle(title: string): number {
+  const s = (title || '').trim();
+  const m = s.match(/p(?:ages?)?\.?\s*([0-9,\s–-]+(?:\s*,\s*[0-9–-]+)*)/i);
+  if (!m) return 0;
+  const cleaned = (m[1] || '').replace(/–/g,'-').replace(/\s+/g,'');
+  const parts = cleaned.split(',').map(p=>p.trim()).filter(Boolean);
+  let pages = 0;
+  for (const p of parts) {
+    const mm = /^(\d+)(?:-(\d+))?$/.exec(p);
+    if (!mm) continue;
+    const a = parseInt(mm[1],10); const b = mm[2]? parseInt(mm[2],10): a;
+    if (!isNaN(a) && !isNaN(b) && b >= a) pages += (b - a + 1);
+  }
+  return pages;
+}
+function minutesPerPageForCourse(course?: string | null): number {
+  try {
+    if (typeof window !== 'undefined') {
+      const raw = window.localStorage.getItem('courseMppMap');
+      const obj = raw ? JSON.parse(raw) : null;
+      const key = (course || '').toString().trim().toLowerCase();
+      const v = key && obj && obj[key] && typeof obj[key].mpp === 'number' ? obj[key].mpp : null;
+      if (typeof v === 'number' && v > 0) return Math.max(0.5, Math.min(6.0, v));
+    }
+  } catch {}
+  return minutesPerPage();
+}
 
 function ymdAddDays(ymd: string, delta: number): string {
   const [y,m,d] = ymd.split('-').map(x=>parseInt(x,10));
@@ -156,6 +184,8 @@ export default function TodayPage() {
   const itemTickRef = useRef<NodeJS.Timeout|null>(null);
   const carryoverRef = useRef<boolean>(false);
   const [ctNow, setCtNow] = useState<string>(() => new Intl.DateTimeFormat('en-US',{ timeZone:'America/Chicago', hour:'numeric', minute:'2-digit', hour12:true }).format(new Date()));
+  const [logModal, setLogModal] = useState<{ mode: 'partial'|'finish'; itemId: string } | null>(null);
+  const [logForm, setLogForm] = useState<{ minutes: string; focus: string; notes: string; pages: string; portion: string }>({ minutes: '', focus: '5', notes: '', pages: '', portion: '' });
   useEffect(() => {
     const id = setInterval(() => {
       setCtNow(new Intl.DateTimeFormat('en-US',{ timeZone:'America/Chicago', hour:'numeric', minute:'2-digit', hour12:true }).format(new Date()));
@@ -265,9 +295,30 @@ export default function TodayPage() {
 
   // Compute today's scheduled blocks (from weekly schedule)
   const todaysBlocks = useMemo(() => (schedule || []).filter(b => b.day === dateKey), [schedule, dateKey]);
+  // Minutes planned today per taskId (to hide from tomorrow preview if fully covered today)
+  const plannedTodayByTaskId = useMemo(() => {
+    const m = new Map<string, number>();
+    for (const b of (schedule || [])) {
+      if (b.day === dateKey && b.taskId) m.set(b.taskId, (m.get(b.taskId) || 0) + Math.max(0, Number(b.plannedMinutes)||0));
+    }
+    return m;
+  }, [schedule, dateKey]);
   // Right-side view: selected day/week
   const selectedBlocks = useMemo(() => (schedule || []).filter(b => b.day === selectedKey), [schedule, selectedKey]);
-  const tasksDueSelected = useMemo(() => (tasks || []).filter((t:any) => (t.status === 'todo') && chicagoYmd(new Date(t.dueDate)) === selectedKey), [tasks, selectedKey]);
+  const tasksDueSelected = useMemo(() => {
+    const arr = (tasks || []).filter((t:any) => (t.status === 'todo') && chicagoYmd(new Date(t.dueDate)) === selectedKey);
+    // If previewing a future day (e.g., tomorrow) and the task is fully planned today, hide it from preview
+    const todayKey = dateKey;
+    if (selectedKey > todayKey) {
+      return arr.filter((t:any) => {
+        const planned = plannedTodayByTaskId.get(t.id) || 0;
+        const est = Math.max(0, Number(t.estimatedMinutes)||0);
+        if (planned >= est && est > 0) return false;
+        return true;
+      });
+    }
+    return arr;
+  }, [tasks, selectedKey, dateKey, plannedTodayByTaskId]);
   const selectedWeekKeys = useMemo(() => {
     const [y,m,da] = selectedKey.split('-').map(x=>parseInt(x,10));
     const dt = new Date(y,(m as number)-1,da);
@@ -398,6 +449,45 @@ export default function TodayPage() {
 
   async function refreshSessionsNow() {
     try { const r = await fetch('/api/sessions', { cache: 'no-store' }); const d = await r.json(); setSessions(Array.isArray(d.sessions)?d.sessions:[]); } catch {}
+  }
+
+  function openLogFor(itemId: string, mode: 'partial'|'finish') {
+    const it = plan.items.find(x => x.id === itemId); if (!it) return;
+    const secs = Math.max(0, Number(itemSeconds[itemId] || 0));
+    const minsFromTimer = Math.floor(secs / 60);
+    const def = mode === 'finish' ? Math.max(1, minsFromTimer || (Number(it.minutes)||0)) : Math.max(1, minsFromTimer || Math.max(1, Math.round((Number(it.minutes)||0)/2)));
+    const df = (typeof window !== 'undefined' ? (window.localStorage.getItem('defaultFocus') || '5') : '5');
+    setLogForm({ minutes: String(def), focus: df, notes: '', pages: '', portion: '' });
+    setLogModal({ mode, itemId });
+  }
+
+  async function submitLog() {
+    if (!logModal) return;
+    const it = plan.items.find(x => x.id === logModal.itemId); if (!it) return;
+    let minutes = Math.max(1, parseInt(logForm.minutes || '0', 10) || 0);
+    const f = parseFloat(logForm.focus || ''); const focus = isNaN(f) ? null : Math.max(1, Math.min(10, f));
+    const portion = (logForm.portion || '').trim();
+    const notes = (() => { const base = (logForm.notes || '').trim(); return portion ? (base ? `${base}\nPortion: ${portion}` : `Portion: ${portion}`) : (base || null); })();
+    const pagesRead = (() => { const p = parseInt(logForm.pages || '0', 10); return isNaN(p) || p <= 0 ? null : p; })();
+    // If user provided pages for readings, compute minutes from pages using per-course MPP
+    if (pagesRead && pagesRead > 0) {
+      const mpp = minutesPerPageForCourse(it.course);
+      const estFromPages = Math.max(1, Math.round(pagesRead * mpp));
+      minutes = estFromPages;
+    }
+    const body: any = { taskId: isUUID(it.id) ? it.id : null, when: new Date().toISOString(), minutes, focus, notes, pagesRead, activity: null };
+    try { await fetch('/api/sessions', { method:'POST', headers:{ 'Content-Type':'application/json' }, body: JSON.stringify(body) }); } catch {}
+    await refreshSessionsNow();
+    if (logModal.mode === 'finish') {
+      if (isUUID(it.id)) { try { await fetch(`/api/tasks/${it.id}`, { method:'PATCH', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ status: 'done' }) }); } catch {} }
+      setPlan(p => ({ ...p, items: p.items.filter(x => x.id !== it.id) }));
+    } else {
+      const m = Math.min(minutes, Math.max(1, Number(it.minutes)||0));
+      setPlan(p => ({ ...p, items: p.items.map(x => x.id === it.id ? { ...x, minutes: Math.max(0, (Number(x.minutes)||0) - m) } : x) }));
+    }
+    setItemSeconds(prev => ({ ...prev, [it.id]: 0 }));
+    if (activeItemId === it.id) setActiveItemId(null);
+    setLogModal(null);
   }
 
   async function logSessionForItem(it: TodayPlanItem, minutes: number) {
@@ -898,7 +988,7 @@ export default function TodayPage() {
                         {weekBlocks.map(b => (
                           <li key={b.id} className="flex items-center justify-between">
                             <span className="truncate">{b.day} · {b.course ? `${b.course}: ` : ''}{b.title}</span>
-                            <span className="text-slate-300/70">{b.plannedMinutes}m</span>
+                            <span className="text-slate-300/70">{minutesToHM(b.plannedMinutes)}</span>
                           </li>
                         ))}
                       </ul>
@@ -922,7 +1012,7 @@ export default function TodayPage() {
                                 {chips.map((ch:string, i:number) => (<span key={i} className="px-1.5 py-0.5 rounded border border-[#1b2344]">{ch}</span>))}
                               </div>
                             ) : null; })()}
-                            {typeof t.estimatedMinutes === 'number' ? <div className="text-xs text-slate-300/70">{t.estimatedMinutes}m</div> : null}
+                            {typeof t.estimatedMinutes === 'number' ? <div className="text-xs text-slate-300/70">{minutesToHM(t.estimatedMinutes)}</div> : null}
                           </li>
                         ))}
                       </ul>
@@ -933,6 +1023,37 @@ export default function TodayPage() {
             )}
           </div>
         </div>
+
+        {logModal && (
+          <div role="dialog" aria-modal="true" className="fixed inset-0 z-50 flex items-center justify-center">
+            <div className="absolute inset-0 bg-black/60" onClick={()=>setLogModal(null)} />
+            <div className="relative z-10 w-[92vw] max-w-md bg-[#0b1020] border border-[#1b2344] rounded p-4">
+              <div className="text-sm font-medium mb-2">{logModal.mode==='finish' ? 'Finish Task' : 'Log Partial'}</div>
+              <div className="grid grid-cols-1 gap-2 text-sm">
+                {(() => { const it = plan.items.find(x => x.id === (logModal?.itemId||'')); const total = it ? countPagesFromTitle(String(it.title||'')) : 0; return total>0 ? (<div className="text-xs text-slate-300/70">Total pages: <span className="text-slate-100">{total}</span></div>) : null; })()}
+                <label className="flex items-center justify-between gap-2"> <span className="text-xs text-slate-300/70">Minutes</span>
+                  <input type="number" min={1} step={1} value={logForm.minutes} onChange={e=>setLogForm(f=>({...f, minutes: e.target.value}))} className="w-28 bg-[#0b1020] border border-[#1b2344] rounded px-2 py-1" />
+                </label>
+                <label className="flex items-center justify-between gap-2"> <span className="text-xs text-slate-300/70">Focus (1–10)</span>
+                  <input type="number" min={1} max={10} step={0.1} value={logForm.focus} onChange={e=>setLogForm(f=>({...f, focus: e.target.value}))} className="w-28 bg-[#0b1020] border border-[#1b2344] rounded px-2 py-1" />
+                </label>
+                <label className="block"> <span className="block text-xs text-slate-300/70 mb-1">Pages read (optional)</span>
+                  <input type="number" min={0} step={1} value={logForm.pages} onChange={e=>setLogForm(f=>({...f, pages: e.target.value}))} className="w-full bg-[#0b1020] border border-[#1b2344] rounded px-2 py-1" />
+                </label>
+                <label className="block"> <span className="block text-xs text-slate-300/70 mb-1">Portion label (e.g., p. 449–486)</span>
+                  <input value={logForm.portion} onChange={e=>setLogForm(f=>({...f, portion: e.target.value}))} className="w-full bg-[#0b1020] border border-[#1b2344] rounded px-2 py-1" />
+                </label>
+                <label className="block"> <span className="block text-xs text-slate-300/70 mb-1">Notes</span>
+                  <input value={logForm.notes} onChange={e=>setLogForm(f=>({...f, notes: e.target.value}))} className="w-full bg-[#0b1020] border border-[#1b2344] rounded px-2 py-1" />
+                </label>
+              </div>
+              <div className="flex items-center gap-2 mt-3">
+                <button onClick={submitLog} className="px-3 py-2 rounded bg-blue-600 hover:bg-blue-500">Save</button>
+                <button onClick={()=>setLogModal(null)} className="px-3 py-2 rounded border border-[#1b2344]">Cancel</button>
+              </div>
+            </div>
+          </div>
+        )}
 
         {/* KPIs & Weekly Goal */}
         <div className="grid grid-cols-1 gap-3 sm:grid-cols-4">

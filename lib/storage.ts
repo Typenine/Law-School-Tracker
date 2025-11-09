@@ -19,7 +19,8 @@ function resolveDbUrl(): string | null {
     // Default to sslmode=require for hosted providers
     return `postgres://${encodeURIComponent(PGUSER)}:${encodeURIComponent(PGPASSWORD)}@${PGHOST}${port}/${PGDATABASE}?sslmode=require`;
   }
-
+  return null;
+}
 export async function updateSession(id: string, patch: Partial<Pick<StudySession, 'when'|'minutes'|'focus'|'notes'|'pagesRead'|'outlinePages'|'practiceQs'|'activity'>>): Promise<StudySession | null> {
   if (DB_URL) {
     const p = getPool();
@@ -68,8 +69,7 @@ export async function deleteSession(id: string): Promise<boolean> {
   await writeJson(db);
   return db.sessions.length < before;
 }
-  return null;
-}
+ 
 const DB_URL = resolveDbUrl();
 export const HAS_DB = !!DB_URL;
 const IS_VERCEL = !!process.env.VERCEL;

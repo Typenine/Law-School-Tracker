@@ -51,6 +51,10 @@ export default function LogPage() {
   const [tasks, setTasks] = useState<any[]>([]);
   const [courses, setCourses] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
+  const [editId, setEditId] = useState<string | null>(null);
+  const [editMinutes, setEditMinutes] = useState<string>('');
+  const [editFocus, setEditFocus] = useState<string>('');
+  const [editNotes, setEditNotes] = useState<string>('');
 
   // Filters
   const [from, setFrom] = useState<string>(""); // YYYY-MM-DD
@@ -77,6 +81,43 @@ export default function LogPage() {
     } finally {
       setLoading(false);
     }
+
+  function uid() { return Math.random().toString(36).slice(2) + Date.now().toString(36); }
+
+  async function openEditSession(id: string) {
+    const s = (sessions||[]).find((x:any) => x.id === id); if (!s) return;
+    setEditId(id);
+    setEditMinutes(String(s.minutes || ''));
+    setEditFocus(s.focus == null ? '' : String(s.focus));
+    setEditNotes(s.notes || '');
+  }
+  async function saveEditSession() {
+    if (!editId) return;
+    const patch: any = {};
+    const m = parseInt(editMinutes || '0', 10); if (!isNaN(m) && m > 0) patch.minutes = m;
+    const f = parseFloat(editFocus || ''); if (!isNaN(f)) patch.focus = Math.max(1, Math.min(10, f));
+    patch.notes = editNotes || null;
+    try { await fetch(`/api/sessions/${editId}`, { method:'PATCH', headers:{'Content-Type':'application/json'}, body: JSON.stringify(patch) }); } catch {}
+    setEditId(null); setEditMinutes(''); setEditFocus(''); setEditNotes('');
+    await refresh();
+  }
+
+  async function deleteSessionWithRestore(id: string) {
+    const s = (sessions||[]).find((x:any) => x.id === id); if (!s) return;
+    const restore = typeof window !== 'undefined' ? window.confirm('Restore these minutes back onto the schedule? Click OK to restore, Cancel to delete only.') : false;
+    if (restore) {
+      try {
+        const r = await fetch('/api/schedule', { cache:'no-store' }); const j = await r.json(); const blocks = Array.isArray(j.blocks) ? j.blocks : [];
+        const whenKey = chicagoYmd(new Date(s.when));
+        const task = s.taskId ? tasks.find((t:any)=>t.id===s.taskId) : null;
+        const title = task?.title || 'Restored from log';
+        const course = task?.course || extractCourseFromNotes(s.notes) || '';
+        blocks.push({ id: uid(), taskId: s.taskId || uid(), day: whenKey, plannedMinutes: Math.max(1, Number(s.minutes)||0), guessed: true, title, course, pages: null, priority: null, catchup: false });
+        await fetch('/api/schedule', { method:'PUT', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ blocks }) });
+      } catch {}
+    }
+    try { await fetch(`/api/sessions/${id}`, { method:'DELETE' }); } catch {}
+    await refresh();
   }
 
   useEffect(() => {
@@ -266,6 +307,7 @@ export default function LogPage() {
                 <th className="py-1 pr-2">Duration</th>
                 <th className="py-1 pr-2">Focus</th>
                 <th className="py-1 pr-2">Notes</th>
+                <th className="py-1 pr-2">Actions</th>
               </tr>
             </thead>
             <tbody>
@@ -287,6 +329,10 @@ export default function LogPage() {
                     <td className="py-1 pr-2">{fmtHM(r.minutes)}</td>
                     <td className="py-1 pr-2">{r.focus ?? '—'}</td>
                     <td className="py-1 pr-2 max-w-[360px]"><span className="truncate inline-block max-w-[340px] align-bottom">{r.notes || '—'}</span></td>
+                    <td className="py-1 pr-2 whitespace-nowrap">
+                      <button onClick={()=>openEditSession(r.id)} className="px-2 py-1 rounded border border-[#1b2344] text-xs mr-1">Edit</button>
+                      <button onClick={()=>deleteSessionWithRestore(r.id)} className="px-2 py-1 rounded border border-rose-700 text-rose-400 text-xs">Delete</button>
+                    </td>
                   </tr>
                 ))
               )}
@@ -294,6 +340,30 @@ export default function LogPage() {
           </table>
         </div>
       </section>
+
+      {editId && (
+        <div role="dialog" aria-modal="true" className="fixed inset-0 z-50 flex items-center justify-center">
+          <div className="absolute inset-0 bg-black/60" onClick={()=>setEditId(null)} />
+          <div className="relative z-10 w-[92vw] max-w-md bg-[#0b1020] border border-[#1b2344] rounded p-4">
+            <div className="text-sm font-medium mb-2">Edit Session</div>
+            <div className="grid grid-cols-1 gap-2 text-sm">
+              <label className="flex items-center justify-between gap-2"> <span className="text-xs text-slate-300/70">Minutes</span>
+                <input type="number" min={1} step={1} value={editMinutes} onChange={e=>setEditMinutes(e.target.value)} className="w-28 bg-[#0b1020] border border-[#1b2344] rounded px-2 py-1" />
+              </label>
+              <label className="flex items-center justify-between gap-2"> <span className="text-xs text-slate-300/70">Focus (1–10)</span>
+                <input type="number" min={1} max={10} step={0.1} value={editFocus} onChange={e=>setEditFocus(e.target.value)} className="w-28 bg-[#0b1020] border border-[#1b2344] rounded px-2 py-1" />
+              </label>
+              <label className="block"> <span className="block text-xs text-slate-300/70 mb-1">Notes</span>
+                <input value={editNotes} onChange={e=>setEditNotes(e.target.value)} className="w-full bg-[#0b1020] border border-[#1b2344] rounded px-2 py-1" />
+              </label>
+            </div>
+            <div className="flex items-center gap-2 mt-3">
+              <button onClick={saveEditSession} className="px-3 py-2 rounded bg-blue-600 hover:bg-blue-500">Save</button>
+              <button onClick={()=>setEditId(null)} className="px-3 py-2 rounded border border-[#1b2344]">Cancel</button>
+            </div>
+          </div>
+        </div>
+      )}
     </main>
   );
 }
