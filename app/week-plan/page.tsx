@@ -732,7 +732,7 @@ function overlap(a0:number,a1:number,b0:number|null,b1:number|null): number { if
         <div className="space-y-2">
           <div className="text-xs text-slate-300/70">Availability (hours:minutes per weekday)</div>
           <div className="grid grid-cols-2 sm:grid-cols-4 md:grid-cols-7 gap-2">
-            {[1,2,3,4,5,6,0].map(dow => (
+            {[6,0,1,2,3,4,5].map(dow => (
               <div key={dow} className="rounded border border-[#1b2344] p-2">
                 <label className="block text-xs mb-1" htmlFor={`avail-${dow}`}>{['Sun','Mon','Tue','Wed','Thu','Fri','Sat'][dow]}</label>
                 <div className="flex items-center gap-2">
