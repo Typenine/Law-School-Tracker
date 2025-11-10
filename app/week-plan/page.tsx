@@ -582,17 +582,7 @@ export default function WeekPlanPage() {
         }
       }
     }
-    // Timed task events (if present)
-    for (const t of (tasks||[])) {
-      const dayKey = keyOf(new Date(t.dueDate));
-      if (!(dayKey in map)) continue;
-      const sNorm = normHHMM((t as any).startTime);
-      const eNorm = normHHMM((t as any).endTime);
-      const courseName = (t.course || '').toString();
-      const sMin = toMin(sNorm||'');
-      const labelTime = (sNorm && eNorm) ? fmt12Range(sNorm,eNorm) : 'All day';
-      map[dayKey].push({ label: t.title, time: labelTime, color: colorForCourse(courseName), s: (sMin ?? 24*60) });
-    }
+    // No tasks in Events panel — strictly class/meeting blocks only
     // Sort by start minutes asc; all-day at end
     for (const k of Object.keys(map)) map[k].sort((a,b) => (Number(a.s||1e9) - Number(b.s||1e9)) || String(a.label).localeCompare(String(b.label)));
     return map;
@@ -912,7 +902,6 @@ function parseAvailFlexible(input: string): number | null {
                       <button aria-label="Open day actions" onClick={()=>setToolbarMenu(m => (m && m.dow===dow)? null : { dow })} className="px-2 py-1 rounded border border-white/10 text-xs">…</button>
                       {toolbarMenu && toolbarMenu.dow===dow ? (
                         <div className="absolute right-0 mt-2 z-30 w-40 rounded border border-white/10 bg-[#0b1020] p-2 text-xs space-y-1 shadow-lg">
-                          <button onClick={()=>{ setWindowsByDow(prev=>{ const arr=(prev[dow]||[]).slice(); arr.push({ id: uid(), start:'', end:'' } as any); return { ...prev, [dow]: arr }; }); setToolbarMenu(null); }} className="block w-full text-left px-2 py-1 rounded hover:bg-white/5">Add window</button>
                           <button onClick={()=>{ setBreaksByDow(prev=>{ const arr=(prev[dow]||[]).slice(); arr.push({ id: uid(), start:'', end:'' } as any); return { ...prev, [dow]: arr }; }); setToolbarMenu(null); }} className="block w-full text-left px-2 py-1 rounded hover:bg-white/5">Add break</button>
                           <button onClick={()=>{ setWindowsByDow(prev=>{ const wins=(prev[dow]||[]).slice(); const out: Record<number, any[]> = {0:[],1:[],2:[],3:[],4:[],5:[],6:[]}; for(const k of [1,2,3,4,5]) out[k]=wins.slice(); return { ...prev, ...out } as any; }); setBreaksByDow(prev=>{ const br=(prev[dow]||[]).slice(); const out: Record<number, any[]> = {0:(prev[0]||[]),1:[],2:[],3:[],4:[],5:[],6:(prev[6]||[])}; for(const k of [1,2,3,4,5]) out[k]=br.slice(); return out as any; }); setToolbarMenu(null); }} className="block w-full text-left px-2 py-1 rounded hover:bg-white/5">Copy to weekdays</button>
                         </div>

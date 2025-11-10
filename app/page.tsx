@@ -1220,8 +1220,8 @@ export default function TodayPage() {
           <div className="text-xs text-slate-300/80">Today’s Plan comes from your schedule.</div>
         </div>
 
-        {/* Wizard */}
-        {!plan.locked && (
+        {/* Wizard disabled per request */}
+        {false && !plan.locked && (
           <div className="space-y-4">
             {step===1 && (
               <div className="rounded border border-[#1b2344] p-4 space-y-3">
@@ -1314,7 +1314,7 @@ export default function TodayPage() {
                         <div className="flex-1 min-w-0">
                           <div className="mb-1">
                             {it.course ? <span className="mr-2 inline-flex items-center text-[11px] px-1.5 py-0.5 rounded border border-white/10 text-white/80" style={{ backgroundColor: 'transparent' }}>{it.course}</span> : null}
-                            <span className="text-lg font-semibold align-middle line-clamp-2" title={stripControlChars(it.title)}>{i+1}. {(() => { const c = String(it.course||''); const raw = stripControlChars(String(it.title||'')); const lc = c.toLowerCase(); const lraw = raw.toLowerCase(); if (lc && (lraw.startsWith(lc+':') || lraw.startsWith(lc+' -') || lraw.startsWith(lc+' —') || lraw.startsWith(lc+' –'))) { return raw.slice(c.length+1).trimStart(); } return raw; })()}</span>
+                            <span className="text-lg font-semibold align-middle line-clamp-2" title={stripControlChars(it.title)}>{(() => { const c = String(it.course||''); const raw = stripControlChars(String(it.title||'')); const lc = c.toLowerCase(); const lraw = raw.toLowerCase(); if (lc && (lraw.startsWith(lc+':') || lraw.startsWith(lc+' -') || lraw.startsWith(lc+' —') || lraw.startsWith(lc+' –'))) { return raw.slice(c.length+1).trimStart(); } return raw; })()}</span>
                           </div>
                           {st.showRemaining ? (
                             <div className="text-sm text-slate-200"><span className="font-medium">Remaining:</span> {st.remainingLabel} <span className="text-slate-300/70">({st.pagesLeft}p)</span></div>
@@ -1329,7 +1329,7 @@ export default function TodayPage() {
                         <div className="w-[420px] min-w-[420px] flex-shrink-0 flex flex-col items-end gap-2">
                           <div className="inline-flex items-center px-2 py-0.5 rounded-md text-sm bg-white/10 leading-tight">
                             <div className="text-right">
-                              <div className="font-medium">{st.pagesLeft==null?`Est. ${minutesToHM(st.etaMinutes)}`:minutesToHM(st.etaMinutes)}</div>
+                              <div className="font-medium">{st.pagesLeft==null?`Est. ${minutesToHM(Math.max(1, st.etaMinutes))}`:minutesToHM(Math.max(1, st.etaMinutes))}</div>
                               {typeof st.pagesLeft==='number' ? (<div className="text-[11px] text-white/70">{st.pagesLeft}p @ {st.pph}pph</div>) : null}
                             </div>
                           </div>
@@ -1400,7 +1400,7 @@ export default function TodayPage() {
                             <div className="min-w-0">
                               <div className="text-sm">
                                 {b.course ? <span className="mr-2 inline-flex items-center text-[10px] px-1.5 py-0.5 rounded border border-white/10 text-white/80">{b.course}</span> : null}
-                                <span className="font-medium align-middle line-clamp-2" title={stripControlChars(b.title)}>{i+1}. {(() => { const c = String(b.course||''); const raw = stripControlChars(String(b.title||'')); const lc = c.toLowerCase(); const lraw = raw.toLowerCase(); if (lc && (lraw.startsWith(lc+':') || lraw.startsWith(lc+' -') || lraw.startsWith(lc+' —') || lraw.startsWith(lc+' –'))) { return raw.slice(c.length+1).trimStart(); } return raw; })()}</span>
+                                <span className="font-medium align-middle line-clamp-2" title={stripControlChars(b.title)}>{(() => { const c = String(b.course||''); const raw = stripControlChars(String(b.title||'')); const lc = c.toLowerCase(); const lraw = raw.toLowerCase(); if (lc && (lraw.startsWith(lc+':') || lraw.startsWith(lc+' -') || lraw.startsWith(lc+' —') || lraw.startsWith(lc+' –'))) { return raw.slice(c.length+1).trimStart(); } return raw; })()}</span>
                               </div>
                               {st.showRemaining ? (
                                 <div className="text-[12px] text-slate-200"><span className="font-medium">Remaining:</span> {st.remainingLabel} <span className="text-slate-300/70">({st.pagesLeft}p)</span></div>
