@@ -323,7 +323,7 @@ export default function TodayPage() {
   const [goals, setGoals] = useState<WeeklyGoal[]>([]);
   const [tasks, setTasks] = useState<any[]>([]);
   const [rightMode, setRightMode] = useState<'day'|'week'>('day');
-  const [selectedKey, setSelectedKey] = useState<string>(() => ymdAddDays(chicagoYmd(new Date()), 1));
+  const [selectedKey, setSelectedKey] = useState<string>(() => chicagoYmd(new Date()));
   const [activeItemId, setActiveItemId] = useState<string | null>(null);
   const [itemSeconds, setItemSeconds] = useState<Record<string, number>>({});
   const [itemStartAt, setItemStartAt] = useState<Record<string, number>>({});
