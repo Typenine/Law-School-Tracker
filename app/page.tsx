@@ -1076,17 +1076,30 @@ export default function TodayPage() {
 
   function statsForTaskId(taskId: string, title: string, course: string) {
     try {
+      // Find canonical task and id
       const t:any = (tasks||[]).find((x:any)=>x.id===taskId || (x.title===title && (x.course||'')===(course||''))) || null;
+      const canonId = (t && typeof t.id==='string') ? t.id : taskId;
+      // Assigned intervals: prefer assignedSegments; fallback to ranges parsed from title
       const assignedNorm = normalizeRanges((t as any)?.assignedSegments || null);
-      const assignedIv = assignedUnion(assignedNorm);
-      const logs: LogEntry[] = (sessions||[]).filter((s:any)=> (s?.taskId===taskId)).map((s:any)=>({ mode: (s?.mode||null) as any, ranges: (Array.isArray(s?.ranges)?s.ranges:null), pages: (Array.isArray(s?.pages)?s.pages:null), minutes: Number(s?.minutes)||0 })) as LogEntry[];
+      let assignedIv = assignedUnion(assignedNorm);
+      if (!assignedIv.length) {
+        const chips = extractPageRanges(String(title||''));
+        const iv = parseIntervalsFromRangeString(chips.join(', '));
+        assignedIv = iv;
+      }
+      // Logs by canonical id if available
+      const logs: LogEntry[] = (sessions||[])
+        .filter((s:any)=> (s?.taskId===canonId))
+        .map((s:any)=>({ mode: (s?.mode||null) as any, ranges: (Array.isArray(s?.ranges)?s.ranges:null), pages: (Array.isArray(s?.pages)?s.pages:null), minutes: Number(s?.minutes)||0 })) as LogEntry[];
       const cmp = completedUnion(logs);
-      const remainingIv = remainingUnion(assignedIv, cmp.iv);
-      const pagesLeft = (assignedIv.length>0 && cmp.hasPageInfo) ? countPages(remainingIv) : (assignedIv.length>0 && cmp.hasPageInfo===false ? null : 0);
+      const remainingIv = assignedIv.length ? remainingUnion(assignedIv, cmp.iv) : [];
+      // If no page info in logs, treat remaining as assigned (we still want to show ranges and ETA)
+      const hasIv = assignedIv.length>0;
+      const pagesLeft = hasIv ? (cmp.hasPageInfo ? countPages(remainingIv) : countPages(assignedIv)) : null;
       const pph = pagesPerHourForCourse(course) || 18;
-      const etaMinutes = (typeof pagesLeft==='number' && pagesLeft!=null) ? Math.ceil((pagesLeft / Math.max(pph,0.1)) * 60) : null;
-      const remainingLabel = (typeof pagesLeft==='number' && pagesLeft!=null) ? formatRanges(remainingIv) : '';
-      return { pagesLeft, pph: Math.round(pph), etaMinutes: (etaMinutes||0), remainingLabel, showRemaining: (assignedIv.length>0 && cmp.hasPageInfo) };
+      const etaMinutes = (typeof pagesLeft==='number' && pagesLeft!=null) ? Math.ceil((pagesLeft / Math.max(pph,0.1)) * 60) : 0;
+      const remainingLabel = hasIv ? formatRanges(cmp.hasPageInfo ? remainingIv : assignedIv) : '';
+      return { pagesLeft, pph: Math.round(pph), etaMinutes, remainingLabel, showRemaining: hasIv };
     } catch { return { pagesLeft:null, pph:18, etaMinutes:0, remainingLabel:'', showRemaining:false }; }
   }
 
@@ -1297,6 +1310,36 @@ export default function TodayPage() {
           </div>
         )}
 
+        {editModal && (
+          <div role="dialog" aria-modal="true" className="fixed inset-0 z-50 flex items-center justify-center">
+            <div className="absolute inset-0 bg-black/60" onClick={()=>setEditModal(null)} />
+            <div className="relative z-10 w-[92vw] max-w-md bg-[#0b1020] border border-[#1b2344] rounded p-4">
+              <div className="text-sm font-medium mb-2">Edit Task</div>
+              <div className="grid grid-cols-1 gap-2 text-sm">
+                <label className="block"> <span className="block text-xs text-slate-300/70 mb-1">Title</span>
+                  <input value={editForm.title} onChange={e=>setEditForm(f=>({...f, title: e.target.value}))} className="w-full bg-[#0b1020] border border-[#1b2344] rounded px-2 py-1" />
+                </label>
+                <label className="block"> <span className="block text-xs text-slate-300/70 mb-1">Notes</span>
+                  <input value={editForm.notes} onChange={e=>setEditForm(f=>({...f, notes: e.target.value}))} className="w-full bg-[#0b1020] border border-[#1b2344] rounded px-2 py-1" />
+                </label>
+                <label className="flex items-center justify-between gap-2"> <span className="text-xs text-slate-300/70">Estimate (min)</span>
+                  <input type="number" min={0} step={5} value={editForm.estimate} onChange={e=>setEditForm(f=>({...f, estimate: e.target.value}))} className="w-28 bg-[#0b1020] border border-[#1b2344] rounded px-2 py-1" />
+                </label>
+                <label className="block"> <span className="block text-xs text-slate-300/70 mb-1">Assigned page segments</span>
+                  <input placeholder="449-486,505-520; 90-105" value={editForm.segments} onChange={e=>setEditForm(f=>({...f, segments: e.target.value}))} className="w-full bg-[#0b1020] border border-[#1b2344] rounded px-2 py-1" />
+                </label>
+                <label className="flex items-center justify-between gap-2"> <span className="text-xs text-slate-300/70">Course PPH</span>
+                  <input type="number" min={1} step={1} value={editForm.pph} onChange={e=>setEditForm(f=>({...f, pph: e.target.value}))} className="w-28 bg-[#0b1020] border border-[#1b2344] rounded px-2 py-1" />
+                </label>
+              </div>
+              <div className="flex items-center gap-2 mt-3">
+                <button onClick={saveEdit} className="px-3 py-2 rounded bg-blue-600 hover:bg-blue-500">Save</button>
+                <button onClick={()=>setEditModal(null)} className="px-3 py-2 rounded border border-[#1b2344]">Cancel</button>
+              </div>
+            </div>
+          </div>
+        )}
+
         {/* Plan + Tomorrow preview */}
         <div className="grid grid-cols-1 xl:grid-cols-[1.7fr_1fr] gap-6 xl:max-w-[1600px] mx-auto px-6 md:px-8">
           <div className="min-h-[140px]">
@@ -1395,7 +1438,7 @@ export default function TodayPage() {
                       <div className="text-[11px] text-slate-300/60">—</div>
                     ) : (
                       <ul className="space-y-2">
-                        {selectedBlocks.map((b, i) => { const st = statsForTaskId(b.taskId, b.title, b.course); const pct = st.etaMinutes>0 ? 0 : 0; return (
+                        {selectedBlocks.map((b, i) => { const st = statsForTaskId(b.taskId, b.title, b.course); const pct = st.etaMinutes>0 ? 0 : 0; const fallbackMin = (() => { const pm = Math.max(0, Math.round(Number(b.plannedMinutes)||0)); if (pm>0) return pm; const t:any = (tasks||[]).find((x:any)=>x.id===b.taskId) || null; const est = Math.max(0, Math.round(Number(t?.estimatedMinutes)||0)); if (est>0) return est; const chips = extractPageRanges(String(b.title||'')); if (chips.length>0) { const cnt = pagesInIntervals(parseIntervalsFromRangeString(chips.join(', '))); const mpp = minutesPerPageForCourse(b.course); return Math.max(1, Math.round(cnt * mpp)); } return 30; })(); return (
                           <li key={b.id} className="rounded-2xl p-3 border border-white/10 bg-white/5 flex items-start justify-between gap-2" style={{ borderLeft: `3px solid ${courseColor(b.course)}` }}>
                             <div className="min-w-0">
                               <div className="text-sm">
@@ -1408,7 +1451,7 @@ export default function TodayPage() {
                             </div>
                             <div className="shrink-0 inline-flex items-center px-2 py-0.5 rounded-md text-xs bg-white/10 leading-tight">
                               <div className="text-right">
-                                <div className="font-medium">{st.pagesLeft==null?`Est. ${minutesToHM(Math.max(1, Math.round(Number(b.plannedMinutes)||0)))}`:minutesToHM(Math.max(1, st.etaMinutes))}</div>
+                                <div className="font-medium">{st.pagesLeft==null?`Est. ${minutesToHM(Math.max(1, fallbackMin))}`:minutesToHM(Math.max(1, st.etaMinutes))}</div>
                                 {typeof st.pagesLeft==='number' ? (<div className="text-[10px] text-white/70">{st.pagesLeft}p @ {st.pph}pph</div>) : null}
                               </div>
                             </div>

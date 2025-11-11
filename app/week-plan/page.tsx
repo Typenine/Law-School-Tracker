@@ -1052,9 +1052,12 @@ function parseAvailFlexible(input: string): number | null {
                     <li className="text-[11px] text-slate-300/50">—</li>
                   ) : (
                     (eventsByDay[k]||[]).map((ev,i) => (
-                      <li key={i} className="text-[11px] flex items-center gap-2">
-                        <span className="inline-block w-2 h-2 rounded-full" style={{ backgroundColor: ev.color||'#64748b' }} />
-                        <span className="truncate">{ev.label}{ev.time?` · ${ev.time}`:''}</span>
+                      <li key={i} className="text-[11px] flex items-center gap-2 justify-between">
+                        <div className="flex items-center gap-2 min-w-0">
+                          <span className="inline-block w-2 h-2 rounded-full" style={{ backgroundColor: ev.color||'#64748b' }} />
+                          <span className="truncate">{ev.label}</span>
+                        </div>
+                        {ev.time ? <span className="shrink-0 text-slate-300/70">{ev.time}</span> : null}
                       </li>
                     ))
                   )}
