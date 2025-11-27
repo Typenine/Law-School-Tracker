@@ -1416,164 +1416,167 @@ export default function TodayPage() {
           </div>
         )}
 
-        {/* Plan + Tomorrow preview */}
-        <div className="grid grid-cols-1 xl:grid-cols-[1.7fr_1fr] gap-6 xl:max-w-[1600px] mx-auto px-6 md:px-8">
-          <div className="min-h-[140px]">
-            <h3 className="text-sm font-medium mb-2">Today’s Plan</h3>
-            {plan.items.length===0 ? (
-              <div className="text-xs text-slate-300/80">No items yet. Today’s Plan comes from your schedule.</div>
+        {/* Plan + Preview - Redesigned compact layout */}
+        <div className="grid grid-cols-1 lg:grid-cols-[1fr_340px] gap-4 max-w-[1400px] mx-auto">
+          {/* Today's Tasks - Main column */}
+          <div>
+            <div className="flex items-center justify-between mb-3">
+              <h3 className="text-base font-semibold">Today's Tasks</h3>
+              <div className="text-xs text-slate-400">
+                {plan.items.length} task{plan.items.length !== 1 ? 's' : ''} · {minutesToHM(plan.items.reduce((s, it) => s + (Number(it.minutes) || 0), 0))} total
+              </div>
+            </div>
+            {plan.items.length === 0 ? (
+              <div className="rounded-lg border border-dashed border-white/20 p-6 text-center text-sm text-slate-400">
+                No tasks scheduled. Add from your schedule or backlog.
+              </div>
             ) : (
-              <ul className="space-y-3">
+              <div className="space-y-2">
                 {plan.items.map((it, i) => {
                   const st = readingStatsByItem[it.id] || { assignedIv: [], assignedLabel: '', remainingIv: [], remainingLabel: '', pagesLeft: null as number|null, pph: pagesPerHourForCourse(it.course), etaMinutes: Math.max(1, Math.round(Number(it.minutes)||0)), loggedMinutes: (sessions||[]).filter((s:any)=>s?.taskId===it.id).reduce((a:number,s:any)=>a+(Number(s?.minutes)||0),0), showRemaining: false };
-                  // Use task's estimatedMinutes or item.minutes as fallback
                   const displayEta = Math.max(1, Number(it.minutes) || st.etaMinutes || 30);
-                  const pct = Math.min(100, Math.round((st.loggedMinutes/Math.max(st.etaMinutes,1))*100));
+                  const pct = Math.min(100, Math.round((st.loggedMinutes/Math.max(displayEta,1))*100));
+                  const secs = Math.max(0, Number(itemSeconds[it.id] || 0)) + (activeItemId === it.id && itemStartAt[it.id] ? Math.floor((nowTs - itemStartAt[it.id]) / 1000) : 0);
+                  const isActive = activeItemId === it.id;
+                  
                   return (
-                    <li key={it.id} className="rounded-2xl p-5 md:p-6 border border-white/10 bg-white/5" style={{ borderLeft: `3px solid ${courseColor(it.course)}` }}>
-                      <div className="flex items-start justify-between gap-4">
+                    <div key={it.id} className={`rounded-lg border ${isActive ? 'border-blue-500/50 bg-blue-900/10' : 'border-white/10 bg-white/[0.02]'} p-3 transition-colors`} style={{ borderLeftWidth: '3px', borderLeftColor: courseColor(it.course) }}>
+                      {/* Row 1: Course badge, Title, Timer, Est */}
+                      <div className="flex items-start gap-3">
                         <div className="flex-1 min-w-0">
-                          <div className="mb-1">
-                            {it.course ? <span className="mr-2 inline-flex items-center text-[11px] px-1.5 py-0.5 rounded border border-white/10 text-white/80" style={{ backgroundColor: 'transparent' }}>{it.course}</span> : null}
-                            <span className="text-lg font-semibold align-middle line-clamp-2" title={stripControlChars(it.title)}>{(() => { const c = String(it.course||''); const raw = stripControlChars(String(it.title||'')); const lc = c.toLowerCase(); const lraw = raw.toLowerCase(); if (lc && (lraw.startsWith(lc+':') || lraw.startsWith(lc+' -') || lraw.startsWith(lc+' —') || lraw.startsWith(lc+' –'))) { return raw.slice(c.length+1).trimStart(); } return raw; })()}</span>
+                          <div className="flex items-center gap-2 flex-wrap">
+                            {it.course && <span className="text-[10px] px-1.5 py-0.5 rounded bg-white/10 text-white/70 font-medium">{it.course}</span>}
+                            <span className="font-medium text-sm line-clamp-1" title={stripControlChars(it.title)}>
+                              {(() => { const c = String(it.course||''); const raw = stripControlChars(String(it.title||'')); const lc = c.toLowerCase(); const lraw = raw.toLowerCase(); if (lc && (lraw.startsWith(lc+':') || lraw.startsWith(lc+' -') || lraw.startsWith(lc+' —') || lraw.startsWith(lc+' –'))) { return raw.slice(c.length+1).trimStart(); } return raw; })()}
+                            </span>
                           </div>
-                          {st.showRemaining ? (
-                            <div className="text-sm text-slate-200"><span className="font-medium">Remaining:</span> {st.remainingLabel} <span className="text-slate-300/70">({st.pagesLeft}p)</span></div>
-                          ) : null}
-                          {st.assignedLabel ? (
-                            <div className="text-xs text-white/60 mt-0.5">Assigned: {st.assignedLabel}</div>
-                          ) : null}
-                          <div className="mt-3 h-1 bg-white/10 rounded overflow-hidden" role="progressbar" aria-valuemin={0} aria-valuemax={100} aria-valuenow={pct} aria-label="Elapsed vs estimate">
-                            <div className="h-full bg-emerald-600" style={{ width: `${pct}%` }} />
-                          </div>
-                        </div>
-                        <div className="w-[420px] min-w-[420px] flex-shrink-0 flex flex-col items-end gap-2">
-                          <div className="inline-flex items-center gap-3">
-                            {/* Timer display */}
-                            {(() => {
-                              const secs = Math.max(0, Number(itemSeconds[it.id] || 0)) + (activeItemId === it.id && itemStartAt[it.id] ? Math.floor((nowTs - itemStartAt[it.id]) / 1000) : 0);
-                              return secs > 0 ? (
-                                <div className="px-2 py-0.5 rounded-md text-sm bg-blue-600/30 border border-blue-600/50 font-mono">
-                                  {mmss(secs)}
-                                </div>
-                              ) : null;
-                            })()}
-                            <div className="px-2 py-0.5 rounded-md text-sm bg-white/10 leading-tight">
-                              <div className="text-right">
-                                <div className="font-medium">Est. {minutesToHM(displayEta)}</div>
-                                {typeof st.pagesLeft==='number' && st.pagesLeft > 0 ? (<div className="text-[11px] text-white/70">{st.pagesLeft}p @ {st.pph}pph</div>) : null}
-                              </div>
+                          {/* Page info if reading */}
+                          {(st.showRemaining || st.assignedLabel) && (
+                            <div className="text-[11px] text-slate-400 mt-0.5">
+                              {st.showRemaining ? <span>Remaining: {st.remainingLabel} ({st.pagesLeft}p)</span> : st.assignedLabel ? <span>Pages: {st.assignedLabel}</span> : null}
                             </div>
-                          </div>
-                          <div className="flex items-center gap-2 flex-nowrap">
-                            {activeItemId === it.id ? (
-                              <button aria-label="Pause item timer" onClick={pauseItemTimer} className="px-2 py-1 rounded border border-[#1b2344] text-xs">Stop</button>
-                            ) : (
-                              <button aria-label="Start item timer" onClick={()=>startItemTimer(it.id)} className="px-2 py-1 rounded border border-[#1b2344] text-xs">Start</button>
+                          )}
+                        </div>
+                        {/* Right side: Timer + Estimate */}
+                        <div className="flex items-center gap-2 shrink-0">
+                          {secs > 0 && (
+                            <div className={`px-2 py-1 rounded text-xs font-mono ${isActive ? 'bg-blue-600 text-white' : 'bg-blue-600/20 text-blue-300'}`}>
+                              {mmss(secs)}
+                            </div>
+                          )}
+                          <div className="text-right">
+                            <div className="text-sm font-medium">{minutesToHM(displayEta)}</div>
+                            {typeof st.pagesLeft === 'number' && st.pagesLeft > 0 && (
+                              <div className="text-[10px] text-slate-500">{st.pagesLeft}p</div>
                             )}
-                            <button aria-label="Recalculate from logs" onClick={()=>recalcFromSessions(it)} className="px-2 py-1 rounded border border-emerald-700 text-emerald-300 text-xs">Recalc</button>
-                            <button aria-label="Partial complete" onClick={()=>openLogFor(it.id,'partial')} className="px-2 py-1 rounded border border-[#1b2344] text-xs">Partial</button>
-                            <button aria-label="Finish task" onClick={()=>openLogFor(it.id,'finish')} className="px-2 py-1 rounded bg-emerald-600 hover:bg-emerald-500 text-xs">Finish</button>
-                            <button aria-label="Reset item timer" onClick={()=>resetTimer(it.id)} className="px-2 py-1 rounded border border-[#1b2344] text-xs">Reset</button>
-                            <button aria-label="Edit task" onClick={()=>openEditFor(it.id)} className="px-2 py-1 rounded border border-[#1b2344] text-xs">Edit</button>
                           </div>
                         </div>
                       </div>
-                    </li>
+                      
+                      {/* Row 2: Progress bar + Actions */}
+                      <div className="flex items-center gap-3 mt-2">
+                        {/* Progress bar */}
+                        <div className="flex-1 h-1 bg-white/10 rounded-full overflow-hidden">
+                          <div className="h-full bg-emerald-500 transition-all" style={{ width: `${pct}%` }} />
+                        </div>
+                        {/* Compact action buttons */}
+                        <div className="flex items-center gap-1">
+                          {isActive ? (
+                            <button onClick={pauseItemTimer} className="px-2 py-1 rounded text-[11px] bg-amber-600/20 text-amber-300 hover:bg-amber-600/30">Stop</button>
+                          ) : (
+                            <button onClick={() => startItemTimer(it.id)} className="px-2 py-1 rounded text-[11px] bg-blue-600/20 text-blue-300 hover:bg-blue-600/30">Start</button>
+                          )}
+                          <button onClick={() => openLogFor(it.id, 'partial')} className="px-2 py-1 rounded text-[11px] bg-white/5 text-slate-300 hover:bg-white/10">Partial</button>
+                          <button onClick={() => openLogFor(it.id, 'finish')} className="px-2 py-1 rounded text-[11px] bg-emerald-600 text-white hover:bg-emerald-500">Done</button>
+                          <button onClick={() => openEditFor(it.id)} className="px-1.5 py-1 rounded text-[11px] text-slate-400 hover:text-white hover:bg-white/10">✎</button>
+                          <button onClick={() => resetTimer(it.id)} className="px-1.5 py-1 rounded text-[11px] text-slate-400 hover:text-white hover:bg-white/10" title="Reset timer">↺</button>
+                        </div>
+                      </div>
+                    </div>
                   );
                 })}
-              </ul>
+              </div>
             )}
             {plan.locked && (
-              <div className="text-xs text-slate-300/70 mt-2">Locked · Total {totalPlannedLabel}</div>
+              <div className="text-xs text-slate-500 mt-2">Plan locked · {totalPlannedLabel}</div>
             )}
           </div>
-          <div className="rounded border border-[#1b2344] p-4 min-h-[140px]">
-            <div className="flex items-center justify-between mb-2">
-              <h3 className="text-sm font-medium">Preview</h3>
-              <div className="flex items-center gap-2 text-xs">
-                <div className="inline-flex rounded border border-[#1b2344] overflow-hidden">
-                  <button onClick={()=>setRightMode('day')} className={`px-2 py-1 ${rightMode==='day'?'bg-emerald-600':'bg-transparent'}`}>Day</button>
-                  <button onClick={()=>setRightMode('week')} className={`px-2 py-1 ${rightMode==='week'?'bg-emerald-600':'bg-transparent'}`}>Week</button>
-                </div>
-                <div className="inline-flex items-center gap-1">
-                  <button onClick={()=>{ setSelectedKey(k=>ymdAddDays(k, rightMode==='day'? -1 : -7)); }} className="px-2 py-1 rounded border border-[#1b2344]">◀</button>
-                  <button onClick={()=>{ setSelectedKey(k=>ymdAddDays(k, rightMode==='day'? 1 : 7)); }} className="px-2 py-1 rounded border border-[#1b2344]">▶</button>
-                  <button onClick={()=>{ const today = chicagoYmd(new Date()); setSelectedKey(today); }} className="px-2 py-1 rounded border border-[#1b2344]">Today</button>
-                </div>
+
+          {/* Preview sidebar */}
+          <div className="rounded-lg border border-white/10 bg-white/[0.02] p-4">
+            <div className="flex items-center justify-between mb-3">
+              <h3 className="text-sm font-semibold">Preview</h3>
+              <div className="flex items-center gap-1 text-[11px]">
+                <button onClick={() => setRightMode('day')} className={`px-2 py-1 rounded ${rightMode === 'day' ? 'bg-emerald-600 text-white' : 'text-slate-400 hover:text-white'}`}>Day</button>
+                <button onClick={() => setRightMode('week')} className={`px-2 py-1 rounded ${rightMode === 'week' ? 'bg-emerald-600 text-white' : 'text-slate-400 hover:text-white'}`}>Week</button>
               </div>
             </div>
-            {rightMode==='day' ? (
-              <>
-                <div className="text-xs text-slate-300/70 mb-2">
-                  {(() => {
-                    const [y,m,da] = selectedKey.split('-').map(x=>parseInt(x,10));
-                    const d = new Date(y,(m as number)-1,da);
-                    const w = d.toLocaleDateString(undefined, { weekday: 'long' });
-                    const md = d.toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: 'numeric' });
-                    const isToday = selectedKey === chicagoYmd(new Date());
-                    return (
-                      <span>
-                        <span className="text-slate-200 font-medium">{w}</span> · {md}
-                        {isToday ? <span className="ml-2 text-[10px] px-1.5 py-0.5 rounded bg-blue-600/30 border border-blue-600/60 text-blue-300">Today</span> : null}
-                      </span>
-                    );
-                  })()}
+            
+            {/* Date navigation */}
+            <div className="flex items-center justify-between mb-3 pb-2 border-b border-white/10">
+              <div className="text-xs">
+                {(() => {
+                  const [y, m, da] = selectedKey.split('-').map(x => parseInt(x, 10));
+                  const d = new Date(y, (m as number) - 1, da);
+                  const isToday = selectedKey === chicagoYmd(new Date());
+                  return (
+                    <span className="text-slate-300">
+                      {d.toLocaleDateString(undefined, { weekday: 'short', month: 'short', day: 'numeric' })}
+                      {isToday && <span className="ml-1.5 px-1.5 py-0.5 rounded bg-blue-600/30 text-blue-300 text-[10px]">Today</span>}
+                    </span>
+                  );
+                })()}
+              </div>
+              <div className="flex items-center gap-1">
+                <button onClick={() => setSelectedKey(k => ymdAddDays(k, rightMode === 'day' ? -1 : -7))} className="w-6 h-6 rounded flex items-center justify-center text-slate-400 hover:text-white hover:bg-white/10">‹</button>
+                <button onClick={() => setSelectedKey(chicagoYmd(new Date()))} className="px-2 py-1 rounded text-[10px] text-slate-400 hover:text-white hover:bg-white/10">Today</button>
+                <button onClick={() => setSelectedKey(k => ymdAddDays(k, rightMode === 'day' ? 1 : 7))} className="w-6 h-6 rounded flex items-center justify-center text-slate-400 hover:text-white hover:bg-white/10">›</button>
+              </div>
+            </div>
+
+            {rightMode === 'day' ? (
+              <div className="space-y-4">
+                {/* Scheduled */}
+                <div>
+                  <div className="text-[11px] text-slate-500 uppercase tracking-wide mb-2">Scheduled</div>
+                  {selectedBlocks.length === 0 ? (
+                    <div className="text-xs text-slate-500 italic">No tasks scheduled</div>
+                  ) : (
+                    <div className="space-y-1.5">
+                      {selectedBlocks.map((b) => {
+                        const st = statsForTaskId(b.taskId, b.title, b.course);
+                        const fallbackMin = Math.max(0, Math.round(Number(b.plannedMinutes) || 0)) || 30;
+                        return (
+                          <div key={b.id} className="flex items-center gap-2 py-1.5 px-2 rounded bg-white/5" style={{ borderLeft: `2px solid ${courseColor(b.course)}` }}>
+                            <div className="flex-1 min-w-0">
+                              <div className="text-xs font-medium truncate">{(() => { const c = String(b.course||''); const raw = stripControlChars(String(b.title||'')); const lc = c.toLowerCase(); const lraw = raw.toLowerCase(); if (lc && (lraw.startsWith(lc+':') || lraw.startsWith(lc+' -') || lraw.startsWith(lc+' —') || lraw.startsWith(lc+' –'))) { return raw.slice(c.length+1).trimStart(); } return raw; })()}</div>
+                              {b.course && <div className="text-[10px] text-slate-500">{b.course}</div>}
+                            </div>
+                            <div className="text-xs text-slate-400">{minutesToHM(fallbackMin)}</div>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  )}
                 </div>
-                <div className="space-y-3">
-                  <div>
-                    <div className="text-xs text-slate-300/70 mb-1">Scheduled</div>
-                    {selectedBlocks.length===0 ? (
-                      <div className="text-[11px] text-slate-300/60">—</div>
-                    ) : (
-                      <ul className="space-y-2">
-                        {selectedBlocks.map((b, i) => { const st = statsForTaskId(b.taskId, b.title, b.course); const pct = st.etaMinutes>0 ? 0 : 0; const fallbackMin = (() => { const pm = Math.max(0, Math.round(Number(b.plannedMinutes)||0)); if (pm>0) return pm; const t:any = (tasks||[]).find((x:any)=>x.id===b.taskId) || null; const est = Math.max(0, Math.round(Number(t?.estimatedMinutes)||0)); if (est>0) return est; const chips = extractPageRanges(String(b.title||'')); if (chips.length>0) { const cnt = pagesInIntervals(parseIntervalsFromRangeString(chips.join(', '))); const mpp = minutesPerPageForCourse(b.course); return Math.max(1, Math.round(cnt * mpp)); } return 30; })(); return (
-                          <li key={b.id} className="rounded-2xl p-3 border border-white/10 bg-white/5 flex items-start justify-between gap-2" style={{ borderLeft: `3px solid ${courseColor(b.course)}` }}>
-                            <div className="min-w-0">
-                              <div className="text-sm">
-                                {b.course ? <span className="mr-2 inline-flex items-center text-[10px] px-1.5 py-0.5 rounded border border-white/10 text-white/80">{b.course}</span> : null}
-                                <span className="font-medium align-middle line-clamp-2" title={stripControlChars(b.title)}>{(() => { const c = String(b.course||''); const raw = stripControlChars(String(b.title||'')); const lc = c.toLowerCase(); const lraw = raw.toLowerCase(); if (lc && (lraw.startsWith(lc+':') || lraw.startsWith(lc+' -') || lraw.startsWith(lc+' —') || lraw.startsWith(lc+' –'))) { return raw.slice(c.length+1).trimStart(); } return raw; })()}</span>
-                              </div>
-                              {st.showRemaining ? (
-                                <div className="text-[12px] text-slate-200"><span className="font-medium">Remaining:</span> {st.remainingLabel} <span className="text-slate-300/70">({st.pagesLeft}p)</span></div>
-                              ) : null}
-                            </div>
-                            <div className="shrink-0 inline-flex items-center px-2 py-0.5 rounded-md text-xs bg-white/10 leading-tight">
-                              <div className="text-right">
-                                <div className="font-medium">{st.pagesLeft==null?`Est. ${minutesToHM(Math.max(1, fallbackMin))}`:minutesToHM(Math.max(1, st.etaMinutes))}</div>
-                                {typeof st.pagesLeft==='number' && st.pagesLeft > 0 ? (<div className="text-[10px] text-white/70">{st.pagesLeft}p @ {st.pph}pph</div>) : null}
-                              </div>
-                            </div>
-                          </li>
-                        ); })}
-                      </ul>
-                    )}
-                  </div>
-                  <div>
-                    <div className="text-xs text-slate-300/70 mb-1">Due</div>
-                    {tasksDueSelected.length===0 ? (
-                      <div className="text-[11px] text-slate-300/60">—</div>
-                    ) : (
-                      <ul className="text-sm space-y-2">
-                        {tasksDueSelected.map((t:any) => (
-                          <li key={t.id} className="space-y-0.5">
-                            <div className="text-slate-200 break-words whitespace-pre-wrap">
-                              {t.course ? <span className="mr-2 inline-flex items-center text-[11px] px-1.5 py-0.5 rounded border border-[#1b2344] text-slate-300/80">{t.course}</span> : null}
-                              {(() => { const raw = String(t.title || ''); const c = String(t.course||''); const lc = c.toLowerCase(); const lraw = raw.toLowerCase(); if (lc && (lraw.startsWith(lc+':') || lraw.startsWith(lc+' -') || lraw.startsWith(lc+' —') || lraw.startsWith(lc+' –'))) { return raw.slice(c.length+1).trimStart(); } return raw; })()}
-                            </div>
-                            {(() => { const chips = (() => { const arr = extractPageRanges(String(t.title||'')); if (arr.length===0 && typeof t.pagesRead==='number' && t.pagesRead>0) return [String(t.pagesRead)+'p']; return arr; })(); return chips.length ? (
-                              <div className="flex flex-wrap gap-1 text-[11px] text-slate-300/80">
-                                {chips.map((ch:string, i:number) => (<span key={i} className="px-1.5 py-0.5 rounded border border-[#1b2344]">{ch}</span>))}
-                              </div>
-                            ) : null; })()}
-                            {typeof t.estimatedMinutes === 'number' ? <div className="text-xs text-slate-300/70">{minutesToHM(t.estimatedMinutes)}</div> : null}
-                          </li>
-                        ))}
-                      </ul>
-                    )}
-                  </div>
+                
+                {/* Due */}
+                <div>
+                  <div className="text-[11px] text-slate-500 uppercase tracking-wide mb-2">Due</div>
+                  {tasksDueSelected.length === 0 ? (
+                    <div className="text-xs text-slate-500 italic">Nothing due</div>
+                  ) : (
+                    <div className="space-y-1.5">
+                      {tasksDueSelected.map((t: any) => (
+                        <div key={t.id} className="py-1.5 px-2 rounded bg-white/5" style={{ borderLeft: `2px solid ${courseColor(t.course)}` }}>
+                          <div className="text-xs font-medium truncate">{(() => { const raw = String(t.title || ''); const c = String(t.course||''); const lc = c.toLowerCase(); const lraw = raw.toLowerCase(); if (lc && (lraw.startsWith(lc+':') || lraw.startsWith(lc+' -') || lraw.startsWith(lc+' —') || lraw.startsWith(lc+' –'))) { return raw.slice(c.length+1).trimStart(); } return raw; })()}</div>
+                          {t.course && <div className="text-[10px] text-slate-500">{t.course}</div>}
+                        </div>
+                      ))}
+                    </div>
+                  )}
                 </div>
-              </>
+              </div>
             ) : (
               <>
                 <div className="text-xs text-slate-300/70 mb-2">Week of {selectedWeekKeys[0]}—{selectedWeekKeys[6]}</div>
