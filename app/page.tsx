@@ -331,18 +331,29 @@ export default function TodayPage() {
   const [itemStartAt, setItemStartAt] = useState<Record<string, number>>({});
   const itemTickRef = useRef<NodeJS.Timeout|null>(null);
   const carryoverRef = useRef<boolean>(false);
-  const [ctNow, setCtNow] = useState<string>(() => new Intl.DateTimeFormat('en-US',{ timeZone:'America/Chicago', hour:'numeric', minute:'2-digit', hour12:true }).format(new Date()));
+  const [ctNow, setCtNow] = useState<string>('--:--'); // Hydration-safe default
   const [nowTs, setNowTs] = useState<number>(() => Date.now());
   const [logModal, setLogModal] = useState<{ mode: 'partial'|'finish'; itemId: string } | null>(null);
-  const [logForm, setLogForm] = useState<{ minutes: string; focus: string; notes: string; pages: string; portion: string }>({ minutes: '', focus: '5', notes: '', pages: '', portion: '' });
+  const [logForm, setLogForm] = useState<{ minutes: string; focus: string; notes: string; pages: string; portion: string; moveDay: string }>({ minutes: '', focus: '5', notes: '', pages: '', portion: '', moveDay: '' });
   const [editModal, setEditModal] = useState<{ itemId: string } | null>(null);
   const [editForm, setEditForm] = useState<{ title: string; notes: string; estimate: string; segments: string; pph: string }>({ title: '', notes: '', estimate: '', segments: '', pph: '' });
+  
+  // Get Central Time properly - client-only to avoid hydration mismatch
+  const getCentralTime = () => {
+    const now = new Date();
+    return new Intl.DateTimeFormat('en-US', {
+      timeZone: 'America/Chicago',
+      hour: 'numeric',
+      minute: '2-digit',
+      hour12: true
+    }).format(now);
+  };
+  
   useEffect(() => {
-    const id = setInterval(() => {
-      setCtNow(new Intl.DateTimeFormat('en-US',{ timeZone:'America/Chicago', hour:'numeric', minute:'2-digit', hour12:true }).format(new Date()));
-    }, 60000);
-    // sync at mount
-    setCtNow(new Intl.DateTimeFormat('en-US',{ timeZone:'America/Chicago', hour:'numeric', minute:'2-digit', hour12:true }).format(new Date()));
+    // Set time immediately on client mount
+    setCtNow(getCentralTime());
+    // Update every minute
+    const id = setInterval(() => setCtNow(getCentralTime()), 60000);
     return () => clearInterval(id);
   }, []);
 
@@ -752,7 +763,7 @@ export default function TodayPage() {
     const minsFromTimer = Math.floor(secs / 60);
     const def = mode === 'finish' ? Math.max(1, minsFromTimer || (Number(it.minutes)||0)) : Math.max(1, minsFromTimer || Math.max(1, Math.round((Number(it.minutes)||0)/2)));
     const df = (typeof window !== 'undefined' ? (window.localStorage.getItem('defaultFocus') || '5') : '5');
-    setLogForm({ minutes: minutesToHM(def), focus: df, notes: '', pages: '', portion: '' });
+    setLogForm({ minutes: minutesToHM(def), focus: df, notes: '', pages: '', portion: '', moveDay: '' });
     setLogModal({ mode, itemId });
   }
 
@@ -811,17 +822,55 @@ export default function TodayPage() {
         const re = /\bp(?:p|ages?)?\.?\s*[0-9,\s–:\-]+(?:\s*,\s*[0-9–:\-]+)*/i;
         const remainLabel = intervalsToLabel(remainingIntervals);
         const newTitle = re.test(it.title) ? String(it.title).replace(re, remainLabel) : `${it.title} — ${remainLabel}`;
-        setPlan(p => ({ ...p, items: p.items.map(x => x.id === it.id ? { ...x, title: newTitle, minutes: newMinutes, guessed: false } : x) }));
-        // Persist to Task so changes show everywhere
-        if (taskId) { try { await fetch(`/api/tasks/${taskId}`, { method:'PATCH', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ title: newTitle, estimatedMinutes: newMinutes }) }); } catch {} }
-        // Update this week's schedule block for the task (today's block)
-        try {
-          const nextSched = (schedule||[]).map(b => (b.taskId === (taskId||it.id) && b.day === plan.dateKey) ? { ...b, plannedMinutes: newMinutes, title: newTitle, guessed: false } : b);
-          if (nextSched !== schedule) {
-            setSchedule(nextSched as any);
-            try { void fetch('/api/schedule', { method:'PUT', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ blocks: nextSched }) }); } catch {}
+        
+        // Check if user wants to move remaining work to a different day
+        const moveDay = (logForm.moveDay || '').trim();
+        const targetDay = moveDay && /^\d{4}-\d{2}-\d{2}$/.test(moveDay) ? moveDay : plan.dateKey;
+        
+        if (moveDay && targetDay !== plan.dateKey) {
+          // Remove from today's plan
+          setPlan(p => ({ ...p, items: p.items.filter(x => x.id !== it.id) }));
+          // Add to schedule for target day
+          try {
+            const schedRes = await fetch('/api/schedule', { cache: 'no-store' });
+            const schedData = await schedRes.json();
+            const blocks = Array.isArray(schedData.blocks) ? schedData.blocks : [];
+            // Remove from today, add to target day
+            const filtered = blocks.filter((b:any) => !(b.taskId === (taskId||it.id) && b.day === plan.dateKey));
+            filtered.push({
+              id: `${Date.now()}-${Math.random().toString(36).slice(2)}`,
+              taskId: taskId || it.id,
+              day: targetDay,
+              plannedMinutes: newMinutes,
+              guessed: false,
+              title: newTitle,
+              course: it.course,
+              pages: null,
+              priority: null,
+              catchup: false
+            });
+            await fetch('/api/schedule', { method:'PUT', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ blocks: filtered }) });
+            setSchedule(filtered as any);
+          } catch {}
+          // Also update the due date on the task if needed
+          if (taskId) {
+            const newDueDate = new Date(targetDay + 'T23:59:59').toISOString();
+            try { await fetch(`/api/tasks/${taskId}`, { method:'PATCH', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ title: newTitle, estimatedMinutes: newMinutes, dueDate: newDueDate, remainingPageRanges: remainLabel }) }); } catch {}
           }
-        } catch {}
+        } else {
+          // Keep on today
+          setPlan(p => ({ ...p, items: p.items.map(x => x.id === it.id ? { ...x, title: newTitle, minutes: newMinutes, guessed: false } : x) }));
+          // Persist to Task so changes show everywhere
+          if (taskId) { try { await fetch(`/api/tasks/${taskId}`, { method:'PATCH', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ title: newTitle, estimatedMinutes: newMinutes, remainingPageRanges: remainLabel }) }); } catch {} }
+          // Update this week's schedule block for the task (today's block)
+          try {
+            const nextSched = (schedule||[]).map(b => (b.taskId === (taskId||it.id) && b.day === plan.dateKey) ? { ...b, plannedMinutes: newMinutes, title: newTitle, guessed: false } : b);
+            if (nextSched !== schedule) {
+              setSchedule(nextSched as any);
+              try { void fetch('/api/schedule', { method:'PUT', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ blocks: nextSched }) }); } catch {}
+            }
+          } catch {}
+        }
       } else {
         // No pages left; remove from plan and optionally mark task/schedule as done-ish
         setPlan(p => ({ ...p, items: p.items.filter(x => x.id !== it.id) }));
@@ -1564,50 +1613,113 @@ export default function TodayPage() {
         {logModal && (
           <div role="dialog" aria-modal="true" className="fixed inset-0 z-50 flex items-center justify-center">
             <div className="absolute inset-0 bg-black/60" onClick={()=>setLogModal(null)} />
-            <div className="relative z-10 w-[92vw] max-w-md bg-[#0b1020] border border-[#1b2344] rounded p-4">
-              <div className="text-sm font-medium mb-2">{logModal.mode==='finish' ? 'Finish Task' : 'Log Partial'}</div>
-              <div className="grid grid-cols-1 gap-2 text-sm">
-                {(() => {
-                  const it = plan.items.find(x => x.id === (logModal?.itemId||''));
-                  const total = it ? countPagesFromTitle(String(it.title||'')) : 0;
-                  const titleRangesStr = it ? (extractPageRanges(String(it.title||''))||[]).join(', ') : '';
-                  const titleIntervals = parseIntervalsFromRangeString(titleRangesStr);
-                  const readIntervals = parseIntervalsFromRangeString(logForm.pages||'');
-                  const pagesRead = pagesInIntervals(readIntervals);
-                  const remaining = subtractIntervals(titleIntervals, readIntervals);
-                  const remainLabel = intervalsToLabel(remaining);
-                  const parsedMin = parseMinutesFlexible(logForm.minutes||'');
-                  const minsHint = parsedMin!=null ? ` (${parsedMin}m)` : '';
-                  const mpp = it ? minutesPerPageForCourse(it.course) : minutesPerPage();
-                  const estMins = pagesRead>0 ? Math.max(1, Math.round(pagesRead * mpp)) : null;
-                  return (
-                    <>
-                      {total>0 ? (<div className="text-xs text-slate-300/70">Total pages: <span className="text-slate-100">{total}</span></div>) : null}
-                      <label className="flex items-center justify-between gap-2"> <span className="text-xs text-slate-300/70">Time</span>
-                        <input type="text" placeholder="H:MM" value={logForm.minutes} onChange={e=>setLogForm(f=>({...f, minutes: e.target.value}))} className="w-28 bg-[#0b1020] border border-[#1b2344] rounded px-2 py-1" />
-                      </label>
-                      <div className="text-[11px] text-slate-300/60">Enter H:MM, e.g., 2:15{minsHint}</div>
-                      <label className="block"> <span className="block text-xs text-slate-300/70 mb-1">Page ranges read (optional)</span>
-                        <input type="text" placeholder="449–486, 505–520 or 90" value={logForm.pages} onChange={e=>setLogForm(f=>({...f, pages: e.target.value}))} className="w-full bg-[#0b1020] border border-[#1b2344] rounded px-2 py-1" />
-                      </label>
-                      {(() => { const inp=(logForm.pages||'').trim(); let pr=pagesRead; if (pr===0 && /^\d+$/.test(inp)) pr=parseInt(inp,10); return pr>0 ? (<div className="text-[11px] text-slate-300/60">Computed pages: {pr}{estMins?` · ~${Math.max(1, Math.round(pr * mpp))}m`:''}</div>) : null; })()}
-                      {remainLabel ? (<div className="text-[11px] text-slate-300/60">Still to read: {remainLabel}</div>) : null}
-                    </>
-                  );
-                })()}
-                <label className="flex items-center justify-between gap-2"> <span className="text-xs text-slate-300/70">Focus (1–10)</span>
-                  <input type="number" min={1} max={10} step={0.1} value={logForm.focus} onChange={e=>setLogForm(f=>({...f, focus: e.target.value}))} className="w-28 bg-[#0b1020] border border-[#1b2344] rounded px-2 py-1" />
-                </label>
-                <label className="block"> <span className="block text-xs text-slate-300/70 mb-1">Portion label (e.g., p. 449–486)</span>
-                  <input value={logForm.portion} onChange={e=>setLogForm(f=>({...f, portion: e.target.value}))} className="w-full bg-[#0b1020] border border-[#1b2344] rounded px-2 py-1" />
-                </label>
-                <label className="block"> <span className="block text-xs text-slate-300/70 mb-1">Notes</span>
-                  <input value={logForm.notes} onChange={e=>setLogForm(f=>({...f, notes: e.target.value}))} className="w-full bg-[#0b1020] border border-[#1b2344] rounded px-2 py-1" />
-                </label>
+            <div className="relative z-10 w-[92vw] max-w-lg bg-[#0b1020] border border-[#1b2344] rounded-xl p-5 space-y-4">
+              <div className="flex items-center justify-between">
+                <div className="text-lg font-medium">{logModal.mode==='finish' ? 'Complete Task' : 'Log Partial Progress'}</div>
+                <button onClick={()=>setLogModal(null)} className="text-slate-400 hover:text-white text-lg">×</button>
               </div>
-              <div className="flex items-center gap-2 mt-3">
-                <button onClick={submitLog} className="px-3 py-2 rounded bg-blue-600 hover:bg-blue-500">Save</button>
-                <button onClick={()=>setLogModal(null)} className="px-3 py-2 rounded border border-[#1b2344]">Cancel</button>
+              
+              {(() => {
+                const it = plan.items.find(x => x.id === (logModal?.itemId||''));
+                const total = it ? countPagesFromTitle(String(it.title||'')) : 0;
+                const titleRangesStr = it ? (extractPageRanges(String(it.title||''))||[]).join(', ') : '';
+                const titleIntervals = parseIntervalsFromRangeString(titleRangesStr);
+                const readIntervals = parseIntervalsFromRangeString(logForm.pages||'');
+                const pagesRead = pagesInIntervals(readIntervals);
+                const remaining = subtractIntervals(titleIntervals, readIntervals);
+                const remainLabel = intervalsToLabel(remaining);
+                const pagesRemaining = pagesInIntervals(remaining);
+                const parsedMin = parseMinutesFlexible(logForm.minutes||'');
+                const minsHint = parsedMin!=null ? ` (${parsedMin}m)` : '';
+                const mpp = it ? minutesPerPageForCourse(it.course) : minutesPerPage();
+                const estMins = pagesRead>0 ? Math.max(1, Math.round(pagesRead * mpp)) : null;
+                const remainingMins = pagesRemaining > 0 ? Math.max(1, Math.round(pagesRemaining * mpp)) : 0;
+                
+                return (
+                  <div className="space-y-3">
+                    {/* Task Info */}
+                    <div className="rounded-lg border border-white/10 bg-white/5 p-3">
+                      <div className="text-sm font-medium truncate">{it?.title || 'Task'}</div>
+                      <div className="text-xs text-slate-300/70 mt-1">
+                        {it?.course && <span className="mr-3">{it.course}</span>}
+                        {total > 0 && <span>Total: {total} pages</span>}
+                      </div>
+                    </div>
+
+                    {/* Time & Focus Row */}
+                    <div className="grid grid-cols-2 gap-3">
+                      <div>
+                        <label className="block text-xs text-slate-300/70 mb-1">Time Spent</label>
+                        <input type="text" placeholder="1:30 or 90" value={logForm.minutes} onChange={e=>setLogForm(f=>({...f, minutes: e.target.value}))} className="w-full bg-[#0b1020] border border-[#1b2344] rounded px-3 py-2" />
+                        <div className="text-[10px] text-slate-400 mt-1">Format: H:MM or minutes{minsHint}</div>
+                      </div>
+                      <div>
+                        <label className="block text-xs text-slate-300/70 mb-1">Focus Level</label>
+                        <div className="flex items-center gap-2">
+                          <input type="range" min={1} max={10} step={0.5} value={logForm.focus || 5} onChange={e=>setLogForm(f=>({...f, focus: e.target.value}))} className="flex-1" />
+                          <span className="text-sm font-medium w-8">{logForm.focus}</span>
+                        </div>
+                      </div>
+                    </div>
+
+                    {/* Pages Read (for reading tasks) */}
+                    {total > 0 && (
+                      <div className="rounded-lg border border-emerald-600/30 bg-emerald-900/10 p-3 space-y-2">
+                        <div className="text-xs text-emerald-400 font-medium">Reading Progress</div>
+                        <div>
+                          <label className="block text-xs text-slate-300/70 mb-1">Pages completed (ranges work: 241–247 or just 15)</label>
+                          <input type="text" placeholder="e.g., 241–247 or 15" value={logForm.pages} onChange={e=>setLogForm(f=>({...f, pages: e.target.value}))} className="w-full bg-[#0b1020] border border-[#1b2344] rounded px-3 py-2" />
+                        </div>
+                        {(() => {
+                          const inp = (logForm.pages||'').trim();
+                          let pr = pagesRead;
+                          if (pr === 0 && /^\d+$/.test(inp)) pr = parseInt(inp, 10);
+                          return pr > 0 ? (
+                            <div className="text-xs text-slate-300/70">
+                              Read: <span className="text-emerald-400 font-medium">{pr} pages</span>
+                              {estMins && <span className="ml-2">· Est. time: ~{estMins}m</span>}
+                            </div>
+                          ) : null;
+                        })()}
+                        {remainLabel && pagesRemaining > 0 && (
+                          <div className="text-xs text-slate-300/70">
+                            Remaining: <span className="text-amber-400 font-medium">{remainLabel}</span>
+                            <span className="ml-2">({pagesRemaining} pages · ~{remainingMins}m)</span>
+                          </div>
+                        )}
+                      </div>
+                    )}
+
+                    {/* Move to Different Day (only for partial) */}
+                    {logModal.mode === 'partial' && pagesRemaining > 0 && (
+                      <div className="rounded-lg border border-blue-600/30 bg-blue-900/10 p-3">
+                        <div className="text-xs text-blue-400 font-medium mb-2">Move Remaining to Another Day?</div>
+                        <div className="flex items-center gap-3">
+                          <input type="date" value={logForm.moveDay} onChange={e=>setLogForm(f=>({...f, moveDay: e.target.value}))} min={chicagoYmd(new Date())} className="flex-1 bg-[#0b1020] border border-[#1b2344] rounded px-3 py-2 text-sm" />
+                          {logForm.moveDay && (
+                            <button onClick={()=>setLogForm(f=>({...f, moveDay:''}))} className="text-xs text-slate-400 hover:text-white">Clear</button>
+                          )}
+                        </div>
+                        <div className="text-[10px] text-slate-400 mt-1">
+                          {logForm.moveDay ? `Remaining ${pagesRemaining} pages will be moved to ${new Date(logForm.moveDay + 'T12:00:00').toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric' })}` : 'Leave blank to keep remaining pages on today'}
+                        </div>
+                      </div>
+                    )}
+
+                    {/* Notes */}
+                    <div>
+                      <label className="block text-xs text-slate-300/70 mb-1">Notes (optional)</label>
+                      <input value={logForm.notes} onChange={e=>setLogForm(f=>({...f, notes: e.target.value}))} placeholder="Any notes about this session..." className="w-full bg-[#0b1020] border border-[#1b2344] rounded px-3 py-2" />
+                    </div>
+                  </div>
+                );
+              })()}
+              
+              <div className="flex items-center gap-3 pt-2">
+                <button onClick={submitLog} className="px-4 py-2 rounded bg-emerald-600 hover:bg-emerald-500 font-medium">
+                  {logModal.mode === 'finish' ? 'Complete Task' : 'Log Progress'}
+                </button>
+                <button onClick={()=>setLogModal(null)} className="px-4 py-2 rounded border border-[#1b2344] hover:bg-white/5">Cancel</button>
               </div>
             </div>
           </div>

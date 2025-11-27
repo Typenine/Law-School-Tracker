@@ -22,6 +22,11 @@ export interface Task {
   focus?: number | null; // 1-10 focus level when completed
   pagesRead?: number | null; // pages read for this task
   activity?: string | null; // reading|review|outline|practice|other
+  // Partial completion tracking
+  originalPageRanges?: string | null; // original pages to read, e.g., "241-250, 107-111"
+  remainingPageRanges?: string | null; // pages still to read after partial completion
+  loggedMinutes?: number | null; // total time logged so far (sum of sessions)
+  percentComplete?: number | null; // 0-100 progress percentage
 }
 
 export type Semester = 'Spring' | 'Summer' | 'Fall';

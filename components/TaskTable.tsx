@@ -51,6 +51,13 @@ function minutesPerPage(): number {
 function hueFromString(s: string): number { let h = 0; for (let i=0;i<s.length;i++) { h = (h * 31 + s.charCodeAt(i)) >>> 0; } return h % 360; }
 function fallbackCourseHsl(name?: string | null): string { const key=(name||'').toString().trim().toLowerCase(); if (!key) return 'hsl(215 16% 47%)'; const h=hueFromString(key); return `hsl(${h} 70% 55%)`; }
 
+// Sanitize corrupted page ranges like "599[1808612" back to "599–612"
+function sanitizeTitle(title: string): string {
+  if (!title) return title;
+  // Fix corrupted en-dash patterns: "599[1808612" -> "599–612"
+  return title.replace(/(\d+)\[180\d*(\d{1,4})/g, '$1–$2');
+}
+
 function normCourseKey(name?: string | null): string {
   let x = (name || '').toString().toLowerCase().trim();
   if (!x) return '';
@@ -933,11 +940,11 @@ export default function TaskTable() {
                       </div>
                     )}
                   </td>
-                  <td className="py-2 pr-4">
+                  <td className="py-2 pr-4 max-w-[280px]">
                     {editingId === t.id ? (
                       <input value={editTitle} onChange={e => setEditTitle(e.target.value)} className="w-full bg-[#0b1020] border border-[#1b2344] rounded px-2 py-1" />
                     ) : (
-                      t.title
+                      <span className="break-words">{sanitizeTitle(t.title || '')}</span>
                     )}
                   </td>
                   <td className="py-2 pr-4">{(t.activity||'') ? (t.activity as string) : '-'}</td>
@@ -984,28 +991,34 @@ export default function TaskTable() {
                       ) : '-'
                     )}
                   </td>
-                  <td className="py-2 pr-4">{t.status}</td>
-                  <td className="py-2 pr-4 space-x-2">
+                  <td className="py-2 pr-4">
+                    <span className={`px-2 py-0.5 rounded text-xs ${t.status === 'done' ? 'bg-emerald-900/40 text-emerald-400' : 'bg-blue-900/40 text-blue-400'}`}>
+                      {t.status}
+                    </span>
+                  </td>
+                  <td className="py-2 pr-4">
                     {editingId === t.id ? (
-                      <>
-                        <button onClick={saveEdit} className="px-2 py-1 rounded bg-blue-600 hover:bg-blue-500">Save</button>
-                        <button onClick={cancelEdit} className="px-2 py-1 rounded border border-[#1b2344]">Cancel</button>
-                      </>
+                      <div className="flex items-center gap-1">
+                        <button onClick={saveEdit} className="px-2 py-1 rounded bg-blue-600 hover:bg-blue-500 text-xs">Save</button>
+                        <button onClick={cancelEdit} className="px-2 py-1 rounded border border-[#1b2344] text-xs">Cancel</button>
+                      </div>
                     ) : (
-                      <>
-                        <button onClick={() => startEdit(t)} className="px-2 py-1 rounded border border-[#1b2344]">Edit</button>
-                        <button onClick={() => toggleDone(t)} className="px-2 py-1 rounded bg-emerald-600 hover:bg-emerald-500">{t.status === 'done' ? 'Undo' : 'Done'}</button>
-                        <button onClick={() => remove(t.id)} className="px-2 py-1 rounded bg-rose-600 hover:bg-rose-500">Delete</button>
-                        <span className="inline-flex items-center gap-1 text-xs align-middle border border-[#1b2344] rounded px-1.5 py-0.5">
-                          <span className="text-slate-300/70">{fmtHM(Math.round(elapsedMs(t.id)/60000))}</span>
+                      <div className="flex flex-col gap-1">
+                        <div className="flex items-center gap-1">
+                          <button onClick={() => startEdit(t)} className="px-2 py-1 rounded border border-[#1b2344] text-xs hover:bg-white/5">Edit</button>
+                          <button onClick={() => toggleDone(t)} className={`px-2 py-1 rounded text-xs ${t.status === 'done' ? 'bg-amber-600 hover:bg-amber-500' : 'bg-emerald-600 hover:bg-emerald-500'}`}>{t.status === 'done' ? 'Undo' : 'Done'}</button>
+                          <button onClick={() => remove(t.id)} className="px-2 py-1 rounded bg-rose-600/80 hover:bg-rose-500 text-xs">Del</button>
+                        </div>
+                        <div className="flex items-center gap-1 text-xs text-slate-300/70">
+                          <span>{fmtHM(Math.round(elapsedMs(t.id)/60000))}</span>
                           {timers[t.id]?.running ? (
-                            <button onClick={() => pauseTimerFor(t.id)} className="px-1 py-0.5 rounded border border-[#1b2344]">Pause</button>
+                            <button onClick={() => pauseTimerFor(t.id)} className="px-1.5 py-0.5 rounded border border-amber-600/50 text-amber-400 text-[10px]">Pause</button>
                           ) : (
-                            <button onClick={() => startTimerFor(t.id)} className="px-1 py-0.5 rounded border border-[#1b2344]">Start</button>
+                            <button onClick={() => startTimerFor(t.id)} className="px-1.5 py-0.5 rounded border border-emerald-600/50 text-emerald-400 text-[10px]">Start</button>
                           )}
-                          <button onClick={() => clearTimerFor(t.id)} className="px-1 py-0.5 rounded border border-[#1b2344]">Clear</button>
-                        </span>
-                      </>
+                          <button onClick={() => clearTimerFor(t.id)} className="px-1.5 py-0.5 rounded border border-[#1b2344] text-[10px]">Clear</button>
+                        </div>
+                      </div>
                     )}
                   </td>
                 </tr>
