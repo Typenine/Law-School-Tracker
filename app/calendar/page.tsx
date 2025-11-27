@@ -1,10 +1,19 @@
 "use client";
 import { useEffect, useMemo, useState } from 'react';
-import { Task } from '@/lib/types';
+import { Task, CalendarEvent, EventCategory } from '@/lib/types';
 import { courseColorClass } from '@/lib/colors';
 import TimePickerField from '@/components/TimePickerField';
 
 export const dynamic = 'force-dynamic';
+
+const EVENT_CATEGORY_COLORS: Record<EventCategory, string> = {
+  personal: '#8b5cf6', // purple
+  school: '#3b82f6', // blue
+  work: '#f59e0b', // amber
+  health: '#10b981', // emerald
+  social: '#ec4899', // pink
+  other: '#6b7280', // gray
+};
 
 function startOfDay(d: Date) { const x = new Date(d); x.setHours(0,0,0,0); return x; }
 
@@ -138,6 +147,21 @@ export default function CalendarPage() {
   const [density, setDensity] = useState<'comfortable'|'compact'>('comfortable');
   const [expandedDays, setExpandedDays] = useState<Set<string>>(new Set());
 
+  // Personal events state
+  const [events, setEvents] = useState<CalendarEvent[]>([]);
+  const [showEvents, setShowEvents] = useState<boolean>(true);
+  const [eventModalOpen, setEventModalOpen] = useState(false);
+  const [eventForm, setEventForm] = useState<{
+    title: string;
+    category: EventCategory;
+    date: string;
+    startTime: string;
+    endTime: string;
+    description: string;
+    location: string;
+    allDay: boolean;
+  }>({ title: '', category: 'personal', date: '', startTime: '', endTime: '', description: '', location: '', allDay: true });
+
   // Edit modal state
   const [editOpen, setEditOpen] = useState(false);
   const [editTask, setEditTask] = useState<Task | null>(null);
@@ -158,6 +182,12 @@ export default function CalendarPage() {
       const cr = await fetch('/api/courses', { cache: 'no-store' });
       const cd = await cr.json();
       setCourses(cd.courses || []);
+    } catch {}
+    // Load personal events
+    try {
+      const er = await fetch('/api/events', { cache: 'no-store' });
+      const ed = await er.json();
+      setEvents(ed.events || []);
     } catch {}
     setLoading(false);
   }
@@ -301,6 +331,25 @@ export default function CalendarPage() {
     return map;
   }, [courses]);
 
+  // Personal events by day
+  const eventsByDay = useMemo(() => {
+    const m: Record<string, CalendarEvent[]> = {};
+    for (const ev of events) {
+      const k = ev.date; // already YYYY-MM-DD
+      (m[k] ||= []).push(ev);
+    }
+    // Sort by time
+    for (const k of Object.keys(m)) {
+      m[k].sort((a, b) => {
+        if (a.startTime && b.startTime) return a.startTime.localeCompare(b.startTime);
+        if (a.startTime) return -1;
+        if (b.startTime) return 1;
+        return 0;
+      });
+    }
+    return m;
+  }, [events]);
+
   const monthLabel = useMemo(() => new Date(year, month, 1).toLocaleString(undefined, { month: 'long', year: 'numeric' }), [year, month]);
   const monthNames = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
 
@@ -400,6 +449,60 @@ export default function CalendarPage() {
     await refresh();
   }
 
+  // Personal event functions
+  function openEventModal(dateKey?: string) {
+    const today = new Date();
+    let d: Date;
+    if (dateKey) {
+      const [y, m, da] = dateKey.split('-').map(n => parseInt(n, 10));
+      d = new Date(y, (m as number) - 1, da);
+    } else if (selectedDayKey) {
+      const [y, m, da] = selectedDayKey.split('-').map(n => parseInt(n, 10));
+      d = new Date(y, (m as number) - 1, da);
+    } else {
+      d = today;
+    }
+    setEventForm({
+      title: '',
+      category: 'personal',
+      date: fmtYmd(d),
+      startTime: '',
+      endTime: '',
+      description: '',
+      location: '',
+      allDay: true,
+    });
+    setEventModalOpen(true);
+  }
+
+  async function createPersonalEvent() {
+    if (!eventForm.title || !eventForm.date) return;
+    const body = {
+      title: eventForm.title,
+      category: eventForm.category,
+      date: eventForm.date,
+      startTime: eventForm.allDay ? null : (eventForm.startTime || null),
+      endTime: eventForm.allDay ? null : (eventForm.endTime || null),
+      allDay: eventForm.allDay,
+      description: eventForm.description || null,
+      location: eventForm.location || null,
+    };
+    const res = await fetch('/api/events', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+    });
+    if (res.ok) {
+      setEventModalOpen(false);
+      await refresh();
+    }
+  }
+
+  async function deleteEvent(id: string) {
+    await fetch(`/api/events/${id}`, { method: 'DELETE' });
+    await refresh();
+  }
+
   function openEdit(t: Task) {
     setEditTask(t);
     setEditTitle(t.title || '');
@@ -452,7 +555,8 @@ export default function CalendarPage() {
             {monthLabel}
           </button>
           <button onClick={() => { const d = new Date(year, month + 1, 1); setYear(d.getFullYear()); setMonth(d.getMonth()); setMonthOpen(false); }} className="px-2 py-1 rounded border border-[#1b2344]">Next</button>
-          <button onClick={openAdd} className="px-2 py-1 rounded bg-emerald-600 hover:bg-emerald-500">Add event</button>
+          <button onClick={openAdd} className="px-2 py-1 rounded bg-emerald-600 hover:bg-emerald-500">Add task</button>
+          <button onClick={() => openEventModal()} className="px-2 py-1 rounded bg-purple-600 hover:bg-purple-500">Add event</button>
           <a href={icsHref} className="px-2 py-1 rounded bg-indigo-600 hover:bg-indigo-500">Download .ics</a>
 
           {monthOpen && (
@@ -555,6 +659,71 @@ export default function CalendarPage() {
           </div>
         </div>
       )}
+      {/* Personal Event Modal */}
+      {eventModalOpen && (
+        <div className="fixed inset-0 z-50 bg-black/50 flex items-center justify-center p-4" onClick={() => setEventModalOpen(false)}>
+          <div className="w-full max-w-lg rounded border border-[#1b2344] bg-[#0b1020] p-4" onClick={e => e.stopPropagation()}>
+            <div className="flex items-center justify-between mb-3">
+              <div className="text-sm font-medium">Add personal event</div>
+              <button onClick={() => setEventModalOpen(false)} className="text-xs underline">Close</button>
+            </div>
+            <div className="space-y-3">
+              <div>
+                <label className="block text-xs mb-1">Title</label>
+                <input value={eventForm.title} onChange={e => setEventForm(f => ({ ...f, title: e.target.value }))} className="w-full bg-[#0b1020] border border-[#1b2344] rounded px-3 py-2" placeholder="e.g., Dentist appointment" autoFocus />
+              </div>
+              <div>
+                <label className="block text-xs mb-1">Category</label>
+                <div className="flex flex-wrap gap-2">
+                  {(['personal', 'work', 'health', 'social', 'other'] as EventCategory[]).map(cat => (
+                    <button key={cat} onClick={() => setEventForm(f => ({ ...f, category: cat }))} className={`px-3 py-1.5 rounded border text-xs capitalize ${eventForm.category === cat ? 'border-purple-500 bg-purple-900/30' : 'border-[#1b2344]'}`} style={{ borderLeftColor: EVENT_CATEGORY_COLORS[cat], borderLeftWidth: 3 }}>
+                      {cat}
+                    </button>
+                  ))}
+                </div>
+              </div>
+              <div>
+                <label className="block text-xs mb-1">Date</label>
+                <div className="flex items-center gap-2 flex-wrap">
+                  <input type="date" value={eventForm.date} onChange={e => setEventForm(f => ({ ...f, date: e.target.value }))} className="bg-[#0b1020] border border-[#1b2344] rounded px-3 py-2" />
+                  <div className="flex items-center gap-1 text-[11px]">
+                    <button onClick={() => setEventForm(f => ({ ...f, date: fmtYmd(new Date()) }))} className="px-2 py-1 rounded border border-[#1b2344]">Today</button>
+                    <button onClick={() => { const d=new Date(); d.setDate(d.getDate()+1); setEventForm(f => ({ ...f, date: fmtYmd(d) })); }} className="px-2 py-1 rounded border border-[#1b2344]">Tomorrow</button>
+                  </div>
+                </div>
+              </div>
+              <div>
+                <label className="inline-flex items-center gap-2 text-xs">
+                  <input type="checkbox" checked={eventForm.allDay} onChange={e => setEventForm(f => ({ ...f, allDay: e.target.checked }))} />
+                  All day
+                </label>
+              </div>
+              {!eventForm.allDay && (
+                <div>
+                  <label className="block text-xs mb-1">Time</label>
+                  <div className="flex items-center gap-2">
+                    <TimePickerField value={eventForm.startTime} onChange={v => setEventForm(f => ({ ...f, startTime: v }))} />
+                    <span className="text-xs">–</span>
+                    <TimePickerField value={eventForm.endTime} onChange={v => setEventForm(f => ({ ...f, endTime: v }))} />
+                  </div>
+                </div>
+              )}
+              <div>
+                <label className="block text-xs mb-1">Location (optional)</label>
+                <input value={eventForm.location} onChange={e => setEventForm(f => ({ ...f, location: e.target.value }))} className="w-full bg-[#0b1020] border border-[#1b2344] rounded px-3 py-2" placeholder="e.g., 123 Main St" />
+              </div>
+              <div>
+                <label className="block text-xs mb-1">Notes (optional)</label>
+                <textarea value={eventForm.description} onChange={e => setEventForm(f => ({ ...f, description: e.target.value }))} className="w-full bg-[#0b1020] border border-[#1b2344] rounded px-3 py-2 h-20" />
+              </div>
+              <div className="flex items-center gap-2">
+                <button onClick={createPersonalEvent} className="px-3 py-2 rounded bg-purple-600 hover:bg-purple-500 disabled:opacity-50" disabled={!eventForm.title || !eventForm.date}>Create</button>
+                <button onClick={() => setEventModalOpen(false)} className="px-3 py-2 rounded border border-[#1b2344]">Cancel</button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
       {/* Bulk add events */}
       <div className="card p-4">
         <BulkAddEvents courses={courses} onDone={refresh} />
@@ -575,8 +744,9 @@ export default function CalendarPage() {
         <div>
           <label className="block text-xs text-slate-300/70 mb-1">Display</label>
           <div className="flex items-center gap-4">
-            <label className="inline-flex items-center gap-2 text-sm"><input type="checkbox" checked={showClasses} onChange={e => setShowClasses(e.target.checked)} /> Show class times</label>
-            <label className="inline-flex items-center gap-2 text-sm"><input type="checkbox" checked={timedIcs} onChange={e => setTimedIcs(e.target.checked)} /> Timed blocks (.ics)</label>
+            <label className="inline-flex items-center gap-2 text-sm"><input type="checkbox" checked={showClasses} onChange={e => setShowClasses(e.target.checked)} /> Classes</label>
+            <label className="inline-flex items-center gap-2 text-sm"><input type="checkbox" checked={showEvents} onChange={e => setShowEvents(e.target.checked)} /> Events</label>
+            <label className="inline-flex items-center gap-2 text-sm"><input type="checkbox" checked={timedIcs} onChange={e => setTimedIcs(e.target.checked)} /> Timed .ics</label>
             <label className="inline-flex items-center gap-2 text-sm">
               Density
               <select value={density} onChange={e=>setDensity(e.target.value as any)} className="bg-[#0b1020] border border-[#1b2344] rounded px-2 py-1">
@@ -624,6 +794,22 @@ export default function CalendarPage() {
                         <span className="text-slate-200">{ev.title}</span>
                         <span className="text-slate-300/70">· {ev.time} CT</span>
                       </div>
+                    </li>
+                  ))}
+                </ul>
+              )}
+              {/* Personal events */}
+              {showEvents && (eventsByDay[k] && eventsByDay[k].length > 0) && (
+                <ul className="space-y-1 mb-1">
+                  {eventsByDay[k].map((ev) => (
+                    <li key={ev.id} className="text-[11px] rounded border border-[#2a3b6e] bg-[#0b1020] px-2 py-1.5 group relative" style={{ borderLeft: `3px solid ${EVENT_CATEGORY_COLORS[ev.category] || '#6b7280'}` }}>
+                      <div className="min-w-0 flex flex-wrap items-center gap-2 break-words leading-tight">
+                        <span className="text-slate-200">{ev.title}</span>
+                        {ev.startTime && <span className="text-slate-300/70">{fmt12(ev.startTime)}{ev.endTime ? `–${fmt12(ev.endTime)}` : ''}</span>}
+                        {ev.location && <span className="text-slate-300/60 text-[10px]">@ {ev.location}</span>}
+                        <span className="text-[9px] px-1 rounded bg-white/5 capitalize">{ev.category}</span>
+                      </div>
+                      <button onClick={(e) => { e.stopPropagation(); deleteEvent(ev.id); }} className="absolute top-1 right-1 opacity-0 group-hover:opacity-100 text-[10px] text-rose-400 hover:text-rose-300">×</button>
                     </li>
                   ))}
                 </ul>

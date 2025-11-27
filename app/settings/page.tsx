@@ -1,5 +1,8 @@
 "use client";
-import { useEffect, useState } from "react";
+import { useEffect, useState, useMemo } from "react";
+import type { WindowsByDow, BreaksByDow, SemesterInfo } from '@/lib/types';
+
+function uid() { return Math.random().toString(36).slice(2) + Date.now().toString(36); }
 function hueFromString(s: string): number { let h = 0; for (let i=0;i<s.length;i++) { h = (h * 31 + s.charCodeAt(i)) >>> 0; } return h % 360; }
 function fallbackCourseHsl(name?: string | null): string { const key=(name||'').toString().trim().toLowerCase(); if (!key) return 'hsl(215 16% 47%)'; const h=hueFromString(key); return `hsl(${h} 70% 55%)`; }
 function hslToHex(h: number, s: number, l: number): string { s/=100; l/=100; const c=(1-Math.abs(2*l-1))*s; const x=c*(1-Math.abs(((h/60)%2)-1)); const m=l-c/2; let r=0,g=0,b=0; if (0<=h&&h<60){r=c;g=x;b=0;} else if (60<=h&&h<120){r=x;g=c;b=0;} else if (120<=h&&h<180){r=0;g=c;b=x;} else if (180<=h&&h<240){r=0;g=x;b=c;} else if (240<=h&&h<300){r=x;g=0;b=c;} else {r=c;g=0;b=x;} const R=Math.round((r+m)*255); const G=Math.round((g+m)*255); const B=Math.round((b+m)*255); const toHex=(n:number)=>n.toString(16).padStart(2,'0'); return `#${toHex(R)}${toHex(G)}${toHex(B)}`; }
@@ -22,6 +25,13 @@ export default function SettingsPage() {
   const [savingId, setSavingId] = useState<string | null>(null);
   const [internshipColor, setInternshipColor] = useState<string>('');
   const [sportsLawReviewColor, setSportsLawReviewColor] = useState<string>('');
+  
+  // Availability settings
+  const [windowsByDow, setWindowsByDow] = useState<WindowsByDow>({ 0:[],1:[],2:[],3:[],4:[],5:[],6:[] });
+  const [breaksByDow, setBreaksByDow] = useState<BreaksByDow>({ 0:[],1:[],2:[],3:[],4:[],5:[],6:[] });
+  const [semesters, setSemesters] = useState<SemesterInfo[]>([]);
+  const [activeSemesterId, setActiveSemesterId] = useState<string | null>(null);
+  const [availSaving, setAvailSaving] = useState(false);
 
   useEffect(() => {
     if (typeof window === "undefined") return;
@@ -83,6 +93,84 @@ export default function SettingsPage() {
       setSportsLawReviewColor(ls || fallbackHex('Sports Law Review'));
     }
   }, []);
+
+  // Load availability settings
+  useEffect(() => {
+    (async () => {
+      try {
+        const r = await fetch('/api/settings?keys=availabilityWindowsV1,availabilityBreaksV1', { cache: 'no-store' });
+        if (!r.ok) return;
+        const j = await r.json();
+        const s = j?.settings || {};
+        if (s.availabilityWindowsV1) setWindowsByDow(s.availabilityWindowsV1);
+        if (s.availabilityBreaksV1) setBreaksByDow(s.availabilityBreaksV1);
+      } catch {}
+      // Load semesters
+      try {
+        const r = await fetch('/api/semesters', { cache: 'no-store' });
+        if (!r.ok) return;
+        const j = await r.json();
+        setSemesters(j.semesters || []);
+        const active = (j.semesters || []).find((s: SemesterInfo) => s.isActive);
+        if (active) setActiveSemesterId(active.id);
+      } catch {}
+    })();
+  }, []);
+
+  // Smart defaults: compute class times from courses
+  const classTimesByDow = useMemo(() => {
+    const result: Record<number, Array<{ start: string; end: string; course: string }>> = { 0:[],1:[],2:[],3:[],4:[],5:[],6:[] };
+    for (const c of courses) {
+      const blocks = (Array.isArray(c.meetingBlocks) && c.meetingBlocks.length)
+        ? c.meetingBlocks
+        : ((Array.isArray(c.meetingDays) && c.meetingStart && c.meetingEnd) 
+            ? [{ days: c.meetingDays, start: c.meetingStart, end: c.meetingEnd }] 
+            : []);
+      for (const b of blocks) {
+        if (!Array.isArray(b.days)) continue;
+        for (const dow of b.days) {
+          if (b.start && b.end) {
+            result[dow].push({ start: b.start, end: b.end, course: c.title || c.code || 'Class' });
+          }
+        }
+      }
+    }
+    return result;
+  }, [courses]);
+
+  async function saveAvailability() {
+    setAvailSaving(true);
+    try {
+      await fetch('/api/settings', {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          availabilityWindowsV1: windowsByDow,
+          availabilityBreaksV1: breaksByDow,
+        }),
+      });
+    } catch {}
+    setAvailSaving(false);
+  }
+
+  function applyClassTimesAsBreaks() {
+    // Add class times as breaks to the current windows
+    const newBreaks: BreaksByDow = { 0:[],1:[],2:[],3:[],4:[],5:[],6:[] };
+    for (const dow of [0,1,2,3,4,5,6]) {
+      const existing = breaksByDow[dow] || [];
+      const classes = classTimesByDow[dow] || [];
+      const merged = [...existing];
+      for (const cls of classes) {
+        // Check if already exists
+        const exists = merged.some(b => b.start === cls.start && b.end === cls.end);
+        if (!exists) {
+          merged.push({ id: uid(), start: cls.start, end: cls.end });
+        }
+      }
+      newBreaks[dow] = merged;
+    }
+    setBreaksByDow(newBreaks);
+  }
 
   useEffect(() => {
     if (typeof window === "undefined") return;
@@ -236,6 +324,106 @@ export default function SettingsPage() {
         </div>
         <div>
           <a href="/settings/import" className="inline-flex items-center px-3 py-2 rounded border border-[#1b2344] hover:bg-[#0b1020] text-sm">Import Data (CSV)</a>
+        </div>
+      </section>
+
+      {/* Availability Settings Section */}
+      <section className="card p-6 space-y-4">
+        <div>
+          <h2 className="text-lg font-medium">Weekly Availability</h2>
+          <p className="text-sm text-slate-300/70">Set your default study windows. These sync across Week Plan and Today pages.</p>
+        </div>
+        
+        {/* Smart defaults */}
+        {courses.some(c => c.meetingDays?.length || c.meetingBlocks?.length) && (
+          <div className="rounded border border-emerald-600/30 bg-emerald-900/10 p-3">
+            <div className="flex items-center justify-between">
+              <div>
+                <div className="text-sm font-medium text-emerald-400">Smart Defaults Available</div>
+                <div className="text-xs text-slate-300/70">Auto-add your class times as breaks so they don't count as study time.</div>
+              </div>
+              <button onClick={applyClassTimesAsBreaks} className="px-3 py-1.5 rounded bg-emerald-600 hover:bg-emerald-500 text-sm">Apply Class Times as Breaks</button>
+            </div>
+            <div className="mt-2 text-xs text-slate-300/60">
+              Detected classes: {[0,1,2,3,4,5,6].map(dow => {
+                const classes = classTimesByDow[dow];
+                if (!classes.length) return null;
+                return <span key={dow} className="mr-2">{['Sun','Mon','Tue','Wed','Thu','Fri','Sat'][dow]}: {classes.map(c => c.course).join(', ')}</span>;
+              })}
+            </div>
+          </div>
+        )}
+
+        {/* Quick presets */}
+        <div className="flex flex-wrap gap-2">
+          <span className="text-xs text-slate-400 self-center">Quick setup:</span>
+          <button onClick={()=>{ const w = [{ id: uid(), start:'9:00 AM', end:'5:00 PM' }]; setWindowsByDow({ 0:[], 1:w.map(x=>({...x, id:uid()})), 2:w.map(x=>({...x, id:uid()})), 3:w.map(x=>({...x, id:uid()})), 4:w.map(x=>({...x, id:uid()})), 5:w.map(x=>({...x, id:uid()})), 6:[] }); }} className="px-2 py-1 rounded border border-emerald-600/50 text-xs text-emerald-400 hover:bg-emerald-900/20">Weekdays 9–5</button>
+          <button onClick={()=>{ const w = [{ id: uid(), start:'8:00 AM', end:'12:00 PM' }, { id: uid(), start:'1:00 PM', end:'6:00 PM' }]; setWindowsByDow({ 0:[], 1:w.map(x=>({...x, id:uid()})), 2:w.map(x=>({...x, id:uid()})), 3:w.map(x=>({...x, id:uid()})), 4:w.map(x=>({...x, id:uid()})), 5:w.map(x=>({...x, id:uid()})), 6:[] }); }} className="px-2 py-1 rounded border border-emerald-600/50 text-xs text-emerald-400 hover:bg-emerald-900/20">Weekdays 8–12, 1–6</button>
+          <button onClick={()=>{ const w = [{ id: uid(), start:'6:00 PM', end:'10:00 PM' }]; setWindowsByDow({ 0:w.map(x=>({...x, id:uid()})), 1:w.map(x=>({...x, id:uid()})), 2:w.map(x=>({...x, id:uid()})), 3:w.map(x=>({...x, id:uid()})), 4:w.map(x=>({...x, id:uid()})), 5:w.map(x=>({...x, id:uid()})), 6:w.map(x=>({...x, id:uid()})) }); }} className="px-2 py-1 rounded border border-blue-600/50 text-xs text-blue-400 hover:bg-blue-900/20">Evenings 6–10</button>
+          <button onClick={()=>{ setWindowsByDow({ 0:[],1:[],2:[],3:[],4:[],5:[],6:[] }); setBreaksByDow({ 0:[],1:[],2:[],3:[],4:[],5:[],6:[] }); }} className="px-2 py-1 rounded border border-white/20 text-xs text-slate-400 hover:bg-white/5">Clear all</button>
+        </div>
+
+        {/* Day-by-day summary */}
+        <div className="grid grid-cols-7 gap-2">
+          {[0,1,2,3,4,5,6].map(dow => {
+            const wins = windowsByDow[dow] || [];
+            const brks = breaksByDow[dow] || [];
+            return (
+              <div key={dow} className="rounded border border-[#1b2344] p-2 text-center">
+                <div className="text-xs font-medium">{['Sun','Mon','Tue','Wed','Thu','Fri','Sat'][dow]}</div>
+                <div className="text-[10px] text-slate-300/70">{wins.length} window{wins.length !== 1 ? 's' : ''}</div>
+                <div className="text-[10px] text-slate-300/50">{brks.length} break{brks.length !== 1 ? 's' : ''}</div>
+              </div>
+            );
+          })}
+        </div>
+
+        <div className="flex items-center gap-3">
+          <button onClick={saveAvailability} disabled={availSaving} className="px-4 py-2 rounded bg-blue-600 hover:bg-blue-500 disabled:opacity-50 text-sm">
+            {availSaving ? 'Saving...' : 'Save Availability'}
+          </button>
+          <span className="text-xs text-slate-300/60">Changes sync to Week Plan automatically</span>
+        </div>
+      </section>
+
+      {/* Semesters Section */}
+      <section className="card p-6 space-y-4">
+        <div>
+          <h2 className="text-lg font-medium">Semesters</h2>
+          <p className="text-sm text-slate-300/70">Manage different semesters with separate schedules and availability.</p>
+        </div>
+        {semesters.length === 0 ? (
+          <div className="text-sm text-slate-300/60">No semesters configured yet.</div>
+        ) : (
+          <div className="space-y-2">
+            {semesters.map(sem => (
+              <div key={sem.id} className={`rounded border p-3 flex items-center justify-between ${sem.isActive ? 'border-emerald-500 bg-emerald-900/10' : 'border-[#1b2344]'}`}>
+                <div>
+                  <div className="text-sm font-medium">{sem.name}</div>
+                  <div className="text-xs text-slate-300/60">{sem.startDate} → {sem.endDate}</div>
+                </div>
+                <div className="flex items-center gap-2">
+                  {sem.isActive ? (
+                    <span className="text-xs text-emerald-400">Active</span>
+                  ) : (
+                    <button onClick={async () => {
+                      // Set this semester as active
+                      const updated = semesters.map(s => ({ ...s, isActive: s.id === sem.id }));
+                      setSemesters(updated);
+                      setActiveSemesterId(sem.id);
+                      await fetch('/api/semesters', { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ semesters: updated }) });
+                      // Load this semester's availability if it has any
+                      if (sem.windowsByDow) setWindowsByDow(sem.windowsByDow);
+                      if (sem.breaksByDow) setBreaksByDow(sem.breaksByDow);
+                    }} className="px-2 py-1 rounded border border-[#1b2344] text-xs hover:bg-white/5">Set Active</button>
+                  )}
+                </div>
+              </div>
+            ))}
+          </div>
+        )}
+        <div className="text-xs text-slate-300/60">
+          To add a new semester, use the Week Plan page and save your availability there.
         </div>
       </section>
     </main>
