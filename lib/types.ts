@@ -203,3 +203,97 @@ export interface WeeklyGoal {
   weeklyMinutes: number;
   course?: string | null;
 }
+
+// Availability template: minutes per day of week (0=Sun..6=Sat)
+export type AvailabilityTemplate = Record<number, number>;
+
+// Study windows and breaks per day of week
+export interface StudyWindow {
+  id: string;
+  start: string; // HH:MM or 12h format
+  end: string;
+}
+export type WindowsByDow = Record<number, StudyWindow[]>;
+export type BreaksByDow = Record<number, StudyWindow[]>;
+
+// Semester with dates and associated availability
+export interface SemesterInfo {
+  id: string;
+  name: string; // e.g., "Fall 2024", "Spring 2025"
+  season: 'Spring' | 'Summer' | 'Fall' | 'Winter';
+  year: number;
+  startDate: string; // YYYY-MM-DD
+  endDate: string; // YYYY-MM-DD
+  isActive?: boolean;
+  // Availability specific to this semester
+  windowsByDow?: WindowsByDow | null;
+  breaksByDow?: BreaksByDow | null;
+  createdAt: string; // ISO
+}
+
+export interface NewSemesterInput {
+  name: string;
+  season: 'Spring' | 'Summer' | 'Fall' | 'Winter';
+  year: number;
+  startDate: string;
+  endDate: string;
+  isActive?: boolean;
+  windowsByDow?: WindowsByDow | null;
+  breaksByDow?: BreaksByDow | null;
+}
+
+// Personal/life events (separate from school tasks)
+export type EventCategory = 'personal' | 'school' | 'work' | 'health' | 'social' | 'other';
+
+export interface CalendarEvent {
+  id: string;
+  title: string;
+  description?: string | null;
+  category: EventCategory;
+  // Date/time
+  date: string; // YYYY-MM-DD
+  startTime?: string | null; // HH:MM 24h
+  endTime?: string | null; // HH:MM 24h
+  allDay?: boolean;
+  // Recurrence
+  recurring?: boolean;
+  recurrenceRule?: string | null; // iCal RRULE format
+  recurrenceEndDate?: string | null;
+  // Metadata
+  location?: string | null;
+  color?: string | null; // hex
+  course?: string | null; // for school events
+  createdAt: string; // ISO
+}
+
+export interface NewEventInput {
+  title: string;
+  description?: string | null;
+  category: EventCategory;
+  date: string;
+  startTime?: string | null;
+  endTime?: string | null;
+  allDay?: boolean;
+  recurring?: boolean;
+  recurrenceRule?: string | null;
+  recurrenceEndDate?: string | null;
+  location?: string | null;
+  color?: string | null;
+  course?: string | null;
+}
+
+export interface UpdateEventInput {
+  title?: string;
+  description?: string | null;
+  category?: EventCategory;
+  date?: string;
+  startTime?: string | null;
+  endTime?: string | null;
+  allDay?: boolean;
+  recurring?: boolean;
+  recurrenceRule?: string | null;
+  recurrenceEndDate?: string | null;
+  location?: string | null;
+  color?: string | null;
+  course?: string | null;
+}

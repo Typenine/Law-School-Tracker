@@ -1219,6 +1219,38 @@ export default function TodayPage() {
           );
         })()}
       </section>
+      {/* Availability notification banner */}
+      {(() => {
+        const dow = new Date().getDay();
+        const availMins = availability[dow] ?? 0;
+        const plannedMins = todaysBlocks.reduce((s, b) => s + (b.plannedMinutes || 0), 0);
+        const loggedMins = sessions.filter((s: any) => chicagoYmd(new Date(s.when)) === dateKey).reduce((s: number, x: any) => s + (x.minutes || 0), 0);
+        const remaining = Math.max(0, plannedMins - loggedMins);
+        const free = Math.max(0, availMins - plannedMins);
+        if (availMins === 0) return null;
+        return (
+          <section className="rounded-xl border border-white/10 bg-gradient-to-r from-emerald-900/20 to-blue-900/20 px-4 py-3 flex flex-wrap items-center justify-between gap-2">
+            <div className="flex items-center gap-4 text-sm">
+              <div className="flex items-center gap-2">
+                <span className="text-slate-300/70">Available:</span>
+                <span className="font-medium text-emerald-400">{minutesToHM(availMins)}</span>
+              </div>
+              <div className="flex items-center gap-2">
+                <span className="text-slate-300/70">Planned:</span>
+                <span className="font-medium text-blue-400">{minutesToHM(plannedMins)}</span>
+              </div>
+              <div className="flex items-center gap-2">
+                <span className="text-slate-300/70">Logged:</span>
+                <span className="font-medium text-purple-400">{minutesToHM(loggedMins)}</span>
+              </div>
+            </div>
+            <div className="text-xs text-slate-300/60">
+              {remaining > 0 ? `${minutesToHM(remaining)} left to complete` : 'All planned work complete!'} 
+              {free > 0 ? ` · ${minutesToHM(free)} free` : ''}
+            </div>
+          </section>
+        );
+      })()}
       <section className="card p-6 space-y-4">
         <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
           <div>

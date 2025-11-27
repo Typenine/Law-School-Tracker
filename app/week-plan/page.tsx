@@ -727,10 +727,19 @@ function shiftWeek(delta: number) { setWeekStart(prev => { const x = new Date(pr
           </div>
         </div>
         <div className="space-y-3">
-          <div className="text-sm text-slate-300/70">Availability from study windows & breaks (per weekday)</div>
-          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-7 gap-3">
+          <div className="flex flex-wrap items-center gap-3">
+            <div className="text-sm text-slate-300/70">Availability from study windows & breaks</div>
+            <div className="flex flex-wrap gap-2 text-xs">
+              <span className="text-slate-400">Quick setup:</span>
+              <button onClick={()=>{ const w = [{ id: uid(), start:'9:00 AM', end:'5:00 PM' }]; setWindowsByDow({ 0:[], 1:w.map(x=>({...x, id:uid()})), 2:w.map(x=>({...x, id:uid()})), 3:w.map(x=>({...x, id:uid()})), 4:w.map(x=>({...x, id:uid()})), 5:w.map(x=>({...x, id:uid()})), 6:[] }); setBreaksByDow({ 0:[],1:[],2:[],3:[],4:[],5:[],6:[] }); }} className="px-2 py-1 rounded border border-emerald-600/50 text-emerald-400 hover:bg-emerald-900/20">Weekdays 9–5</button>
+              <button onClick={()=>{ const w = [{ id: uid(), start:'8:00 AM', end:'12:00 PM' }, { id: uid(), start:'1:00 PM', end:'6:00 PM' }]; setWindowsByDow({ 0:[], 1:w.map(x=>({...x, id:uid()})), 2:w.map(x=>({...x, id:uid()})), 3:w.map(x=>({...x, id:uid()})), 4:w.map(x=>({...x, id:uid()})), 5:w.map(x=>({...x, id:uid()})), 6:[] }); setBreaksByDow({ 0:[],1:[],2:[],3:[],4:[],5:[],6:[] }); }} className="px-2 py-1 rounded border border-emerald-600/50 text-emerald-400 hover:bg-emerald-900/20">Weekdays 8–12, 1–6</button>
+              <button onClick={()=>{ const w = [{ id: uid(), start:'6:00 PM', end:'10:00 PM' }]; setWindowsByDow({ 0:w.map(x=>({...x, id:uid()})), 1:w.map(x=>({...x, id:uid()})), 2:w.map(x=>({...x, id:uid()})), 3:w.map(x=>({...x, id:uid()})), 4:w.map(x=>({...x, id:uid()})), 5:w.map(x=>({...x, id:uid()})), 6:w.map(x=>({...x, id:uid()})) }); setBreaksByDow({ 0:[],1:[],2:[],3:[],4:[],5:[],6:[] }); }} className="px-2 py-1 rounded border border-blue-600/50 text-blue-400 hover:bg-blue-900/20">Evenings 6–10</button>
+              <button onClick={()=>{ setWindowsByDow({ 0:[],1:[],2:[],3:[],4:[],5:[],6:[] }); setBreaksByDow({ 0:[],1:[],2:[],3:[],4:[],5:[],6:[] }); }} className="px-2 py-1 rounded border border-white/20 text-slate-400 hover:bg-white/5">Clear all</button>
+            </div>
+          </div>
+          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-7 gap-3 overflow-visible">
             {[6,0,1,2,3,4,5].map(dow => (
-              <div key={dow} className="relative rounded-2xl p-5 md:p-6 border border-white/10 bg-white/5 space-y-3">
+              <div key={dow} className="relative rounded-2xl p-5 md:p-6 border border-white/10 bg-white/5 space-y-3 overflow-visible">
                 <div className="flex items-center justify-between">
                   <div className="text-sm">{['Sun','Mon','Tue','Wed','Thu','Fri','Sat'][dow]}</div>
                   <div className="flex items-center gap-2 flex-nowrap">
@@ -738,7 +747,7 @@ function shiftWeek(delta: number) { setWeekStart(prev => { const x = new Date(pr
                     <div className="block relative">
                       <button aria-label="Open day actions" onClick={()=>setToolbarMenu(m => (m && m.dow===dow)? null : { dow })} className="px-2 py-1 rounded border border-white/10 text-xs">…</button>
                       {toolbarMenu && toolbarMenu.dow===dow ? (
-                        <div className="absolute right-0 mt-2 z-30 w-40 rounded border border-white/10 bg-[#0b1020] p-2 text-xs space-y-1 shadow-lg">
+                        <div className="absolute right-0 mt-2 z-50 w-40 rounded border border-white/10 bg-[#0b1020] p-2 text-xs space-y-1 shadow-xl">
                           <button onClick={()=>{ setBreaksByDow(prev=>{ const arr=(prev[dow]||[]).slice(); arr.push({ id: uid(), start:'', end:'' } as any); return { ...prev, [dow]: arr }; }); setToolbarMenu(null); }} className="block w-full text-left px-2 py-1 rounded hover:bg-white/5">Add break</button>
                           <button onClick={()=>{ setWindowsByDow(prev=>{ const wins=(prev[dow]||[]).slice(); const out: Record<number, any[]> = {0:[],1:[],2:[],3:[],4:[],5:[],6:[]}; for(const k of [1,2,3,4,5]) out[k]=wins.slice(); return { ...prev, ...out } as any; }); setBreaksByDow(prev=>{ const br=(prev[dow]||[]).slice(); const out: Record<number, any[]> = {0:(prev[0]||[]),1:[],2:[],3:[],4:[],5:[],6:(prev[6]||[])}; for(const k of [1,2,3,4,5]) out[k]=br.slice(); return out as any; }); setToolbarMenu(null); }} className="block w-full text-left px-2 py-1 rounded hover:bg-white/5">Copy to weekdays</button>
                         </div>
@@ -749,53 +758,64 @@ function shiftWeek(delta: number) { setWeekStart(prev => { const x = new Date(pr
                 <div>
                   <div className="text-xs text-white/70 mb-1">Study windows</div>
                   <div className="space-y-2">
-                    {(windowsByDow[dow]||[]).map((w, i) => { const sOk = toMin(normHHMM(w.start||''))!=null; const eOk = toMin(normHHMM(w.end||''))!=null; const valid = (toMin(normHHMM(w.start||''))??0) < (toMin(normHHMM(w.end||''))??0); const keyId = (w as any).id || `w-${i}`; return (
-                      <div key={keyId} className="relative grid grid-cols-[1fr_1fr_auto] items-center gap-3">
-                        <input type="text" placeholder="7:00 AM" value={fmt12Input(w.start||'')} onChange={e=>setWindowsByDow(prev=>{ const arr=(prev[dow]||[]).slice(); arr[i]={...arr[i], start:e.target.value}; return { ...prev, [dow]: arr }; })} className={`h-9 px-3 text-sm rounded-lg bg-white/10 border ${valid && sOk? 'border-white/10':'border-rose-600'} focus-visible:ring-2 focus-visible:ring-emerald-400`} />
-                        <input type="text" placeholder="5:00 PM" value={fmt12Input(w.end||'')} onChange={e=>setWindowsByDow(prev=>{ const arr=(prev[dow]||[]).slice(); arr[i]={...arr[i], end:e.target.value}; return { ...prev, [dow]: arr }; })} className={`h-9 px-3 text-sm rounded-lg bg-white/10 border ${valid && eOk? 'border-white/10':'border-rose-600'} focus-visible:ring-2 focus-visible:ring-emerald-400`} />
-                        <div className="relative">
-                          <button aria-label="Row menu" onClick={()=>setRowMenu(m => m && m.kind==='win' && m.dow===dow && m.index===i ? null : { kind:'win', dow, index:i })} className="px-2 py-1 rounded border border-white/10 text-xs">…</button>
-                          {rowMenu && rowMenu.kind==='win' && rowMenu.dow===dow && rowMenu.index===i ? (
-                            <div className="absolute right-0 mt-2 z-10 rounded border border-white/10 bg-[#0b1020] p-2 text-xs space-y-1">
-                              <button onClick={()=>{ setWindowsByDow(prev=>{ const arr=(prev[dow]||[]).slice(); arr[i]={...arr[i], start: adjustTimeText(arr[i].start||'', -15), end: adjustTimeText(arr[i].end||'', -15)}; return { ...prev, [dow]: arr }; }); setRowMenu(null); }} className="block px-2 py-1 rounded hover:bg-white/5">−15</button>
-                              <button onClick={()=>{ setWindowsByDow(prev=>{ const arr=(prev[dow]||[]).slice(); arr[i]={...arr[i], start: adjustTimeText(arr[i].start||'', 15), end: adjustTimeText(arr[i].end||'', 15)}; return { ...prev, [dow]: arr }; }); setRowMenu(null); }} className="block px-2 py-1 rounded hover:bg-white/5">+15</button>
-                              <button onClick={()=>{ setWindowsByDow(prev=>{ const arr=(prev[dow]||[]).slice(); const copy = { ...arr[i], id: uid() } as any; arr.splice(i+1,0,copy); return { ...prev, [dow]: arr }; }); setRowMenu(null); }} className="block px-2 py-1 rounded hover:bg-white/5">Duplicate</button>
-                              <button onClick={()=>{ setWindowsByDow(prev=>{ const arr=(prev[dow]||[]).slice(); arr.splice(i,1); return { ...prev, [dow]: arr }; }); setRowMenu(null); }} className="block px-2 py-1 rounded hover:bg-white/5">Delete</button>
-                            </div>
-                          ) : null}
+                    {(windowsByDow[dow]||[]).length === 0 ? (
+                      <div className="text-xs text-slate-400 italic py-2">No windows set — add one below or use a preset</div>
+                    ) : (windowsByDow[dow]||[]).map((w, i) => { const sOk = toMin(normHHMM(w.start||''))!=null; const eOk = toMin(normHHMM(w.end||''))!=null; const valid = (toMin(normHHMM(w.start||''))??0) < (toMin(normHHMM(w.end||''))??0); const keyId = (w as any).id || `w-${i}`; const incomplete = !sOk || !eOk; return (
+                      <div key={keyId}>
+                        <div className="relative flex items-center gap-2">
+                          <input type="text" placeholder="9:00 AM" value={fmt12Input(w.start||'')} onChange={e=>setWindowsByDow(prev=>{ const arr=(prev[dow]||[]).slice(); arr[i]={...arr[i], start:e.target.value}; return { ...prev, [dow]: arr }; })} className={`w-24 h-9 px-3 text-sm rounded-lg bg-white/10 border ${sOk? 'border-white/10':'border-rose-600'} focus-visible:ring-2 focus-visible:ring-emerald-400`} />
+                          <span className="text-white/50 text-sm">→</span>
+                          <input type="text" placeholder="5:00 PM" value={fmt12Input(w.end||'')} onChange={e=>setWindowsByDow(prev=>{ const arr=(prev[dow]||[]).slice(); arr[i]={...arr[i], end:e.target.value}; return { ...prev, [dow]: arr }; })} className={`w-24 h-9 px-3 text-sm rounded-lg bg-white/10 border ${eOk && valid? 'border-white/10':'border-rose-600'} focus-visible:ring-2 focus-visible:ring-emerald-400`} />
+                          <div className="relative">
+                            <button aria-label="Row menu" onClick={()=>setRowMenu(m => m && m.kind==='win' && m.dow===dow && m.index===i ? null : { kind:'win', dow, index:i })} className="px-2 py-1 rounded border border-white/10 text-xs">…</button>
+                            {rowMenu && rowMenu.kind==='win' && rowMenu.dow===dow && rowMenu.index===i ? (
+                              <div className="absolute right-0 mt-2 z-50 rounded border border-white/10 bg-[#0b1020] p-2 text-xs space-y-1 shadow-xl">
+                                <button onClick={()=>{ setWindowsByDow(prev=>{ const arr=(prev[dow]||[]).slice(); arr[i]={...arr[i], start: adjustTimeText(arr[i].start||'', -15), end: adjustTimeText(arr[i].end||'', -15)}; return { ...prev, [dow]: arr }; }); setRowMenu(null); }} className="block w-full text-left px-2 py-1 rounded hover:bg-white/5">−15 min</button>
+                                <button onClick={()=>{ setWindowsByDow(prev=>{ const arr=(prev[dow]||[]).slice(); arr[i]={...arr[i], start: adjustTimeText(arr[i].start||'', 15), end: adjustTimeText(arr[i].end||'', 15)}; return { ...prev, [dow]: arr }; }); setRowMenu(null); }} className="block w-full text-left px-2 py-1 rounded hover:bg-white/5">+15 min</button>
+                                <button onClick={()=>{ setWindowsByDow(prev=>{ const arr=(prev[dow]||[]).slice(); const copy = { ...arr[i], id: uid() } as any; arr.splice(i+1,0,copy); return { ...prev, [dow]: arr }; }); setRowMenu(null); }} className="block w-full text-left px-2 py-1 rounded hover:bg-white/5">Duplicate</button>
+                                <button onClick={()=>{ setWindowsByDow(prev=>{ const arr=(prev[dow]||[]).slice(); arr.splice(i,1); return { ...prev, [dow]: arr }; }); setRowMenu(null); }} className="block w-full text-left px-2 py-1 rounded hover:bg-white/5 text-rose-400">Delete</button>
+                              </div>
+                            ) : null}
+                          </div>
                         </div>
+                        {incomplete && <div className="text-[10px] text-rose-400 mt-1">Enter both start and end times</div>}
+                        {!incomplete && !valid && <div className="text-[10px] text-rose-400 mt-1">End must be after start</div>}
                       </div>
                     );})}
-                    {(() => { const hasInvalid = (windowsByDow[dow]||[]).some(w => { const s=toMin(normHHMM(w.start||'')); const e=toMin(normHHMM(w.end||'')); return !(s!=null && e!=null && e>s); }); return (
-                      <div>
-                        <button onClick={()=>setWindowsByDow(prev=>{ const arr=(prev[dow]||[]).slice(); arr.push({ id: uid(), start:'', end:'' } as any); return { ...prev, [dow]: arr }; })} className="mt-1 px-2 py-1 rounded border border-white/10 text-xs disabled:opacity-50" disabled={hasInvalid}>+ Add window</button>
-                      </div>
-                    ); })()}
+                    <div className="flex flex-wrap gap-2 mt-2">
+                      <button onClick={()=>setWindowsByDow(prev=>{ const arr=(prev[dow]||[]).slice(); arr.push({ id: uid(), start:'', end:'' } as any); return { ...prev, [dow]: arr }; })} className="px-2 py-1 rounded border border-white/10 text-xs hover:bg-white/5">+ Add window</button>
+                      <button onClick={()=>setWindowsByDow(prev=>({ ...prev, [dow]: [{ id: uid(), start:'9:00 AM', end:'5:00 PM' }] }))} className="px-2 py-1 rounded border border-emerald-600/50 text-xs text-emerald-400 hover:bg-emerald-900/20">9–5</button>
+                      <button onClick={()=>setWindowsByDow(prev=>({ ...prev, [dow]: [{ id: uid(), start:'8:00 AM', end:'12:00 PM' }, { id: uid(), start:'1:00 PM', end:'5:00 PM' }] }))} className="px-2 py-1 rounded border border-emerald-600/50 text-xs text-emerald-400 hover:bg-emerald-900/20">8–12, 1–5</button>
+                    </div>
                   </div>
                 </div>
                 <div>
                   <div className="text-xs text-white/70 mb-1">Breaks during day</div>
                   <div className="space-y-2">
-                    {(breaksByDow[dow]||[]).map((br, i) => { const valid = (toMin(normHHMM(br.start||''))??0) < (toMin(normHHMM(br.end||''))??0); const keyId=(br as any).id || `b-${i}`; return (
-                      <div key={keyId} className="relative grid grid-cols-[1fr_1fr_auto] items-center gap-3">
-                        <input type="text" placeholder="2:15 PM" value={fmt12Input(br.start||'')} onChange={e=>setBreaksByDow(prev=>{ const arr=(prev[dow]||[]).slice(); arr[i]={...arr[i], start:e.target.value}; return { ...prev, [dow]: arr }; })} className={`h-9 px-3 text-sm rounded-lg bg-white/10 border ${valid? 'border-white/10':'border-rose-600'} focus-visible:ring-2 focus-visible:ring-emerald-400`} />
-                        <input type="text" placeholder="2:45 PM" value={fmt12Input(br.end||'')} onChange={e=>setBreaksByDow(prev=>{ const arr=(prev[dow]||[]).slice(); arr[i]={...arr[i], end:e.target.value}; return { ...prev, [dow]: arr }; })} className={`h-9 px-3 text-sm rounded-lg bg-white/10 border ${valid? 'border-white/10':'border-rose-600'} focus-visible:ring-2 focus-visible:ring-emerald-400`} />
-                        <div className="relative">
-                          <button aria-label="Row menu" onClick={()=>setRowMenu(m => m && m.kind==='br' && m.dow===dow && m.index===i ? null : { kind:'br', dow, index:i })} className="px-2 py-1 rounded border border-white/10 text-xs">…</button>
-                          {rowMenu && rowMenu.kind==='br' && rowMenu.dow===dow && rowMenu.index===i ? (
-                            <div className="absolute right-0 mt-2 z-10 rounded border border-white/10 bg-[#0b1020] p-2 text-xs space-y-1">
-                              <button onClick={()=>{ setBreaksByDow(prev=>{ const arr=(prev[dow]||[]).slice(); arr[i]={...arr[i], start: adjustTimeText(arr[i].start||'', -15), end: adjustTimeText(arr[i].end||'', -15)}; return { ...prev, [dow]: arr }; }); setRowMenu(null); }} className="block px-2 py-1 rounded hover:bg-white/5">−15</button>
-                              <button onClick={()=>{ setBreaksByDow(prev=>{ const arr=(prev[dow]||[]).slice(); arr[i]={...arr[i], start: adjustTimeText(arr[i].start||'', 15), end: adjustTimeText(arr[i].end||'', 15)}; return { ...prev, [dow]: arr }; }); setRowMenu(null); }} className="block px-2 py-1 rounded hover:bg-white/5">+15</button>
-                              <button onClick={()=>{ setBreaksByDow(prev=>{ const arr=(prev[dow]||[]).slice(); const copy = { ...arr[i], id: uid() } as any; arr.splice(i+1,0,copy); return { ...prev, [dow]: arr }; }); setRowMenu(null); }} className="block px-2 py-1 rounded hover:bg-white/5">Duplicate</button>
-                              <button onClick={()=>{ setBreaksByDow(prev=>{ const arr=(prev[dow]||[]).slice(); arr.splice(i,1); return { ...prev, [dow]: arr }; }); setRowMenu(null); }} className="block px-2 py-1 rounded hover:bg-white/5">Delete</button>
-                            </div>
-                          ) : null}
+                    {(breaksByDow[dow]||[]).length === 0 ? (
+                      <div className="text-xs text-slate-500 italic">No breaks</div>
+                    ) : (breaksByDow[dow]||[]).map((br, i) => { const sOk = toMin(normHHMM(br.start||''))!=null; const eOk = toMin(normHHMM(br.end||''))!=null; const valid = (toMin(normHHMM(br.start||''))??0) < (toMin(normHHMM(br.end||''))??0); const keyId=(br as any).id || `b-${i}`; const incomplete = !sOk || !eOk; return (
+                      <div key={keyId}>
+                        <div className="relative flex items-center gap-2">
+                          <input type="text" placeholder="12:00 PM" value={fmt12Input(br.start||'')} onChange={e=>setBreaksByDow(prev=>{ const arr=(prev[dow]||[]).slice(); arr[i]={...arr[i], start:e.target.value}; return { ...prev, [dow]: arr }; })} className={`w-24 h-9 px-3 text-sm rounded-lg bg-white/10 border ${sOk? 'border-white/10':'border-rose-600'} focus-visible:ring-2 focus-visible:ring-emerald-400`} />
+                          <span className="text-white/50 text-sm">→</span>
+                          <input type="text" placeholder="1:00 PM" value={fmt12Input(br.end||'')} onChange={e=>setBreaksByDow(prev=>{ const arr=(prev[dow]||[]).slice(); arr[i]={...arr[i], end:e.target.value}; return { ...prev, [dow]: arr }; })} className={`w-24 h-9 px-3 text-sm rounded-lg bg-white/10 border ${eOk && valid? 'border-white/10':'border-rose-600'} focus-visible:ring-2 focus-visible:ring-emerald-400`} />
+                          <div className="relative">
+                            <button aria-label="Row menu" onClick={()=>setRowMenu(m => m && m.kind==='br' && m.dow===dow && m.index===i ? null : { kind:'br', dow, index:i })} className="px-2 py-1 rounded border border-white/10 text-xs">…</button>
+                            {rowMenu && rowMenu.kind==='br' && rowMenu.dow===dow && rowMenu.index===i ? (
+                              <div className="absolute right-0 mt-2 z-50 rounded border border-white/10 bg-[#0b1020] p-2 text-xs space-y-1 shadow-xl">
+                                <button onClick={()=>{ setBreaksByDow(prev=>{ const arr=(prev[dow]||[]).slice(); arr[i]={...arr[i], start: adjustTimeText(arr[i].start||'', -15), end: adjustTimeText(arr[i].end||'', -15)}; return { ...prev, [dow]: arr }; }); setRowMenu(null); }} className="block w-full text-left px-2 py-1 rounded hover:bg-white/5">−15 min</button>
+                                <button onClick={()=>{ setBreaksByDow(prev=>{ const arr=(prev[dow]||[]).slice(); arr[i]={...arr[i], start: adjustTimeText(arr[i].start||'', 15), end: adjustTimeText(arr[i].end||'', 15)}; return { ...prev, [dow]: arr }; }); setRowMenu(null); }} className="block w-full text-left px-2 py-1 rounded hover:bg-white/5">+15 min</button>
+                                <button onClick={()=>{ setBreaksByDow(prev=>{ const arr=(prev[dow]||[]).slice(); const copy = { ...arr[i], id: uid() } as any; arr.splice(i+1,0,copy); return { ...prev, [dow]: arr }; }); setRowMenu(null); }} className="block w-full text-left px-2 py-1 rounded hover:bg-white/5">Duplicate</button>
+                                <button onClick={()=>{ setBreaksByDow(prev=>{ const arr=(prev[dow]||[]).slice(); arr.splice(i,1); return { ...prev, [dow]: arr }; }); setRowMenu(null); }} className="block w-full text-left px-2 py-1 rounded hover:bg-white/5 text-rose-400">Delete</button>
+                              </div>
+                            ) : null}
+                          </div>
                         </div>
+                        {incomplete && <div className="text-[10px] text-rose-400 mt-1">Enter both times</div>}
                       </div>
                     );})}
-                    <div>
-                      <button onClick={()=>setBreaksByDow(prev=>{ const arr=(prev[dow]||[]).slice(); arr.push({ id: uid(), start:'', end:'' } as any); return { ...prev, [dow]: arr }; })} className="mt-1 px-2 py-1 rounded border border-white/10 text-xs">+ Add break</button>
-                    </div>
+                    <button onClick={()=>setBreaksByDow(prev=>{ const arr=(prev[dow]||[]).slice(); arr.push({ id: uid(), start:'', end:'' } as any); return { ...prev, [dow]: arr }; })} className="mt-1 px-2 py-1 rounded border border-white/10 text-xs hover:bg-white/5">+ Add break</button>
                   </div>
                 </div>
               </div>
