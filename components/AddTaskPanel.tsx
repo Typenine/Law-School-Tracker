@@ -201,8 +201,13 @@ export default function AddTaskPanel({ onCreated }: Props) {
         try {
           const tj = await r.json().catch(()=>null);
           const newId = tj?.task?.id || null;
-          const schRaw = window.localStorage.getItem('weekScheduleV1') || '[]';
-          let arr: any[] = []; try { arr = JSON.parse(schRaw); } catch { arr = []; }
+          // Fetch current schedule from API
+          const schRes = await fetch('/api/schedule', { cache: 'no-store' });
+          let arr: any[] = [];
+          if (schRes.ok) {
+            const schJson = await schRes.json().catch(() => ({ blocks: [] }));
+            arr = Array.isArray(schJson?.blocks) ? schJson.blocks : [];
+          }
           // availability by day-of-week
           let avail: Record<number, number> = {};
           try { avail = JSON.parse(window.localStorage.getItem('availabilityTemplateV1') || '{}'); } catch {}
@@ -227,7 +232,12 @@ export default function AddTaskPanel({ onCreated }: Props) {
             try { window.alert('Could not auto-plan within capacity this week. Placed on due date.'); } catch {}
           }
           arr.push({ id: crypto.randomUUID(), taskId: newId, day: placeYmd, plannedMinutes: est || 0, title, course });
-          window.localStorage.setItem('weekScheduleV1', JSON.stringify(arr));
+          // Save only through API
+          await fetch('/api/schedule', {
+            method: 'PUT',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ blocks: arr }),
+          });
         } catch {}
       }
       setTitle(''); setRange(''); setManualEst(''); setEstimateOrigin(null); setDupWarn('');

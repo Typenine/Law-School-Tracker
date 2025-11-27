@@ -1,5 +1,7 @@
 "use client";
 import { useEffect, useMemo, useRef, useState } from "react";
+import { useTasks } from "@/lib/useTasks";
+import { estimateMinutesForTask } from "@/lib/taskEstimate";
 
 type BacklogItem = {
   id: string;
@@ -28,6 +30,7 @@ type TodayPlanItem = { id: string; title: string; course: string; minutes: numbe
 type TodayPlan = { dateKey: string; locked: boolean; lockedAt?: string; items: TodayPlanItem[] };
 
 type WeeklyGoal = { id: string; scope: 'global'|'course'; weeklyMinutes: number; course?: string | null };
+type AvailabilityTemplate = Record<number, number>; // 0..6 => minutes
 
 const LS_SCHEDULE = "weekScheduleV1";
 const LS_BACKLOG = "backlogItemsV1";
@@ -71,10 +74,9 @@ function ymdAddDays(ymd: string, delta: number): string {
   const dt = new Date(y,(m as number)-1,d); dt.setDate(dt.getDate()+delta);
   return `${dt.getFullYear()}-${String(dt.getMonth()+1).padStart(2,'0')}-${String(dt.getDate()).padStart(2,'0')}`;
 }
+// Use shared helper for estimate calculations
 function estimateMinutes(it: BacklogItem): { minutes: number; guessed: boolean } {
-  if (typeof it.estimatedMinutes==='number' && it.estimatedMinutes>0) return { minutes: it.estimatedMinutes, guessed:false };
-  if (typeof it.pages==='number' && it.pages>0) return { minutes: Math.round(it.pages * minutesPerPage()), guessed:false };
-  return { minutes: 30, guessed: true };
+  return estimateMinutesForTask(it);
 }
 
 function chicagoYmd(d: Date): string {
@@ -318,10 +320,10 @@ export default function TodayPage() {
   const [plan, setPlan] = useState<TodayPlan>({ dateKey, locked: false, items: [] });
   const [schedule, setSchedule] = useState<ScheduledBlock[]>([]);
   const [backlog, setBacklog] = useState<BacklogItem[]>([]);
-  const [availability, setAvailability] = useState<Record<number, number>>({ 0:120,1:240,2:240,3:240,4:240,5:240,6:120 });
-  const [sessions, setSessions] = useState<any[]>([]);
+  const [availability, setAvailability] = useState<AvailabilityTemplate>({ 0:120,1:240,2:240,3:240,4:240,5:240,6:120 });
   const [goals, setGoals] = useState<WeeklyGoal[]>([]);
-  const [tasks, setTasks] = useState<any[]>([]);
+  const [sessions, setSessions] = useState<any[]>([]);
+  const { tasks, setTasks } = useTasks();
   const [rightMode, setRightMode] = useState<'day'|'week'>('day');
   const [selectedKey, setSelectedKey] = useState<string>(() => chicagoYmd(new Date()));
   const [activeItemId, setActiveItemId] = useState<string | null>(null);
@@ -500,14 +502,7 @@ export default function TodayPage() {
       window.localStorage.setItem(LS_ORIG_RANGES, JSON.stringify(origMap));
     } catch {}
   }, [sessions, plan.dateKey, plan.items.length]);
-  // Tasks for tomorrow preview
-  useEffect(() => {
-    let mounted = true;
-    (async () => {
-      try { const r = await fetch('/api/tasks', { cache: 'no-store' }); const d = await r.json(); if (mounted) setTasks(Array.isArray(d.tasks)?d.tasks:[]); } catch {}
-    })();
-    return () => { mounted = false; };
-  }, []);
+  // Tasks for preview come from shared useTasks hook
 
   // Compute today's scheduled blocks (from weekly schedule)
   const todaysBlocks = useMemo(() => (schedule || []).filter(b => b.day === dateKey), [schedule, dateKey]);
@@ -528,7 +523,7 @@ export default function TodayPage() {
     if (selectedKey > todayKey) {
       return arr.filter((t:any) => {
         const planned = plannedTodayByTaskId.get(t.id) || 0;
-        const est = Math.max(0, Number(t.estimatedMinutes)||0);
+        const { minutes: est } = estimateMinutesForTask(t as any);
         if (planned >= est && est > 0) return false;
         return true;
       });

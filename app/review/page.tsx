@@ -37,14 +37,16 @@ export default function ReviewPage() {
   // Data
   const [tasks, setTasks] = useState<Task[]>([]);
   const [sessions, setSessions] = useState<StudySession[]>([]);
+  const [plannedBlocks, setPlannedBlocks] = useState<PlannedBlock[]>([]);
 
-  // Fetch tasks and sessions (no spinners; render zeros by default)
+  // Fetch tasks, sessions, and schedule from API
   useEffect(() => {
     (async () => {
       try {
-        const [tRes, sRes] = await Promise.all([
+        const [tRes, sRes, schRes] = await Promise.all([
           fetch("/api/tasks", { cache: "no-store" }).catch(() => null),
           fetch("/api/sessions", { cache: "no-store" }).catch(() => null),
+          fetch("/api/schedule", { cache: "no-store" }).catch(() => null),
         ]);
         if (tRes && tRes.ok) {
           const tj = await tRes.json();
@@ -54,21 +56,12 @@ export default function ReviewPage() {
           const sj = await sRes.json();
           setSessions(Array.isArray(sj?.sessions) ? sj.sessions : []);
         }
+        if (schRes && schRes.ok) {
+          const schj = await schRes.json();
+          setPlannedBlocks(Array.isArray(schj?.blocks) ? schj.blocks : []);
+        }
       } catch {}
     })();
-  }, []);
-
-  // Local planned schedule from Week Plan board
-  const plannedBlocks: PlannedBlock[] = useMemo(() => {
-    if (typeof window === "undefined") return [];
-    try {
-      const raw = window.localStorage.getItem("weekScheduleV1") || "[]";
-      const arr = JSON.parse(raw);
-      if (!Array.isArray(arr)) return [];
-      return arr.filter((b) => b && typeof b === "object");
-    } catch {
-      return [];
-    }
   }, []);
 
   // Chicago timezone helpers

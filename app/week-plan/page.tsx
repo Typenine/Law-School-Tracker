@@ -1,6 +1,8 @@
 "use client";
 import { useEffect, useMemo, useState } from "react";
-
+import type { Task } from "@/lib/types";
+import { useTasks } from "@/lib/useTasks";
+import { estimateMinutesForTask } from "@/lib/taskEstimate";
 type BacklogItem = {
   id: string;
   title: string;
@@ -27,29 +29,14 @@ type ScheduledBlock = {
   catchup?: boolean;
 };
 
-// Minimal Task shape for catch-up
-type Task = {
-  id: string;
-  title: string;
-  course?: string | null;
-  dueDate: string; // ISO
-  status: "todo" | "done";
-  estimatedMinutes?: number | null;
-  priority?: number | null;
-  activity?: string | null;
-  tags?: string[] | null;
-};
-
 const LS_BACKLOG = "backlogItemsV1";
 const LS_AVAIL = "availabilityTemplateV1";
 const LS_SCHEDULE = "weekScheduleV1";
 const LS_GOALS = "weeklyGoalsV1";
 const LS_WEEK_START = "weekPlanWeekStartYmd";
 const LS_TWO_WEEKS = "weekPlanTwoWeeksOnly";
-const LS_AVAIL_START = "availabilityStartHHMM";
-const LS_AVAIL_END = "availabilityEndHHMM";
 const LS_AVAIL_BREAKS = "availabilityBreaksV1";
-const LS_AVAIL_AUTO = "availabilityAutoFromWindow";
+const LS_AVAIL_WINDOWS = "availabilityWindowsV1";
 
 type WeeklyGoal = { id: string; scope: 'global'|'course'; weeklyMinutes: number; course?: string | null };
 
@@ -83,25 +70,6 @@ function fmt12Input(s?: string | null): string {
 }
 function minutesToHM(min: number): string { const n = Math.max(0, Math.round(Number(min)||0)); const h = Math.floor(n/60); const m = n % 60; return `${h}:${String(m).padStart(2,'0')}`; }
 
-// Learned MPP support (local-only): courseMppMap in localStorage
-type CourseMppEntry = { mpp: number; sample?: number; updatedAt?: string; overrideEnabled?: boolean; overrideMpp?: number | null };
-function baseMpp(): number { if (typeof window==='undefined') return 2; const s = window.localStorage.getItem('minutesPerPage'); const n = s ? parseFloat(s) : NaN; return (!isNaN(n) && n>0) ? n : 2; }
-function getCourseMpp(course?: string | null): number {
-  const fallback = baseMpp();
-  if (typeof window === 'undefined') return fallback;
-  try {
-    const raw = window.localStorage.getItem('courseMppMap') || '{}';
-    const map = JSON.parse(raw) as Record<string, CourseMppEntry>;
-    const key = (course || '').toString().trim().toLowerCase();
-    const entry = map[key];
-    if (!entry || typeof entry.mpp !== 'number' || entry.mpp <= 0) return fallback;
-    if (entry.overrideEnabled && typeof entry.overrideMpp === 'number' && entry.overrideMpp > 0) {
-      return Math.max(0.5, Math.min(6, entry.overrideMpp));
-    }
-    return Math.max(0.5, Math.min(6, entry.mpp));
-  } catch { return fallback; }
-}
-
 function hueFromString(s: string): number { let h = 0; for (let i=0;i<s.length;i++) { h = (h * 31 + s.charCodeAt(i)) >>> 0; } return h % 360; }
 function courseColor(c?: string | null): string { const key = (c||'').trim().toLowerCase(); if (!key) return 'hsl(215 16% 47%)'; const h = hueFromString(key); return `hsl(${h} 70% 55%)`; }
 function normCourseKey(name?: string | null): string {
@@ -126,17 +94,9 @@ function saveAvailability(t: AvailabilityTemplate) { if (typeof window!=='undefi
 function loadSchedule(): ScheduledBlock[] { if (typeof window==='undefined') return []; try { const raw=window.localStorage.getItem(LS_SCHEDULE); const arr=raw?JSON.parse(raw):[]; return Array.isArray(arr)?arr:[]; } catch { return []; } }
 function saveSchedule(blocks: ScheduledBlock[]) { if (typeof window!=='undefined') window.localStorage.setItem(LS_SCHEDULE, JSON.stringify(blocks)); }
 
+// Use shared helper for estimate calculations
 function estimateMinutesFor(item: BacklogItem): { minutes: number; guessed: boolean } {
-  // 1) Explicit estimate wins
-  if (typeof item.estimatedMinutes === 'number' && item.estimatedMinutes > 0) return { minutes: item.estimatedMinutes, guessed: false };
-  // 2) Pages-based with learned MPP preferred, +10m overhead
-  if (typeof item.pages === 'number' && item.pages > 0) {
-    const mpp = getCourseMpp(item.course);
-    const est = Math.round(item.pages * mpp + 10);
-    return { minutes: est, guessed: false };
-  }
-  // 3) Fallback default
-  return { minutes: 30, guessed: true };
+  return estimateMinutesForTask(item);
 }
 
 export default function WeekPlanPage() {
@@ -157,7 +117,7 @@ export default function WeekPlanPage() {
   const [availability, setAvailability] = useState<AvailabilityTemplate>({ 0:120,1:240,2:240,3:240,4:240,5:240,6:120 });
   const [blocks, setBlocks] = useState<ScheduledBlock[]>([]);
   const [backlog, setBacklog] = useState<BacklogItem[]>([]);
-  const [tasks, setTasks] = useState<Task[]>([]);
+  const { tasks } = useTasks();
   const [sessions, setSessions] = useState<any[]>([]);
   const [goals, setGoals] = useState<WeeklyGoal[]>([]);
   const [breaksByDow, setBreaksByDow] = useState<Record<number, Array<{ start?: string; end?: string }>>>({ 0:[],1:[],2:[],3:[],4:[],5:[],6:[] });
@@ -168,9 +128,6 @@ export default function WeekPlanPage() {
   const [twoWeeksOnly, setTwoWeeksOnly] = useState<boolean>(false);
   const [undoSnapshot, setUndoSnapshot] = useState<ScheduledBlock[] | null>(null);
   const [showCatchup, setShowCatchup] = useState(false);
-  const [availStartByDow, setAvailStartByDow] = useState<Record<number, string>>({ 0:'',1:'',2:'',3:'',4:'',5:'',6:'' });
-  const [availEndByDow, setAvailEndByDow] = useState<Record<number, string>>({ 0:'',1:'',2:'',3:'',4:'',5:'',6:'' });
-  const [autoFromWindow, setAutoFromWindow] = useState<boolean>(true);
   const [settingsReady, setSettingsReady] = useState<boolean>(false);
   const [catchupPreview, setCatchupPreview] = useState<{
     days: Array<{ day: string; total: number; usedBefore: number; usedAfter: number; items: Array<{ taskId: string; title: string; course: string; minutes: number; guessed: boolean }> }>;
@@ -182,19 +139,13 @@ export default function WeekPlanPage() {
     setAvailability(loadAvailability());
     setBlocks(loadSchedule());
     setBacklog(loadBacklog());
+    // Load windows and breaks from localStorage
     try {
       if (typeof window!=='undefined') {
-        const s = window.localStorage.getItem(LS_AVAIL_START)||'';
-        const e = window.localStorage.getItem(LS_AVAIL_END)||'';
-        let startObj: Record<number,string> | null = null;
-        let endObj: Record<number,string> | null = null;
-        try { const js = JSON.parse(s); if (js && typeof js==='object') startObj = js; } catch {}
-        try { const je = JSON.parse(e); if (je && typeof je==='object') endObj = je; } catch {}
-        if (!startObj && s) startObj = {0:s,1:s,2:s,3:s,4:s,5:s,6:s};
-        if (!endObj && e) endObj = {0:e,1:e,2:e,3:e,4:e,5:e,6:e};
-        if (startObj) setAvailStartByDow(startObj);
-        if (endObj) setAvailEndByDow(endObj);
-        try { const auto = window.localStorage.getItem(LS_AVAIL_AUTO); if (auto != null) setAutoFromWindow(auto === 'true'); } catch {}
+        const winsRaw = window.localStorage.getItem(LS_AVAIL_WINDOWS);
+        const brsRaw = window.localStorage.getItem(LS_AVAIL_BREAKS);
+        if (winsRaw) { try { const w = JSON.parse(winsRaw); if (w && typeof w === 'object') setWindowsByDow(w); } catch {} }
+        if (brsRaw) { try { const b = JSON.parse(brsRaw); if (b && typeof b === 'object') setBreaksByDow(b); } catch {} }
       }
     } catch {}
     let canceled = false;
@@ -203,7 +154,7 @@ export default function WeekPlanPage() {
       try {
         const [schRes, setRes] = await Promise.all([
           fetch('/api/schedule', { cache: 'no-store' }),
-          fetch('/api/settings?keys=availabilityTemplateV1,weeklyGoalsV1,weekPlanShowConflicts,weekPlanWeekStartYmd,weekPlanTwoWeeksOnly,internshipColor,sportsLawReviewColor,availabilityStartHHMM,availabilityEndHHMM,availabilityBreaksV1,weekScheduleV1,availabilityAutoFromWindow', { cache: 'no-store' })
+          fetch('/api/settings?keys=availabilityTemplateV1,weeklyGoalsV1,weekPlanShowConflicts,weekPlanWeekStartYmd,weekPlanTwoWeeksOnly,internshipColor,sportsLawReviewColor,availabilityBreaksV1,availabilityWindowsV1,weekScheduleV1', { cache: 'no-store' })
         ]);
         if (canceled) return;
         if (setRes.ok) {
@@ -220,24 +171,17 @@ export default function WeekPlanPage() {
             const [y,m,da] = wk.split('-').map(x=>parseInt(x,10));
             setWeekStart(saturdayOf(new Date(y,(m as number)-1,da)));
           }
-          const sStart: any = (settings as any).availabilityStartHHMM;
-          const sEnd: any = (settings as any).availabilityEndHHMM;
-          const br = (settings as any).availabilityBreaksV1;
-          // pick latest between local and remote if updatedAt present
+          // Load windows and breaks from server settings
           const readLocalJson = (key: string) => { try { if (typeof window!=='undefined') { const raw = window.localStorage.getItem(key); return raw?JSON.parse(raw):null; } } catch {} return null; };
-          const localStart = readLocalJson(LS_AVAIL_START);
-          const localEnd = readLocalJson(LS_AVAIL_END);
+          const localWins = readLocalJson(LS_AVAIL_WINDOWS);
           const localBr = readLocalJson(LS_AVAIL_BREAKS);
+          const serverWins = (settings as any).availabilityWindowsV1;
+          const serverBr = (settings as any).availabilityBreaksV1;
           const ts = (o:any) => { try { return Date.parse(o?.updatedAt||''); } catch { return 0; } };
-          const bestStart = (ts(localStart) > ts(sStart)) ? localStart : sStart;
-          const bestEnd = (ts(localEnd) > ts(sEnd)) ? localEnd : sEnd;
-          const bestBr = (ts(localBr) > ts(br)) ? localBr : br;
-          if (bestStart && typeof bestStart === 'object') setAvailStartByDow(bestStart as Record<number,string>);
-          else if (typeof bestStart === 'string') setAvailStartByDow({0:bestStart,1:bestStart,2:bestStart,3:bestStart,4:bestStart,5:bestStart,6:bestStart});
-          if (bestEnd && typeof bestEnd === 'object') setAvailEndByDow(bestEnd as Record<number,string>);
-          else if (typeof bestEnd === 'string') setAvailEndByDow({0:bestEnd,1:bestEnd,2:bestEnd,3:bestEnd,4:bestEnd,5:bestEnd,6:bestEnd});
+          const bestWins = (ts(localWins) > ts(serverWins)) ? localWins : serverWins;
+          const bestBr = (ts(localBr) > ts(serverBr)) ? localBr : serverBr;
+          if (bestWins && typeof bestWins === 'object') setWindowsByDow(bestWins as Record<number, Array<{ start?: string; end?: string }>>);
           if (bestBr && typeof bestBr === 'object') setBreaksByDow(bestBr as Record<number, Array<{ start?: string; end?: string }>>);
-          if (typeof (settings as any).availabilityAutoFromWindow === 'boolean') setAutoFromWindow((settings as any).availabilityAutoFromWindow as boolean);
           setSettingsReady(true);
         }
         if (schRes.ok) {
@@ -264,12 +208,11 @@ export default function WeekPlanPage() {
   // Persist changes locally and to server
   useEffect(() => { saveAvailability(availability); }, [availability]);
   useEffect(() => { saveSchedule(blocks); }, [blocks]);
-  // Debounced server save for blocks (persist API + settings backup)
+  // Debounced server save for blocks (persist to API only)
   useEffect(() => {
     const id = setTimeout(() => {
       try {
         void fetch('/api/schedule', { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ blocks }) });
-        void fetch('/api/settings', { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ weekScheduleV1: blocks }) });
       } catch {}
     }, 400);
     return () => clearTimeout(id);
@@ -277,15 +220,12 @@ export default function WeekPlanPage() {
   useEffect(() => { try { if (typeof window !== 'undefined') window.localStorage.setItem(LS_WEEK_START, ymd(weekStart)); } catch {} try { void fetch('/api/settings', { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ weekPlanWeekStartYmd: ymd(weekStart) }) }); } catch {} }, [weekStart]);
   useEffect(() => { try { void fetch('/api/settings', { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ availabilityTemplateV1: availability }) }); } catch {} }, [availability]);
   useEffect(() => { try { void fetch('/api/settings', { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ weeklyGoalsV1: goals }) }); } catch {} }, [goals]);
-  useEffect(() => { try { const nowIso=new Date().toISOString(); if (typeof window!=='undefined') window.localStorage.setItem(LS_AVAIL_START, JSON.stringify({ ...availStartByDow, updatedAt: nowIso })); if (settingsReady) void fetch('/api/settings', { method:'PATCH', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ availabilityStartHHMM: { ...availStartByDow, updatedAt: nowIso } }) }); } catch {} }, [availStartByDow, settingsReady]);
-  useEffect(() => { try { const nowIso=new Date().toISOString(); if (typeof window!=='undefined') window.localStorage.setItem(LS_AVAIL_END, JSON.stringify({ ...availEndByDow, updatedAt: nowIso })); if (settingsReady) void fetch('/api/settings', { method:'PATCH', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ availabilityEndHHMM: { ...availEndByDow, updatedAt: nowIso } }) }); } catch {} }, [availEndByDow, settingsReady]);
+  // Persist windows and breaks
+  useEffect(() => { try { const nowIso=new Date().toISOString(); if (typeof window!=='undefined') window.localStorage.setItem(LS_AVAIL_WINDOWS, JSON.stringify({ ...windowsByDow, updatedAt: nowIso })); if (settingsReady) void fetch('/api/settings', { method:'PATCH', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ availabilityWindowsV1: { ...windowsByDow, updatedAt: nowIso } }) }); } catch {} }, [windowsByDow, settingsReady]);
   useEffect(() => { try { const nowIso=new Date().toISOString(); if (typeof window!=='undefined') window.localStorage.setItem(LS_AVAIL_BREAKS, JSON.stringify({ ...breaksByDow, updatedAt: nowIso })); if (settingsReady) void fetch('/api/settings', { method:'PATCH', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ availabilityBreaksV1: { ...breaksByDow, updatedAt: nowIso } }) }); } catch {} }, [breaksByDow, settingsReady]);
-  // Persist auto-from-window toggle
-  useEffect(() => { try { if (typeof window!=='undefined') window.localStorage.setItem(LS_AVAIL_AUTO, autoFromWindow ? 'true':'false'); if (settingsReady) void fetch('/api/settings', { method:'PATCH', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ availabilityAutoFromWindow: autoFromWindow }) }); } catch {} }, [autoFromWindow, settingsReady]);
 
-  // Derive availability minutes from Windows minus Breaks (breaks clipped to windows)
+  // Derive availability minutes from Windows minus Breaks (always active now)
   useEffect(() => {
-    if (!autoFromWindow) return;
     setAvailability(prev => {
       const next: Record<number, number> = { ...prev } as any;
       let changed = false;
@@ -321,90 +261,9 @@ export default function WeekPlanPage() {
       }
       return changed ? next : prev;
     });
-  }, [windowsByDow, breaksByDow, autoFromWindow]);
+  }, [windowsByDow, breaksByDow]);
 
-  // Helper: compute availability minutes for a DOW given candidate windows
-  function computeAvailForWins(dow: number, winsArr: Array<{ start?: string; end?: string }>, brArr: Array<{ start?: string; end?: string }>): number {
-    const winIntervals: Array<[number,number]> = (winsArr||[])
-      .map(w => [toMin(normHHMM(w.start||''))??-1, toMin(normHHMM(w.end||''))??-1])
-      .filter(([a,b]) => a>=0 && b>=0 && b>a) as Array<[number,number]>;
-    winIntervals.sort((a,b)=>a[0]-b[0]);
-    const mergedWins: Array<[number,number]> = [];
-    for (const iv of winIntervals) { if (!mergedWins.length || iv[0] > mergedWins[mergedWins.length-1][1]) mergedWins.push([iv[0], iv[1]]); else mergedWins[mergedWins.length-1][1] = Math.max(mergedWins[mergedWins.length-1][1], iv[1]); }
-    const brIntervals: Array<[number,number]> = (brArr||[])
-      .map(b => [toMin(normHHMM(b.start||''))??-1, toMin(normHHMM(b.end||''))??-1])
-      .filter(([a,b]) => a>=0 && b>=0 && b>a) as Array<[number,number]>;
-    brIntervals.sort((a,b)=>a[0]-b[0]);
-    const mergedBr: Array<[number,number]> = [];
-    for (const iv of brIntervals) { if (!mergedBr.length || iv[0] > mergedBr[mergedBr.length-1][1]) mergedBr.push([iv[0], iv[1]]); else mergedBr[mergedBr.length-1][1] = Math.max(mergedBr[mergedBr.length-1][1], iv[1]); }
-    let total = 0; for (const [ws,we] of mergedWins) { const base = Math.max(0, we - ws); let over = 0; for (const [bs,be] of mergedBr) { const sC = Math.max(ws, bs); const eC = Math.min(we, be); if (eC>sC) over += (eC - sC); } total += Math.max(0, base - over); }
-    return total;
-  }
-
-  // Helper: date string (YYYY-MM-DD) for given DOW in current week
-  function ymdForDow(dow: number): string {
-    for (const d of days) if (d.getDay() === dow) return ymd(d);
-    return ymd(days[0]);
-  }
-
-  // On first load, hydrate Windows from Start/End +/- Breaks (complement of breaks within [start,end])
-  useEffect(() => {
-    const empty = [0,1,2,3,4,5,6].every(d => ((windowsByDow[d]||[]).length===0));
-    if (!empty) return;
-    const out: Record<number, Array<{ start?: string; end?: string }>> = { 0:[],1:[],2:[],3:[],4:[],5:[],6:[] };
-    for (const dow of [0,1,2,3,4,5,6]) {
-      const s = toMin(normHHMM(availStartByDow[dow]||''));
-      const e = toMin(normHHMM(availEndByDow[dow]||''));
-      if (s==null || e==null || e<=s) { out[dow] = []; continue; }
-      const brRaw = (breaksByDow[dow]||[]).map(b=>[toMin(normHHMM(b.start||''))??-1, toMin(normHHMM(b.end||''))??-1]).filter(([a,b])=>a>=0&&b>=0&&b>a).sort((a,b)=>a[0]-b[0]) as Array<[number,number]>;
-      const mergedBr: Array<[number,number]> = [];
-      for (const iv of brRaw) { if (!mergedBr.length || iv[0] > mergedBr[mergedBr.length-1][1]) mergedBr.push([iv[0], iv[1]]); else mergedBr[mergedBr.length-1][1] = Math.max(mergedBr[mergedBr.length-1][1], iv[1]); }
-      const wins: Array<[number,number]> = [];
-      let cur = s;
-      for (const [bs,be] of mergedBr) { const ss = Math.max(cur, s); const ee = Math.min(e, bs); if (ee>ss) wins.push([ss, ee]); cur = Math.max(cur, be); }
-      if (cur < e) wins.push([cur, e]);
-      out[dow] = wins.map(([a,b]) => ({ id: uid(), start: fmt12Input(`${String(Math.floor(a/60)).padStart(2,'0')}:${String(a%60).padStart(2,'0')}`), end: fmt12Input(`${String(Math.floor(b/60)).padStart(2,'0')}:${String(b%60).padStart(2,'0')}`) } as any));
-    }
-    setWindowsByDow(out);
-  }, [availStartByDow, availEndByDow, breaksByDow]);
-
-  // When Windows or Breaks change, derive Start/End (earliest to latest) and merged Breaks (user + gaps) for persistence
-  useEffect(() => {
-    const sMap: Record<number,string> = {0:'',1:'',2:'',3:'',4:'',5:'',6:''};
-    const eMap: Record<number,string> = {0:'',1:'',2:'',3:'',4:'',5:'',6:''};
-    const brMap: Record<number, Array<{ start?: string; end?: string }>> = {0:[],1:[],2:[],3:[],4:[],5:[],6:[]};
-    for (const dow of [0,1,2,3,4,5,6]) {
-      const winIv = (windowsByDow[dow]||[]).map(w=>[toMin(normHHMM(w.start||''))??-1, toMin(normHHMM(w.end||''))??-1]).filter(([a,b])=>a>=0&&b>=0&&b>a).sort((a,b)=>a[0]-b[0]) as Array<[number,number]>;
-      let minS: number | null = null; let maxE: number | null = null;
-      for (const [a,b] of winIv) { if (minS==null||a<minS) minS=a; if (maxE==null||b>maxE) maxE=b; }
-      sMap[dow] = minS!=null ? fmt12Input(`${String(Math.floor(minS/60)).padStart(2,'0')}:${String(minS%60).padStart(2,'0')}`) : '';
-      eMap[dow] = maxE!=null ? fmt12Input(`${String(Math.floor(maxE/60)).padStart(2,'0')}:${String(maxE%60).padStart(2,'0')}`) : '';
-      // Gaps between windows inside [minS,maxE]
-      const gaps: Array<[number,number]> = [];
-      if (minS!=null && maxE!=null && maxE>minS) {
-        let cur = minS;
-        for (const [a,b] of winIv) { if (a>cur) gaps.push([cur,a]); cur = Math.max(cur, b); }
-        if (cur<maxE) gaps.push([cur,maxE]);
-      }
-      const userBr = (breaksByDow[dow]||[]).map(b=>[toMin(normHHMM(b.start||''))??-1, toMin(normHHMM(b.end||''))??-1]).filter(([a,b])=>a>=0&&b>=0&&b>a) as Array<[number,number]>;
-      const allBr = [...gaps, ...userBr].sort((a,b)=>a[0]-b[0]);
-      const merged: Array<[number,number]> = [];
-      for (const iv of allBr) { if (!merged.length || iv[0] > merged[merged.length-1][1]) merged.push([iv[0], iv[1]]); else merged[merged.length-1][1] = Math.max(merged[merged.length-1][1], iv[1]); }
-      brMap[dow] = merged.map(([a,b])=>({ start: fmt12Input(`${String(Math.floor(a/60)).padStart(2,'0')}:${String(a%60).padStart(2,'0')}`), end: fmt12Input(`${String(Math.floor(b/60)).padStart(2,'0')}:${String(b%60).padStart(2,'0')}`) }));
-    }
-    // Only update states if actually changed to avoid loops
-    const eqObj = (a:any,b:any) => JSON.stringify(a)===JSON.stringify(b);
-    if (!eqObj(sMap, availStartByDow)) setAvailStartByDow(sMap);
-    if (!eqObj(eMap, availEndByDow)) setAvailEndByDow(eMap);
-    if (!eqObj(brMap, breaksByDow)) setBreaksByDow(brMap);
-  }, [windowsByDow]);
-
-  // Fetch tasks for Catch-Up
-  useEffect(() => {
-    (async () => {
-      try { const r = await fetch('/api/tasks', { cache: 'no-store' }); const d = await r.json(); setTasks((d.tasks || []) as Task[]); } catch {}
-    })();
-  }, []);
+  // Tasks for catch-up and unscheduled lists come from shared useTasks hook
   // Load goals & sessions for weekly quota
   useEffect(() => { setGoals(loadGoals()); }, []);
   useEffect(() => {
@@ -497,8 +356,6 @@ export default function WeekPlanPage() {
     return m;
   }, [days, eventIntervalsByKey]);
 
-  
-
   const effectiveCapByKey = useMemo(() => {
     const m: Record<string, number> = {};
     for (const d of days) {
@@ -530,23 +387,24 @@ export default function WeekPlanPage() {
       } else {
         // Fallback when no explicit windows: subtract total event minutes from availability
         const availMin = Math.max(0, Number(availability[dow]||0));
-        const evMin = Math.max(0, eventMinutesByKey[k] || 0);
+        const evMin = Math.max(0, Number(eventMinutesByKey[k] || 0));
         m[k] = Math.max(0, availMin - evMin);
       }
     }
     return m;
   }, [days, windowsByDow, breaksByDow, availability, eventIntervalsByKey, eventMinutesByKey]);
 
-  
-
-  // Read-only events list by day (display only)
   const eventsByDay = useMemo(() => {
     const map: Record<string, Array<{ label: string; time?: string; color?: string; s?: number }>> = {};
     const keyOf = (dt: Date) => `${dt.getFullYear()}-${String(dt.getMonth()+1).padStart(2,'0')}-${String(dt.getDate()).padStart(2,'0')}`;
     const fmt12 = (hhmm?: string | null) => {
       if (!hhmm || !/^(\d{2}):(\d{2})$/.test(hhmm)) return '';
-      const [hStr, mStr] = hhmm.split(':'); const h = parseInt(hStr, 10);
-      const ap = h >= 12 ? 'PM' : 'AM'; let h12 = h % 12; if (h12 === 0) h12 = 12; return `${h12}:${mStr} ${ap}`;
+      const [hStr, mStr] = hhmm.split(':');
+      const h = parseInt(hStr, 10);
+      const ap = h >= 12 ? 'PM' : 'AM';
+      let h12 = h % 12;
+      if (h12 === 0) h12 = 12;
+      return `${h12}:${mStr} ${ap}`;
     };
     const fmt12Range = (s?: string|null, e?: string|null) => {
       const ss = fmt12(s||''); const ee = fmt12(e||'');
@@ -556,37 +414,58 @@ export default function WeekPlanPage() {
       if (sm && em && sm===em) return `${ss.replace(/\s(AM|PM)$/i,'')}–${ee.replace(/\s(AM|PM)$/i,'')} ${sm}`;
       return `${ss}–${ee}`;
     };
-    for (const d of days) map[ymd(d)] = [];
-    // Classes
+    for (const d of days) {
+      map[ymd(d)] = [];
+    }
+    // Classes only (no tasks) in Events panel
     for (const c of (courses||[])) {
       const start = c.startDate ? new Date(c.startDate) : null;
       const end = c.endDate ? new Date(c.endDate) : null;
       const blocksArr = (Array.isArray(c.meetingBlocks) && c.meetingBlocks.length)
         ? c.meetingBlocks
-        : ((Array.isArray(c.meetingDays) && c.meetingStart && c.meetingEnd) ? [{ days: c.meetingDays, start: c.meetingStart, end: c.meetingEnd, location: c.room || c.location || null }] : []);
+        : ((Array.isArray(c.meetingDays) && c.meetingStart && c.meetingEnd)
+            ? [{ days: c.meetingDays, start: c.meetingStart, end: c.meetingEnd, location: c.room || c.location || null }]
+            : []);
       if (!Array.isArray(blocksArr) || !blocksArr.length) continue;
       for (const d of days) {
         const within = (!start || d >= start) && (!end || d <= end);
         if (!within) continue;
         for (const b of blocksArr) {
           if (!Array.isArray(b.days)) continue;
-          if (b.days.includes(d.getDay())) {
-            const sNorm = normHHMM((b as any).start);
-            const eNorm = normHHMM((b as any).end);
-            const k = keyOf(d);
-            const courseName = (c.title || c.code || '').toString();
-            const sMin = toMin(sNorm||'');
-            map[k].push({ label: courseName || 'Class', time: (sNorm && eNorm) ? fmt12Range(sNorm,eNorm) : 'All day', color: colorForCourse(courseName), s: (sMin ?? 24*60) });
-          }
+          if (!b.days.includes(d.getDay())) continue;
+          const sNorm = normHHMM((b as any).start);
+          const eNorm = normHHMM((b as any).end);
+          const k = keyOf(d);
+          const courseName = (c.title || c.code || '').toString();
+          const sMin = toMin(sNorm||'');
+          if (!map[k]) map[k] = [];
+          map[k].push({
+            label: courseName || 'Class',
+            time: (sNorm && eNorm) ? fmt12Range(sNorm,eNorm) : 'All day',
+            color: colorForCourse(courseName),
+            s: (sMin ?? 24*60),
+          });
         }
       }
     }
-    // No tasks in Events panel — strictly class/meeting blocks only
     // Sort by start minutes asc; all-day at end
-    for (const k of Object.keys(map)) map[k].sort((a,b) => (Number(a.s||1e9) - Number(b.s||1e9)) || String(a.label).localeCompare(String(b.label)));
+    for (const k of Object.keys(map)) {
+      map[k].sort((a,b) => (
+        (Number(a.s ?? 1e9) - Number(b.s ?? 1e9)) ||
+        String(a.label || '').localeCompare(String(b.label || ''))
+      ));
+    }
     return map;
-  }, [courses, tasks, days]);
+  }, [courses, days]);
 
+  const taskById = useMemo(() => {
+    const m = new Map<string, Task>();
+    for (const t of (tasks || [])) {
+      if (!t || !t.id) continue;
+      m.set(t.id, t);
+    }
+    return m;
+  }, [tasks]);
 
   function moveBlockLaterToday(b: ScheduledBlock) {
     // Just reorder to end if same-day slack allows (cap - busy - others >= minutes); else no-op
@@ -662,12 +541,11 @@ export default function WeekPlanPage() {
       for (const b of blocks) { if (b.taskId) scheduledByTask.set(b.taskId, (scheduledByTask.get(b.taskId)||0) + b.plannedMinutes); }
 
       const spill = (tasks||[]).filter(t => t && t.status==='todo').filter(t => { const dueY = ymdFromISO(t.dueDate); return (dueY < today || dueY <= horizonEnd); });
-      const withRemaining = spill.map(t => {
-        const est = Math.max(0, Math.round(Number(t.estimatedMinutes)||0));
-        const estOrGuess = est > 0 ? est : 30;
+      const withRemaining: Array<{ task: Task; est: number; remaining: number; guessed: boolean }> = spill.map(t => {
+        const { minutes: baseMinutes, guessed } = estimateMinutesForTask(t as any);
         const already = scheduledByTask.get(t.id) || 0;
-        const rem = Math.max(0, estOrGuess - already);
-        return { task: t, remaining: rem, guessed: est === 0 };
+        const rem = Math.max(0, baseMinutes - already);
+        return { task: t, est: baseMinutes, remaining: rem, guessed };
       }).filter(x => x.remaining > 0);
 
       withRemaining.sort((a,b) => {
@@ -738,17 +616,6 @@ export default function WeekPlanPage() {
     });
     return arr;
   }, [unscheduledTasks, sortBy, sortDir]);
-
-  function estimateMinutesForTask(t: Task): { minutes: number; guessed: boolean } {
-    const est = Math.max(0, Math.round(Number(t.estimatedMinutes)||0));
-    if (est > 0) return { minutes: est, guessed: false };
-    const pages = Math.max(0, Number((t as any).pagesRead) || 0);
-    if (pages > 0) {
-      const mpp = getCourseMpp(t.course || '');
-      return { minutes: Math.round(pages * mpp + 10), guessed: false };
-    }
-    return { minutes: 30, guessed: true };
-  }
   function displayCourseFor(t: Task): string {
     const c = (t.course || '').trim(); if (c) return c;
     const a = (t as any).activity; if ((a || '').toLowerCase() === 'internship') return 'Internship';
@@ -782,7 +649,7 @@ export default function WeekPlanPage() {
     const keys = new Set(days.map(d => ymd(d)));
     const existing = blocks.filter(b => keys.has(b.day));
     const planned = new Map<string, number>(); for (const d of days) planned.set(ymd(d), existing.filter(b => b.day===ymd(d)).reduce((s,b)=>s+b.plannedMinutes,0));
-    const eff = (d: Date) => effectiveCapByKey[ymd(d)] ?? Math.min(availability[d.getDay()] ?? 0, (() => { const s=toMin(normHHMM(availStartByDow[d.getDay()]||''))??0; const e=toMin(normHHMM(availEndByDow[d.getDay()]||''))??1440; return Math.max(0,e-s); })());
+    const eff = (d: Date) => effectiveCapByKey[ymd(d)] ?? (availability[d.getDay()] ?? 0);
     const unscheduled = unscheduledSorted.filter(t => !existing.some(b => b.taskId === t.id));
     const nextBlocks: ScheduledBlock[] = [];
     for (const t of unscheduled) {
@@ -827,33 +694,7 @@ function adjustTimeText(val: string, deltaMin: number): string {
   const next = minutesToHHMM(n + deltaMin);
   return fmt12Input(next);
 }
-function parseAvailFlexible(input: string): number | null {
-    const s = (input||'').trim().toLowerCase();
-    if (!s) return null;
-    const colon = /^(\d{1,3}):(\d{1,2})$/.exec(s);
-    if (colon) { const h = parseInt(colon[1],10); const m = parseInt(colon[2],10); if (!isNaN(h) && !isNaN(m)) return Math.max(0, h*60 + m); }
-    const space = /^(\d{1,3})\s+(\d{1,2})$/.exec(s);
-    if (space) { const h = parseInt(space[1],10); const m = parseInt(space[2],10); if (!isNaN(h) && !isNaN(m)) return Math.max(0, h*60 + m); }
-    const hr = /([0-9]+(?:\.[0-9]+)?)\s*h/.exec(s); const mr = /([0-9]+)\s*m(?![a-z])/i.exec(s);
-    if (hr || mr) { let tot = 0; if (hr) { const h = parseFloat(hr[1]); if (!isNaN(h)) tot += Math.round(h*60); } if (mr) { const m = parseInt(mr[1],10); if (!isNaN(m)) tot += m; } return Math.max(0, tot); }
-    const plain = parseFloat(s);
-    if (!isNaN(plain)) {
-      if (s.includes('.') || plain <= 10) {
-        return Math.max(0, Math.round(plain * 60));
-      }
-      return Math.max(0, Math.round(plain));
-    }
-    return null;
-  }
-  function setAvailForDow(dow: number, val: string) {
-    const parsed = parseAvailFlexible(val);
-    const v = parsed == null ? 0 : parsed;
-    setAvailability(prev => ({ ...prev, [dow]: v }));
-  }
-  function bumpAvail(dow: number, delta: number) {
-    setAvailability(prev => ({ ...prev, [dow]: Math.max(0, Math.round((prev[dow]||0) + delta)) }));
-  }
-  function shiftWeek(delta: number) { setWeekStart(prev => { const x = new Date(prev); x.setDate(x.getDate() + delta*7); return saturdayOf(x); }); }
+function shiftWeek(delta: number) { setWeekStart(prev => { const x = new Date(prev); x.setDate(x.getDate() + delta*7); return saturdayOf(x); }); }
   function clearThisWeek() { const keys = new Set(days.map(d => ymd(d))); setBlocks(prev => prev.filter(b => !keys.has(b.day))); }
   async function promoteWeekToTasks() {
     const keys = new Set(days.map(d => ymd(d))); const batch = blocks.filter(b => keys.has(b.day)); let ok = 0, fail = 0;
@@ -883,13 +724,10 @@ function parseAvailFlexible(input: string): number | null {
             <button onClick={computeCatchUpPreview} className="px-3 py-2 rounded border border-[#1b2344] text-sm focus-visible:outline focus-visible:outline-2 focus-visible:outline-emerald-500">Catch-Up</button>
             <button onClick={undoCatchUp} className="px-3 py-2 rounded border border-[#1b2344] text-sm disabled:opacity-50" disabled={!undoSnapshot}>Undo Last</button>
             <div className="text-xs text-slate-300/80 ml-2">Need ~{minutesToHM(dailyQuotaCur)}/day to hit goal · <button onClick={autopackWeek} className="underline">Autopack</button></div>
-            <label className="ml-2 inline-flex items-center gap-1 text-xs">
-              <input type="checkbox" checked={autoFromWindow} onChange={e=>setAutoFromWindow(e.target.checked)} /> Auto from Start/End
-            </label>
           </div>
         </div>
         <div className="space-y-3">
-          <div className="text-sm text-slate-300/70">Availability (windows − breaks) per weekday</div>
+          <div className="text-sm text-slate-300/70">Availability from study windows & breaks (per weekday)</div>
           <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-7 gap-3">
             {[6,0,1,2,3,4,5].map(dow => (
               <div key={dow} className="relative rounded-2xl p-5 md:p-6 border border-white/10 bg-white/5 space-y-3">
@@ -909,7 +747,7 @@ function parseAvailFlexible(input: string): number | null {
                   </div>
                 </div>
                 <div>
-                  <div className="text-xs text-white/70 mb-1">Windows</div>
+                  <div className="text-xs text-white/70 mb-1">Study windows</div>
                   <div className="space-y-2">
                     {(windowsByDow[dow]||[]).map((w, i) => { const sOk = toMin(normHHMM(w.start||''))!=null; const eOk = toMin(normHHMM(w.end||''))!=null; const valid = (toMin(normHHMM(w.start||''))??0) < (toMin(normHHMM(w.end||''))??0); const keyId = (w as any).id || `w-${i}`; return (
                       <div key={keyId} className="relative grid grid-cols-[1fr_1fr_auto] items-center gap-3">
@@ -936,7 +774,7 @@ function parseAvailFlexible(input: string): number | null {
                   </div>
                 </div>
                 <div>
-                  <div className="text-xs text-white/70 mb-1">Breaks</div>
+                  <div className="text-xs text-white/70 mb-1">Breaks during day</div>
                   <div className="space-y-2">
                     {(breaksByDow[dow]||[]).map((br, i) => { const valid = (toMin(normHHMM(br.start||''))??0) < (toMin(normHHMM(br.end||''))??0); const keyId=(br as any).id || `b-${i}`; return (
                       <div key={keyId} className="relative grid grid-cols-[1fr_1fr_auto] items-center gap-3">
@@ -964,45 +802,6 @@ function parseAvailFlexible(input: string): number | null {
             ))}
           </div>
         </div>
-      </section>
-
-      <section className="card p-6 space-y-4 order-3">
-        <div className="flex items-end justify-between gap-2">
-          <h3 className="text-sm font-medium">Tasks to plan (drag to a day)</h3>
-          <div className="flex items-center gap-2 text-xs">
-            <label className="flex items-center gap-1">
-              <span>Sort by</span>
-              <select value={sortBy} onChange={e=>setSortBy(e.target.value as any)} className="bg-[#0b1020] border border-[#1b2344] rounded px-2 py-1">
-                <option value="due">Due date</option>
-                <option value="course">Course</option>
-                <option value="priority">Priority</option>
-                <option value="estimate">Estimate</option>
-              </select>
-            </label>
-            <button onClick={()=>setSortDir(d=>d==='asc'?'desc':'asc')} className="px-2 py-1 rounded border border-[#1b2344]">{sortDir==='asc'?'Asc':'Desc'}</button>
-            <label className="flex items-center gap-1">
-              <input type="checkbox" checked={twoWeeksOnly} onChange={e=>setTwoWeeksOnly(e.target.checked)} />
-              <span>Due next 2 weeks</span>
-            </label>
-          </div>
-        </div>
-        {noTasksToPlan ? (
-          <div className="rounded border border-dashed border-[#1b2344] p-4 text-sm text-slate-300/80">No todo tasks to plan. Add some in <a href="/tasks" className="underline focus-visible:outline focus-visible:outline-2 focus-visible:outline-blue-500">Tasks</a> and return.</div>
-        ) : (
-          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-2">
-            {unscheduledSorted.map(t => (
-              <div key={t.id} draggable onDragStart={(e)=>onDragStartTask(e,t)} className={`p-2 pl-3 rounded border focus-within:outline focus-within:outline-2 focus-within:outline-blue-500 ${scheduledIdsThisWeek.has(t.id)?'border-emerald-700 bg-emerald-900/10':'border-[#1b2344]'}`} aria-grabbed="false" style={{ borderLeft: `3px solid ${colorForCourse(displayCourseFor(t))}` }}>
-                <div className="text-sm text-slate-200 truncate">{displayCourseFor(t) ? `${displayCourseFor(t)}: ` : ''}{t.title}</div>
-                <div className="text-xs text-slate-300/70 flex items-center gap-2 mt-1">
-                  <span>due {ymdFromISO(t.dueDate)}</span>
-                  {typeof t.priority==='number' ? <span>p{t.priority}</span> : null}
-                  {typeof (t as any).pagesRead==='number' ? <span>{(t as any).pagesRead}p</span> : null}
-                  {typeof t.estimatedMinutes==='number' && (t.estimatedMinutes ?? 0) > 0 ? <span>{t.estimatedMinutes}m</span> : null}
-                </div>
-              </div>
-            ))}
-          </div>
-        )}
       </section>
 
       <section className="space-y-3 order-2">
@@ -1047,23 +846,30 @@ function parseAvailFlexible(input: string): number | null {
                 <ul className="space-y-1">
                   {dayBlocks.length===0 ? (
                     <li className="text-[11px] text-slate-300/50">Drop tasks here</li>
-                  ) : dayBlocks.map(b => (
-                    <li key={b.id} className="text-[11px] flex items-start gap-2">
-                      <span className="mt-1 w-2 h-2 rounded-full flex-shrink-0" style={{ backgroundColor: colorForCourse(b.course) }} />
-                      <div className="flex-1 min-w-0">
-                        <div className="text-slate-200 truncate">{b.course ? `${b.course}: ` : ''}{b.title}</div>
-                        <div className="text-slate-300/70 flex items-center gap-2">
-                          <span>{minutesToHM(b.plannedMinutes)}{b.guessed ? <span className="ml-1 inline-block px-1 rounded border border-amber-500 text-amber-400">guessed</span> : null}{typeof b.pages==='number' && b.pages>0 ? <span className="ml-2">· {b.pages}p</span> : null}</span>
-                          
-                          <span className="inline-flex items-center gap-1">
-                            <button onClick={()=>moveBlockLaterToday(b)} className="px-1 py-0.5 rounded border border-[#1b2344]">Move later today</button>
-                            <button onClick={()=>pushBlockToTomorrow(b)} className="px-1 py-0.5 rounded border border-[#1b2344]">Push → tomorrow</button>
-                          </span>
+                  ) : dayBlocks.map(b => {
+                    const t = b.taskId ? taskById.get(b.taskId) : undefined;
+                    const displayCourse = (t?.course || b.course || "");
+                    const displayTitle = t?.title || b.title;
+                    const pages = (typeof (t as any)?.pagesRead === 'number' && (t as any).pagesRead > 0)
+                      ? (t as any).pagesRead
+                      : (typeof b.pages === 'number' && b.pages > 0 ? b.pages : null);
+                    return (
+                      <li key={b.id} className="text-[11px] flex items-start gap-2">
+                        <span className="mt-1 w-2 h-2 rounded-full flex-shrink-0" style={{ backgroundColor: colorForCourse(displayCourse) }} />
+                        <div className="flex-1 min-w-0">
+                          <div className="text-slate-200 truncate">{displayCourse ? `${displayCourse}: ` : ''}{displayTitle}</div>
+                          <div className="text-slate-300/70 flex items-center gap-2">
+                            <span>{minutesToHM(b.plannedMinutes)}{b.guessed ? <span className="ml-1 inline-block px-1 rounded border border-amber-500 text-amber-400">guessed</span> : null}{pages ? <span className="ml-2">· {pages}p</span> : null}</span>
+                            <span className="inline-flex items-center gap-1">
+                              <button onClick={()=>moveBlockLaterToday(b)} className="px-1 py-0.5 rounded border border-[#1b2344]">Move later today</button>
+                              <button onClick={()=>pushBlockToTomorrow(b)} className="px-1 py-0.5 rounded border border-[#1b2344]">Push → tomorrow</button>
+                            </span>
+                          </div>
                         </div>
-                      </div>
-                      <button aria-label="Remove block" onClick={()=>removeBlock(b.id)} className="px-1 py-0.5 rounded border border-[#1b2344] text-xs focus-visible:outline focus-visible:outline-2 focus-visible:outline-blue-500">X</button>
-                    </li>
-                  ))}
+                        <button aria-label="Remove block" onClick={()=>removeBlock(b.id)} className="px-1 py-0.5 rounded border border-[#1b2344] text-xs focus-visible:outline focus-visible:outline-2 focus-visible:outline-blue-500">X</button>
+                      </li>
+                    );
+                  })}
                 </ul>
               </div>
             );
