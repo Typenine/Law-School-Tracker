@@ -190,13 +190,18 @@ export default function WeekPlanPage() {
           const local = loadSchedule();
           if (remote.length > 0) {
             setBlocks(remote as any);
+            // Also save to localStorage for offline access
+            saveSchedule(remote as any);
           } else {
             // Try settings backup, then localStorage
             const fromSettings = (settingsCache as any)?.weekScheduleV1;
             if (Array.isArray(fromSettings) && fromSettings.length > 0) {
               setBlocks(fromSettings as any);
+              saveSchedule(fromSettings as any);
               try { await fetch('/api/schedule', { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ blocks: fromSettings }) }); } catch {}
             } else if (local.length > 0) {
+              // Load from localStorage and sync to server
+              setBlocks(local as any);
               try { await fetch('/api/schedule', { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ blocks: local }) }); } catch {}
             }
           }
@@ -217,6 +222,26 @@ export default function WeekPlanPage() {
     }, 400);
     return () => clearTimeout(id);
   }, [blocks]);
+  
+  // Save on page unload/navigation
+  useEffect(() => {
+    const saveBeforeUnload = () => {
+      if (blocks.length > 0) {
+        // Use sendBeacon for reliable save on page unload
+        const data = JSON.stringify({ blocks });
+        if (navigator.sendBeacon) {
+          navigator.sendBeacon('/api/schedule', new Blob([data], { type: 'application/json' }));
+        }
+      }
+    };
+    window.addEventListener('beforeunload', saveBeforeUnload);
+    window.addEventListener('pagehide', saveBeforeUnload);
+    return () => {
+      window.removeEventListener('beforeunload', saveBeforeUnload);
+      window.removeEventListener('pagehide', saveBeforeUnload);
+    };
+  }, [blocks]);
+  
   useEffect(() => { try { if (typeof window !== 'undefined') window.localStorage.setItem(LS_WEEK_START, ymd(weekStart)); } catch {} try { void fetch('/api/settings', { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ weekPlanWeekStartYmd: ymd(weekStart) }) }); } catch {} }, [weekStart]);
   useEffect(() => { try { void fetch('/api/settings', { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ availabilityTemplateV1: availability }) }); } catch {} }, [availability]);
   useEffect(() => { try { void fetch('/api/settings', { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ weeklyGoalsV1: goals }) }); } catch {} }, [goals]);
@@ -694,7 +719,11 @@ function adjustTimeText(val: string, deltaMin: number): string {
   const next = minutesToHHMM(n + deltaMin);
   return fmt12Input(next);
 }
-function shiftWeek(delta: number) { setWeekStart(prev => { const x = new Date(prev); x.setDate(x.getDate() + delta*7); return saturdayOf(x); }); }
+function shiftWeek(delta: number) {
+    // Save immediately before shifting to prevent data loss
+    try { void fetch('/api/schedule', { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ blocks }) }); } catch {}
+    setWeekStart(prev => { const x = new Date(prev); x.setDate(x.getDate() + delta*7); return saturdayOf(x); });
+  }
   function clearThisWeek() { const keys = new Set(days.map(d => ymd(d))); setBlocks(prev => prev.filter(b => !keys.has(b.day))); }
   async function promoteWeekToTasks() {
     const keys = new Set(days.map(d => ymd(d))); const batch = blocks.filter(b => keys.has(b.day)); let ok = 0, fail = 0;

@@ -3,6 +3,7 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import type { Task, Course } from '@/lib/types';
 import AddTaskPanel from '@/components/AddTaskPanel';
 import MultiAddDrawer from '@/components/MultiAddDrawer';
+import LogModal, { type LogSubmitData } from '@/components/LogModal';
 
 function fmtHM(min: number | null | undefined): string {
   const n = Math.max(0, Math.round(Number(min) || 0));
@@ -103,6 +104,14 @@ export default function TaskTable() {
   const [backlogCount, setBacklogCount] = useState<number>(0);
   const [timers, setTimers] = useState<Record<string, { accMs: number; running: boolean; startedAt?: number }>>({});
   const [timerTick, setTimerTick] = useState(0);
+  // Log modal state
+  const [logModalOpen, setLogModalOpen] = useState(false);
+  const [logModalTask, setLogModalTask] = useState<Task | null>(null);
+  const [logModalMode, setLogModalMode] = useState<'partial' | 'finish'>('finish');
+  
+  // Undo support
+  const [undoStack, setUndoStack] = useState<Array<{ type: 'delete' | 'update'; task: Task; prevState?: Task }>>([]);
+  const [showUndo, setShowUndo] = useState(false);
 
   async function refresh() {
     setLoading(true);
@@ -324,40 +333,137 @@ export default function TaskTable() {
     return () => window.removeEventListener('keydown', onKey);
   }, []);
 
+  function openLogModal(t: Task, mode: 'partial' | 'finish') {
+    setLogModalTask(t);
+    setLogModalMode(mode);
+    setLogModalOpen(true);
+  }
+
+  async function handleLogSubmit(data: LogSubmitData) {
+    if (!logModalTask) return;
+    const t = logModalTask;
+    
+    // Log the session
+    try {
+      await fetch('/api/sessions', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          taskId: t.id,
+          taskTitle: t.title,
+          course: t.course || null,
+          minutes: data.minutes,
+          focus: data.focus,
+          notes: data.notes || null,
+          when: new Date().toISOString(),
+        }),
+      });
+    } catch {}
+
+    // Update task based on mode
+    if (data.isPartial) {
+      // Partial: reduce estimated time, keep as todo
+      const newEst = Math.max(0, (t.estimatedMinutes || 0) - data.minutes);
+      try {
+        await fetch(`/api/tasks/${t.id}`, {
+          method: 'PATCH',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ estimatedMinutes: newEst }),
+        });
+      } catch {}
+    } else {
+      // Finish: mark as done
+      try {
+        await fetch(`/api/tasks/${t.id}`, {
+          method: 'PATCH',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ status: 'done', actualMinutes: data.minutes }),
+        });
+      } catch {}
+      clearTimerFor(t.id);
+    }
+
+    setLogModalOpen(false);
+    setLogModalTask(null);
+    refresh();
+    refreshSessions();
+  }
+
   async function toggleDone(t: Task) {
     const markingDone = t.status !== 'done';
-    const body: any = { status: markingDone ? 'done' : 'todo' };
-    if (markingDone && typeof window !== 'undefined') {
-      try {
-        const recMin = Math.round(elapsedMs(t.id) / 60000);
-        if (recMin > 0) {
-          const ans = window.prompt(`Recorded ${fmtHM(recMin)}. Enter a different time or leave blank to use recorded:`);
-          if (ans == null || ans.trim() === '') body.actualMinutes = recMin;
-          else {
-            const mins = parseMinutesFlexible(ans);
-            if (mins != null && mins >= 0) body.actualMinutes = mins; else window.alert('Could not parse duration. Using recorded time.');
-          }
-        } else {
-          const ans = window.prompt('How long did this task actually take? (e.g., 90, 1h30m, 1:30)');
-          if (ans != null && ans.trim().length > 0) {
-            const mins = parseMinutesFlexible(ans);
-            if (mins != null && mins >= 0) body.actualMinutes = mins;
-            else window.alert('Could not parse duration. Marking done without actual time.');
-          }
-        }
-      } catch {}
+    if (markingDone) {
+      // Open log modal instead of prompt
+      openLogModal(t, 'finish');
+      return;
     }
-    const res = await fetch(`/api/tasks/${t.id}`, { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
-    if (res.ok) {
-      if (markingDone) clearTimerFor(t.id);
-      refresh();
-    }
+    // Un-marking done - just toggle status
+    const res = await fetch(`/api/tasks/${t.id}`, { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ status: 'todo' }) });
+    if (res.ok) refresh();
   }
 
   async function remove(id: string) {
+    const taskToDelete = tasks.find(t => t.id === id);
     const res = await fetch(`/api/tasks/${id}`, { method: 'DELETE' });
-    if (res.ok) setTasks(prev => prev.filter(t => t.id !== id));
+    if (res.ok) {
+      setTasks(prev => prev.filter(t => t.id !== id));
+      // Add to undo stack
+      if (taskToDelete) {
+        setUndoStack(prev => [...prev.slice(-9), { type: 'delete', task: taskToDelete }]);
+        setShowUndo(true);
+        setTimeout(() => setShowUndo(false), 8000);
+      }
+    }
   }
+
+  async function undoLast() {
+    const last = undoStack[undoStack.length - 1];
+    if (!last) return;
+    
+    if (last.type === 'delete') {
+      // Recreate the deleted task
+      const { id, ...taskData } = last.task;
+      try {
+        await fetch('/api/tasks', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(taskData),
+        });
+        await refresh();
+      } catch {}
+    } else if (last.type === 'update' && last.prevState) {
+      // Restore previous state
+      try {
+        await fetch(`/api/tasks/${last.task.id}`, {
+          method: 'PATCH',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(last.prevState),
+        });
+        await refresh();
+      } catch {}
+    }
+    
+    setUndoStack(prev => prev.slice(0, -1));
+    setShowUndo(false);
+  }
+
+  // Calculate focus average per task from sessions
+  const focusAvgByTask = useMemo(() => {
+    const map: Record<string, { sum: number; count: number }> = {};
+    for (const s of sessions) {
+      const tid = s?.taskId;
+      const focus = Number(s?.focus);
+      if (tid && !isNaN(focus) && focus > 0) {
+        if (!map[tid]) map[tid] = { sum: 0, count: 0 };
+        map[tid].sum += focus;
+        map[tid].count++;
+      }
+    }
+    const result: Record<string, number> = {};
+    for (const [tid, { sum, count }] of Object.entries(map)) {
+      result[tid] = Math.round((sum / count) * 10) / 10;
+    }
+    return result;
+  }, [sessions]);
 
   function isoToLocalInput(iso: string) {
     const d = new Date(iso);
@@ -913,15 +1019,16 @@ export default function TaskTable() {
           <table className="w-full text-sm">
             <thead className="text-left text-slate-300/60">
               <tr>
-                <th className="py-2 pr-2"><input type="checkbox" aria-label="Select all" checked={allSelected && filteredTasks.length>0} onChange={toggleSelectAll} /></th>
+                <th className="py-2 pr-2 hidden sm:table-cell"><input type="checkbox" aria-label="Select all" checked={allSelected && filteredTasks.length>0} onChange={toggleSelectAll} /></th>
                 <th className="py-2 pr-4">Course</th>
                 <th className="py-2 pr-4">Title</th>
-                <th className="py-2 pr-4">Activity</th>
-                <th className="py-2 pr-4">Pages</th>
+                <th className="py-2 pr-4 hidden lg:table-cell">Activity</th>
+                <th className="py-2 pr-4 hidden md:table-cell">Pages</th>
                 <th className="py-2 pr-4">Due</th>
-                <th className="py-2 pr-4">Estimate</th>
-                <th className="py-2 pr-4">Pri</th>
-                <th className="py-2 pr-4">Tags</th>
+                <th className="py-2 pr-4 hidden sm:table-cell">Est.</th>
+                <th className="py-2 pr-4 hidden md:table-cell">Focus</th>
+                <th className="py-2 pr-4 hidden lg:table-cell">Pri</th>
+                <th className="py-2 pr-4 hidden lg:table-cell">Tags</th>
                 <th className="py-2 pr-4">Status</th>
                 <th className="py-2 pr-4">Actions</th>
               </tr>
@@ -929,7 +1036,7 @@ export default function TaskTable() {
             <tbody>
               {filteredTasks.map(t => (
                 <tr key={t.id} className="border-t border-[#1b2344]">
-                  <td className="py-2 pr-2"><input type="checkbox" aria-label={`Select ${t.title}`} checked={selected.has(t.id)} onChange={() => toggleSelect(t.id)} /></td>
+                  <td className="py-2 pr-2 hidden sm:table-cell"><input type="checkbox" aria-label={`Select ${t.title}`} checked={selected.has(t.id)} onChange={() => toggleSelect(t.id)} /></td>
                   <td className="py-2 pr-4">
                     {editingId === t.id ? (
                       <input value={editCourse} onChange={e => setEditCourse(e.target.value)} className="w-full bg-[#0b1020] border border-[#1b2344] rounded px-2 py-1" />
@@ -947,8 +1054,8 @@ export default function TaskTable() {
                       <span className="break-words">{sanitizeTitle(t.title || '')}</span>
                     )}
                   </td>
-                  <td className="py-2 pr-4">{(t.activity||'') ? (t.activity as string) : '-'}</td>
-                  <td className="py-2 pr-4">{typeof (t.pagesRead as any) === 'number' ? (t.pagesRead as any) : '-'}</td>
+                  <td className="py-2 pr-4 hidden lg:table-cell">{(t.activity||'') ? (t.activity as string) : '-'}</td>
+                  <td className="py-2 pr-4 hidden md:table-cell">{typeof (t.pagesRead as any) === 'number' ? (t.pagesRead as any) : '-'}</td>
                   <td
                     className="py-2 pr-4 whitespace-nowrap"
                     onDoubleClick={() => {
@@ -964,21 +1071,29 @@ export default function TaskTable() {
                       new Date(t.dueDate).toLocaleString()
                     )}
                   </td>
-                  <td className="py-2 pr-4">
+                  <td className="py-2 pr-4 hidden sm:table-cell">
                     {editingId === t.id ? (
                       <input type="number" min={0} step={5} value={editEst} onChange={e => setEditEst(e.target.value)} className="w-full bg-[#0b1020] border border-[#1b2344] rounded px-2 py-1" />
                     ) : (
                       (t.estimatedMinutes != null ? fmtHM(t.estimatedMinutes) : '-')
                     )}
                   </td>
-                  <td className="py-2 pr-4">
+                  <td className="py-2 pr-4 hidden md:table-cell">
+                    {(() => {
+                      const avg = focusAvgByTask[t.id];
+                      if (!avg) return <span className="text-slate-500">-</span>;
+                      const color = avg >= 8 ? 'text-emerald-400' : avg >= 6 ? 'text-blue-400' : avg >= 4 ? 'text-amber-400' : 'text-rose-400';
+                      return <span className={color}>{avg.toFixed(1)}</span>;
+                    })()}
+                  </td>
+                  <td className="py-2 pr-4 hidden lg:table-cell">
                     {editingId === t.id ? (
                       <input type="number" min={1} max={5} value={editPriority} onChange={e => setEditPriority(e.target.value)} className="w-20 bg-[#0b1020] border border-[#1b2344] rounded px-2 py-1" />
                     ) : (
                       t.priority ?? '-'
                     )}
                   </td>
-                  <td className="py-2 pr-4 max-w-[220px]">
+                  <td className="py-2 pr-4 max-w-[220px] hidden lg:table-cell">
                     {editingId === t.id ? (
                       <input value={editTags} onChange={e => setEditTags(e.target.value)} placeholder="Comma-separated tags" className="w-full bg-[#0b1020] border border-[#1b2344] rounded px-2 py-1" />
                     ) : (
@@ -1025,6 +1140,37 @@ export default function TaskTable() {
               ))}
             </tbody>
           </table>
+        </div>
+      )}
+      
+      {/* Log Modal for task completion */}
+      <LogModal
+        isOpen={logModalOpen}
+        onClose={() => { setLogModalOpen(false); setLogModalTask(null); }}
+        onSubmit={handleLogSubmit}
+        task={logModalTask}
+        mode={logModalMode}
+        defaultMinutes={logModalTask ? Math.round(elapsedMs(logModalTask.id) / 60000) || undefined : undefined}
+      />
+      
+      {/* Undo Toast */}
+      {showUndo && undoStack.length > 0 && (
+        <div className="fixed bottom-4 left-1/2 -translate-x-1/2 z-50 bg-slate-800 border border-slate-600 rounded-lg shadow-xl px-4 py-3 flex items-center gap-4 animate-in slide-in-from-bottom duration-200">
+          <span className="text-sm">
+            {undoStack[undoStack.length - 1]?.type === 'delete' ? 'Task deleted' : 'Task updated'}
+          </span>
+          <button
+            onClick={undoLast}
+            className="px-3 py-1 rounded bg-blue-600 hover:bg-blue-500 text-sm font-medium"
+          >
+            Undo
+          </button>
+          <button
+            onClick={() => setShowUndo(false)}
+            className="text-slate-400 hover:text-white"
+          >
+            ×
+          </button>
         </div>
       )}
     </div>

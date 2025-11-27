@@ -629,14 +629,39 @@ export default function TodayPage() {
     return arr;
   }, [backlog]);
 
-  // Initialize plan from schedule if not set yet
+  // Sync plan with schedule - add any missing scheduled items
   useEffect(() => {
-    if (plan.items.length === 0 && todaysBlocks.length > 0 && !plan.locked) {
-      const items: TodayPlanItem[] = todaysBlocks.map(b => ({ id: b.taskId || b.id, title: b.title, course: b.course, minutes: b.plannedMinutes, guessed: b.guessed }));
-      setPlan({ dateKey, locked: false, items });
-      setStep(2);
+    if (todaysBlocks.length === 0 || plan.locked) return;
+    
+    // Find scheduled blocks not in current plan
+    const existingIds = new Set(plan.items.map(it => it.id));
+    const missing = todaysBlocks.filter(b => !existingIds.has(b.taskId) && !existingIds.has(b.id));
+    
+    if (missing.length > 0) {
+      const newItems: TodayPlanItem[] = missing.map(b => ({
+        id: b.taskId || b.id,
+        title: b.title,
+        course: b.course,
+        minutes: b.plannedMinutes,
+        guessed: b.guessed
+      }));
+      setPlan(p => ({ ...p, items: [...p.items, ...newItems] }));
+      if (plan.items.length === 0) setStep(2);
     }
-  }, [todaysBlocks, plan.items.length, plan.locked, dateKey]);
+  }, [todaysBlocks, plan.locked, dateKey]);
+
+  // Manual refresh from schedule
+  function syncFromSchedule() {
+    const items: TodayPlanItem[] = todaysBlocks.map(b => ({
+      id: b.taskId || b.id,
+      title: b.title,
+      course: b.course,
+      minutes: b.plannedMinutes,
+      guessed: b.guessed
+    }));
+    setPlan({ dateKey, locked: false, items });
+    setStep(2);
+  }
 
   // Wizard actions
   function addFromBacklog(it: BacklogItem) {
@@ -1421,7 +1446,18 @@ export default function TodayPage() {
           {/* Today's Tasks - Main column */}
           <div>
             <div className="flex items-center justify-between mb-3">
-              <h3 className="text-base font-semibold">Today's Tasks</h3>
+              <div className="flex items-center gap-3">
+                <h3 className="text-base font-semibold">Today's Tasks</h3>
+                {todaysBlocks.length > 0 && !plan.locked && (
+                  <button
+                    onClick={syncFromSchedule}
+                    className="text-[10px] px-2 py-1 rounded bg-blue-600/20 text-blue-300 hover:bg-blue-600/30"
+                    title="Reload all tasks from schedule"
+                  >
+                    ↻ Sync
+                  </button>
+                )}
+              </div>
               <div className="text-xs text-slate-400">
                 {plan.items.length} task{plan.items.length !== 1 ? 's' : ''} · {minutesToHM(plan.items.reduce((s, it) => s + (Number(it.minutes) || 0), 0))} total
               </div>
