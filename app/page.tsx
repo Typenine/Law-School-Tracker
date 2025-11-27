@@ -1426,6 +1426,8 @@ export default function TodayPage() {
               <ul className="space-y-3">
                 {plan.items.map((it, i) => {
                   const st = readingStatsByItem[it.id] || { assignedIv: [], assignedLabel: '', remainingIv: [], remainingLabel: '', pagesLeft: null as number|null, pph: pagesPerHourForCourse(it.course), etaMinutes: Math.max(1, Math.round(Number(it.minutes)||0)), loggedMinutes: (sessions||[]).filter((s:any)=>s?.taskId===it.id).reduce((a:number,s:any)=>a+(Number(s?.minutes)||0),0), showRemaining: false };
+                  // Use task's estimatedMinutes or item.minutes as fallback
+                  const displayEta = Math.max(1, Number(it.minutes) || st.etaMinutes || 30);
                   const pct = Math.min(100, Math.round((st.loggedMinutes/Math.max(st.etaMinutes,1))*100));
                   return (
                     <li key={it.id} className="rounded-2xl p-5 md:p-6 border border-white/10 bg-white/5" style={{ borderLeft: `3px solid ${courseColor(it.course)}` }}>
@@ -1446,10 +1448,21 @@ export default function TodayPage() {
                           </div>
                         </div>
                         <div className="w-[420px] min-w-[420px] flex-shrink-0 flex flex-col items-end gap-2">
-                          <div className="inline-flex items-center px-2 py-0.5 rounded-md text-sm bg-white/10 leading-tight">
-                            <div className="text-right">
-                              <div className="font-medium">{st.pagesLeft==null?`Est. ${minutesToHM(Math.max(1, st.etaMinutes))}`:minutesToHM(Math.max(1, st.etaMinutes))}</div>
-                              {typeof st.pagesLeft==='number' ? (<div className="text-[11px] text-white/70">{st.pagesLeft}p @ {st.pph}pph</div>) : null}
+                          <div className="inline-flex items-center gap-3">
+                            {/* Timer display */}
+                            {(() => {
+                              const secs = Math.max(0, Number(itemSeconds[it.id] || 0)) + (activeItemId === it.id && itemStartAt[it.id] ? Math.floor((nowTs - itemStartAt[it.id]) / 1000) : 0);
+                              return secs > 0 ? (
+                                <div className="px-2 py-0.5 rounded-md text-sm bg-blue-600/30 border border-blue-600/50 font-mono">
+                                  {mmss(secs)}
+                                </div>
+                              ) : null;
+                            })()}
+                            <div className="px-2 py-0.5 rounded-md text-sm bg-white/10 leading-tight">
+                              <div className="text-right">
+                                <div className="font-medium">Est. {minutesToHM(displayEta)}</div>
+                                {typeof st.pagesLeft==='number' && st.pagesLeft > 0 ? (<div className="text-[11px] text-white/70">{st.pagesLeft}p @ {st.pph}pph</div>) : null}
+                              </div>
                             </div>
                           </div>
                           <div className="flex items-center gap-2 flex-nowrap">
@@ -1528,7 +1541,7 @@ export default function TodayPage() {
                             <div className="shrink-0 inline-flex items-center px-2 py-0.5 rounded-md text-xs bg-white/10 leading-tight">
                               <div className="text-right">
                                 <div className="font-medium">{st.pagesLeft==null?`Est. ${minutesToHM(Math.max(1, fallbackMin))}`:minutesToHM(Math.max(1, st.etaMinutes))}</div>
-                                {typeof st.pagesLeft==='number' ? (<div className="text-[10px] text-white/70">{st.pagesLeft}p @ {st.pph}pph</div>) : null}
+                                {typeof st.pagesLeft==='number' && st.pagesLeft > 0 ? (<div className="text-[10px] text-white/70">{st.pagesLeft}p @ {st.pph}pph</div>) : null}
                               </div>
                             </div>
                           </li>
@@ -1656,7 +1669,7 @@ export default function TodayPage() {
                       <div>
                         <label className="block text-xs text-slate-300/70 mb-1">Focus Level</label>
                         <div className="flex items-center gap-2">
-                          <input type="range" min={1} max={10} step={0.5} value={logForm.focus || 5} onChange={e=>setLogForm(f=>({...f, focus: e.target.value}))} className="flex-1" />
+                          <input type="range" min={1} max={10} step={0.1} value={logForm.focus || 5} onChange={e=>setLogForm(f=>({...f, focus: e.target.value}))} className="flex-1" />
                           <span className="text-sm font-medium w-8">{logForm.focus}</span>
                         </div>
                       </div>
