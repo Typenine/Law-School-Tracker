@@ -109,6 +109,12 @@ export default function TaskTable() {
   const [logModalTask, setLogModalTask] = useState<Task | null>(null);
   const [logModalMode, setLogModalMode] = useState<'partial' | 'finish'>('finish');
   
+  // Edit modal state (replaces inline editing)
+  const [editModalOpen, setEditModalOpen] = useState(false);
+  const [editModalTask, setEditModalTask] = useState<Task | null>(null);
+  const [editActivity, setEditActivity] = useState('');
+  const [editPages, setEditPages] = useState('');
+  
   // Undo support
   const [undoStack, setUndoStack] = useState<Array<{ type: 'delete' | 'update'; task: Task; prevState?: Task }>>([]);
   const [showUndo, setShowUndo] = useState(false);
@@ -476,8 +482,8 @@ export default function TaskTable() {
     return `${yyyy}-${mm}-${dd}T${hh}:${mi}`;
   }
 
-  function startEdit(t: Task) {
-    setEditingId(t.id);
+  function openEditModal(t: Task) {
+    setEditModalTask(t);
     setEditTitle(t.title);
     setEditCourse(t.course || '');
     setEditDue(isoToLocalInput(t.dueDate));
@@ -487,18 +493,32 @@ export default function TaskTable() {
     setEditAttachments((t.attachments || []).join(', '));
     setEditDepends((t.dependsOn || []).join(', '));
     setEditTags((t.tags || []).join(', '));
+    setEditActivity((t as any).activity || '');
+    setEditPages(typeof (t as any).pagesRead === 'number' ? String((t as any).pagesRead) : '');
+    setEditModalOpen(true);
   }
 
-  function cancelEdit() {
-    setEditingId(null);
+  function closeEditModal() {
+    setEditModalOpen(false);
+    setEditModalTask(null);
     setEditTitle('');
     setEditCourse('');
     setEditDue('');
+    setEditEst('');
+    setEditPriority('');
+    setEditNotes('');
+    setEditActivity('');
+    setEditPages('');
   }
 
-  async function saveEdit() {
-    if (!editingId) return;
-    const body: any = { title: editTitle, course: editCourse || null };
+  async function saveEditModal() {
+    if (!editModalTask) return;
+    const body: any = { 
+      title: editTitle, 
+      course: editCourse || null,
+      activity: editActivity || null,
+      pagesRead: editPages ? parseInt(editPages, 10) : null,
+    };
     if (editDue) body.dueDate = new Date(editDue).toISOString();
     body.estimatedMinutes = editEst ? parseInt(editEst, 10) : null;
     body.priority = editPriority ? parseInt(editPriority, 10) : null;
@@ -506,11 +526,24 @@ export default function TaskTable() {
     body.attachments = editAttachments ? editAttachments.split(',').map((s: string) => s.trim()).filter(Boolean) : null;
     body.dependsOn = editDepends ? editDepends.split(',').map((s: string) => s.trim()).filter(Boolean) : null;
     body.tags = editTags ? editTags.split(',').map((s: string) => s.trim()).filter(Boolean) : null;
-    const res = await fetch(`/api/tasks/${editingId}`, { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
+    const res = await fetch(`/api/tasks/${editModalTask.id}`, { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
     if (res.ok) {
-      cancelEdit();
+      closeEditModal();
       await refresh();
     }
+  }
+  
+  // Legacy inline edit functions (kept for compatibility but now opens modal)
+  function startEdit(t: Task) {
+    openEditModal(t);
+  }
+
+  function cancelEdit() {
+    closeEditModal();
+  }
+
+  async function saveEdit() {
+    await saveEditModal();
   }
 
   const icsHref = useMemo(() => {
@@ -1171,6 +1204,155 @@ export default function TaskTable() {
           >
             ×
           </button>
+        </div>
+      )}
+      
+      {/* Edit Task Modal */}
+      {editModalOpen && editModalTask && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm" onClick={closeEditModal}>
+          <div className="bg-[#11162b] border border-[#1b2344] rounded-xl shadow-2xl w-full max-w-lg mx-4 max-h-[90vh] overflow-y-auto" onClick={e => e.stopPropagation()}>
+            <div className="p-6">
+              <div className="flex items-center justify-between mb-6">
+                <h3 className="text-lg font-semibold">Edit Task</h3>
+                <button onClick={closeEditModal} className="text-slate-400 hover:text-white text-xl">×</button>
+              </div>
+              
+              <div className="space-y-4">
+                {/* Title */}
+                <div>
+                  <label className="block text-xs text-slate-400 mb-1">Title</label>
+                  <input
+                    type="text"
+                    value={editTitle}
+                    onChange={e => setEditTitle(e.target.value)}
+                    className="w-full bg-[#0b1020] border border-[#1b2344] rounded-lg px-3 py-2 text-sm focus:border-blue-500 focus:outline-none"
+                  />
+                </div>
+                
+                {/* Course & Activity Row */}
+                <div className="grid grid-cols-2 gap-3">
+                  <div>
+                    <label className="block text-xs text-slate-400 mb-1">Course</label>
+                    <input
+                      type="text"
+                      value={editCourse}
+                      onChange={e => setEditCourse(e.target.value)}
+                      placeholder="e.g., Contracts"
+                      className="w-full bg-[#0b1020] border border-[#1b2344] rounded-lg px-3 py-2 text-sm focus:border-blue-500 focus:outline-none"
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-xs text-slate-400 mb-1">Activity</label>
+                    <select
+                      value={editActivity}
+                      onChange={e => setEditActivity(e.target.value)}
+                      className="w-full bg-[#0b1020] border border-[#1b2344] rounded-lg px-3 py-2 text-sm focus:border-blue-500 focus:outline-none"
+                    >
+                      <option value="">Select...</option>
+                      <option value="reading">Reading</option>
+                      <option value="assignment">Assignment</option>
+                      <option value="outline">Outline</option>
+                      <option value="review">Review</option>
+                      <option value="practice">Practice</option>
+                      <option value="other">Other</option>
+                    </select>
+                  </div>
+                </div>
+                
+                {/* Pages & Estimate Row */}
+                <div className="grid grid-cols-2 gap-3">
+                  <div>
+                    <label className="block text-xs text-slate-400 mb-1">Pages</label>
+                    <input
+                      type="number"
+                      min={0}
+                      value={editPages}
+                      onChange={e => setEditPages(e.target.value)}
+                      placeholder="Number of pages"
+                      className="w-full bg-[#0b1020] border border-[#1b2344] rounded-lg px-3 py-2 text-sm focus:border-blue-500 focus:outline-none"
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-xs text-slate-400 mb-1">Estimate (minutes)</label>
+                    <input
+                      type="number"
+                      min={0}
+                      step={5}
+                      value={editEst}
+                      onChange={e => setEditEst(e.target.value)}
+                      placeholder="e.g., 60"
+                      className="w-full bg-[#0b1020] border border-[#1b2344] rounded-lg px-3 py-2 text-sm focus:border-blue-500 focus:outline-none"
+                    />
+                  </div>
+                </div>
+                
+                {/* Due Date & Priority Row */}
+                <div className="grid grid-cols-2 gap-3">
+                  <div>
+                    <label className="block text-xs text-slate-400 mb-1">Due Date</label>
+                    <input
+                      type="datetime-local"
+                      value={editDue}
+                      onChange={e => setEditDue(e.target.value)}
+                      className="w-full bg-[#0b1020] border border-[#1b2344] rounded-lg px-3 py-2 text-sm focus:border-blue-500 focus:outline-none"
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-xs text-slate-400 mb-1">Priority (1-5)</label>
+                    <input
+                      type="number"
+                      min={1}
+                      max={5}
+                      value={editPriority}
+                      onChange={e => setEditPriority(e.target.value)}
+                      placeholder="1 = highest"
+                      className="w-full bg-[#0b1020] border border-[#1b2344] rounded-lg px-3 py-2 text-sm focus:border-blue-500 focus:outline-none"
+                    />
+                  </div>
+                </div>
+                
+                {/* Tags */}
+                <div>
+                  <label className="block text-xs text-slate-400 mb-1">Tags (comma-separated)</label>
+                  <input
+                    type="text"
+                    value={editTags}
+                    onChange={e => setEditTags(e.target.value)}
+                    placeholder="e.g., exam-prep, important"
+                    className="w-full bg-[#0b1020] border border-[#1b2344] rounded-lg px-3 py-2 text-sm focus:border-blue-500 focus:outline-none"
+                  />
+                </div>
+                
+                {/* Notes */}
+                <div>
+                  <label className="block text-xs text-slate-400 mb-1">Notes</label>
+                  <textarea
+                    value={editNotes}
+                    onChange={e => setEditNotes(e.target.value)}
+                    rows={3}
+                    placeholder="Additional notes..."
+                    className="w-full bg-[#0b1020] border border-[#1b2344] rounded-lg px-3 py-2 text-sm focus:border-blue-500 focus:outline-none resize-none"
+                  />
+                </div>
+              </div>
+              
+              {/* Actions */}
+              <div className="flex justify-end gap-3 mt-6 pt-4 border-t border-[#1b2344]">
+                <button
+                  onClick={closeEditModal}
+                  className="px-4 py-2 rounded-lg border border-[#1b2344] text-sm hover:bg-white/5"
+                >
+                  Cancel
+                </button>
+                <button
+                  onClick={saveEditModal}
+                  className="px-4 py-2 rounded-lg bg-blue-600 hover:bg-blue-500 text-sm font-medium"
+                >
+                  Save Changes
+                </button>
+              </div>
+            </div>
+          </div>
         </div>
       )}
     </div>

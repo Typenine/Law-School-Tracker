@@ -1,5 +1,5 @@
 "use client";
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useState, useRef, useCallback } from "react";
 import type { Task } from "@/lib/types";
 import { useTasks } from "@/lib/useTasks";
 import { estimateMinutesForTask } from "@/lib/taskEstimate";
@@ -223,24 +223,48 @@ export default function WeekPlanPage() {
     return () => clearTimeout(id);
   }, [blocks]);
   
+  // Keep a ref to blocks for use in cleanup/unload handlers
+  const blocksRef = useRef(blocks);
+  useEffect(() => { blocksRef.current = blocks; }, [blocks]);
+  
+  // Immediate save function
+  const saveBlocksNow = useCallback(() => {
+    const currentBlocks = blocksRef.current;
+    if (currentBlocks.length > 0) {
+      const data = JSON.stringify({ blocks: currentBlocks });
+      // Try sendBeacon first (works on page unload)
+      if (navigator.sendBeacon) {
+        navigator.sendBeacon('/api/schedule', new Blob([data], { type: 'application/json' }));
+      } else {
+        // Fallback to fetch
+        try { void fetch('/api/schedule', { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: data }); } catch {}
+      }
+      // Also save to localStorage immediately
+      try { window.localStorage.setItem(LS_SCHEDULE, JSON.stringify(currentBlocks)); } catch {}
+    }
+  }, []);
+  
   // Save on page unload/navigation
   useEffect(() => {
-    const saveBeforeUnload = () => {
-      if (blocks.length > 0) {
-        // Use sendBeacon for reliable save on page unload
-        const data = JSON.stringify({ blocks });
-        if (navigator.sendBeacon) {
-          navigator.sendBeacon('/api/schedule', new Blob([data], { type: 'application/json' }));
-        }
+    window.addEventListener('beforeunload', saveBlocksNow);
+    window.addEventListener('pagehide', saveBlocksNow);
+    
+    // Also save on visibility change (when user switches tabs/apps)
+    const handleVisibilityChange = () => {
+      if (document.visibilityState === 'hidden') {
+        saveBlocksNow();
       }
     };
-    window.addEventListener('beforeunload', saveBeforeUnload);
-    window.addEventListener('pagehide', saveBeforeUnload);
+    document.addEventListener('visibilitychange', handleVisibilityChange);
+    
     return () => {
-      window.removeEventListener('beforeunload', saveBeforeUnload);
-      window.removeEventListener('pagehide', saveBeforeUnload);
+      // Save on component unmount (client-side navigation)
+      saveBlocksNow();
+      window.removeEventListener('beforeunload', saveBlocksNow);
+      window.removeEventListener('pagehide', saveBlocksNow);
+      document.removeEventListener('visibilitychange', handleVisibilityChange);
     };
-  }, [blocks]);
+  }, [saveBlocksNow]);
   
   useEffect(() => { try { if (typeof window !== 'undefined') window.localStorage.setItem(LS_WEEK_START, ymd(weekStart)); } catch {} try { void fetch('/api/settings', { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ weekPlanWeekStartYmd: ymd(weekStart) }) }); } catch {} }, [weekStart]);
   useEffect(() => { try { void fetch('/api/settings', { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ availabilityTemplateV1: availability }) }); } catch {} }, [availability]);

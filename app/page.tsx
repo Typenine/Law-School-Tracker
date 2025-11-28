@@ -409,8 +409,16 @@ export default function TodayPage() {
           const bj = await schRes.json().catch(() => ({ blocks: [] }));
           const remote = Array.isArray(bj?.blocks) ? bj.blocks : [];
           const local = (() => { try { const raw = window.localStorage.getItem(LS_SCHEDULE); return raw ? JSON.parse(raw) : []; } catch { return []; } })();
-          if (remote.length > 0) setSchedule(remote as any);
-          else if (local.length > 0) { try { await fetch('/api/schedule', { method:'PUT', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ blocks: local }) }); } catch {} }
+          if (remote.length > 0) {
+            setSchedule(remote as any);
+          } else if (local.length > 0) {
+            setSchedule(local as any);
+            try { await fetch('/api/schedule', { method:'PUT', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ blocks: local }) }); } catch {}
+          }
+          setScheduleLoaded(true);
+        } else {
+          // Even if API fails, mark as loaded so we can use localStorage data
+          setScheduleLoaded(true);
         }
       } catch {}
     })();
@@ -629,9 +637,14 @@ export default function TodayPage() {
     return arr;
   }, [backlog]);
 
+  // Track if schedule has been loaded from server
+  const [scheduleLoaded, setScheduleLoaded] = useState(false);
+  
   // Sync plan with schedule - add any missing scheduled items
+  // Only run after schedule is loaded to avoid race conditions
   useEffect(() => {
-    if (todaysBlocks.length === 0 || plan.locked) return;
+    if (!scheduleLoaded || plan.locked) return;
+    if (todaysBlocks.length === 0) return;
     
     // Find scheduled blocks not in current plan
     const existingIds = new Set(plan.items.map(it => it.id));
@@ -648,7 +661,7 @@ export default function TodayPage() {
       setPlan(p => ({ ...p, items: [...p.items, ...newItems] }));
       if (plan.items.length === 0) setStep(2);
     }
-  }, [todaysBlocks, plan.locked, dateKey]);
+  }, [todaysBlocks, plan.locked, dateKey, scheduleLoaded]);
 
   // Manual refresh from schedule
   function syncFromSchedule() {

@@ -93,6 +93,50 @@ input, textarea, select {
   color: var(--text);
 }
 
+/* Light mode specific overrides */
+.light table {
+  color: var(--text);
+}
+.light th {
+  color: var(--muted);
+}
+.light td {
+  color: var(--text);
+  border-color: var(--card-border);
+}
+.light .border-\[\#1b2344\] {
+  border-color: var(--card-border) !important;
+}
+.light .bg-\[\#0b1020\] {
+  background-color: var(--input-bg) !important;
+}
+.light .bg-\[\#11162b\] {
+  background-color: var(--card) !important;
+}
+.light .text-slate-300\/60,
+.light .text-slate-300\/70,
+.light .text-slate-300\/80,
+.light .text-slate-400,
+.light .text-slate-500 {
+  color: var(--muted) !important;
+}
+.light .text-slate-200 {
+  color: var(--text) !important;
+}
+.light .hover\:bg-\[\#1b2344\]:hover {
+  background-color: var(--hover-bg) !important;
+}
+.light .hover\:bg-white\/5:hover {
+  background-color: var(--hover-bg) !important;
+}
+.light button {
+  color: var(--text);
+}
+.light .card, .light [class*="card"] {
+  background-color: var(--card);
+  border-color: var(--card-border);
+}
+
 /* Mobile responsiveness */
 @media (max-width: 640px) {
   .app-container {

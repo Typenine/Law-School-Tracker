@@ -275,49 +275,60 @@ export default function CoursesPage() {
                     </td>
                     <td className="py-2 pr-4 whitespace-nowrap align-top">
                       {(() => {
-                        const learned = (c as any).learnedMpp as number | null | undefined;
-                        const sample = (c as any).learnedSample as number | null | undefined;
-                        const updated = (c as any).learnedUpdatedAt as string | null | undefined;
-                        const overEn = (c as any).overrideEnabled as boolean | null | undefined;
-                        const overVal = (c as any).overrideMpp as number | null | undefined;
-                        const last10 = last10AvgMppForCourse(c.title);
-                        const eff = (overEn && typeof overVal==='number' && overVal>0) ? clamp(overVal,0.5,6.0) : (typeof learned==='number'?clamp(learned,0.5,6.0):null);
-                        const fmt = (n: number|null|undefined) => (typeof n==='number' ? (Math.round(n*100)/100).toFixed(2) : '—');
+                        // Calculate stats for this course
+                        const courseTitle = c.title;
+                        const courseSessions = (sessions || []).filter(s => {
+                          const task = s.taskId ? tasks.find((t: any) => t.id === s.taskId) : null;
+                          const sCourse = task?.course || extractCourseFromNotes(s.notes) || '';
+                          return sCourse.toLowerCase() === courseTitle.toLowerCase();
+                        });
+                        
+                        const totalMinutes = courseSessions.reduce((sum: number, s: any) => sum + (Number(s.minutes) || 0), 0);
+                        const totalPages = courseSessions.reduce((sum: number, s: any) => sum + (Number(s.pagesRead) || 0), 0);
+                        const timePerPage = totalPages > 0 ? totalMinutes / totalPages : 0;
+                        
+                        // Average focus (only count sessions with valid focus values)
+                        const sessionsWithFocus = courseSessions.filter((s: any) => typeof s.focus === 'number' && s.focus > 0);
+                        const avgFocus = sessionsWithFocus.length > 0 
+                          ? sessionsWithFocus.reduce((sum: number, s: any) => sum + Number(s.focus), 0) / sessionsWithFocus.length 
+                          : 0;
+                        
+                        // Time this week
+                        const weekSessions = courseSessions.filter((s: any) => weekKeys.includes(chicagoYmd(new Date(s.when))));
+                        const weekMinutes = weekSessions.reduce((sum: number, s: any) => sum + (Number(s.minutes) || 0), 0);
+                        
+                        const fmtTime = (mins: number) => {
+                          const h = Math.floor(mins / 60);
+                          const m = Math.round(mins % 60);
+                          return h > 0 ? `${h}h ${m}m` : `${m}m`;
+                        };
+                        
+                        // Focus color based on value
+                        const focusColor = avgFocus >= 8 ? 'text-emerald-400' : avgFocus >= 6 ? 'text-blue-400' : avgFocus >= 4 ? 'text-amber-400' : 'text-rose-400';
+                        
                         return (
                           <div className="space-y-1 text-xs">
-                            <div>Learned mpp: <span className="text-slate-200">{fmt(learned)}</span>{typeof sample==='number'?` (n=${sample})`:''}</div>
-                            <div>Last-10 avg: <span className="text-slate-200">{fmt(last10.avg)}</span>{last10.n?` (n=${last10.n})`:''}</div>
-                            <div>Effective: <span className="text-slate-200">{fmt(eff)}</span>{updated?` · updated ${new Date(updated).toLocaleDateString()}`:''}</div>
-                            <div className="flex items-center gap-2 mt-1">
-                              <label className="inline-flex items-center gap-1">
-                                <input type="checkbox" checked={!!overEn} onChange={async (e) => {
-                                  const body = { overrideEnabled: e.target.checked } as any;
-                                  const res = await fetch(`/api/courses/${c.id}`, { method:'PATCH', headers:{'Content-Type':'application/json'}, body: JSON.stringify(body) });
-                                  if (res.ok) {
-                                    const { course } = await res.json();
-                                    setCourses(prev => {
-                                      const next = prev.map(x => x.id===c.id ? course : x);
-                                      saveCourseMppMap(next);
-                                      return next;
-                                    });
-                                  }
-                                }} />
-                                <span>Manual override</span>
-                              </label>
-                              <input type="number" step={0.1} min={0.5} max={6.0} defaultValue={typeof overVal==='number' ? overVal : ''} placeholder="mpp" className="w-20 bg-[#0b1020] border border-[#1b2344] rounded px-1 py-0.5"
-                                onBlur={async (e) => {
-                                  const v = e.currentTarget.value ? parseFloat(e.currentTarget.value) : null;
-                                  const body = { overrideMpp: (v && isFinite(v)) ? clamp(v,0.5,6.0) : null } as any;
-                                  const res = await fetch(`/api/courses/${c.id}`, { method:'PATCH', headers:{'Content-Type':'application/json'}, body: JSON.stringify(body) });
-                                  if (res.ok) {
-                                    const { course } = await res.json();
-                                    setCourses(prev => {
-                                      const next = prev.map(x => x.id===c.id ? course : x);
-                                      saveCourseMppMap(next);
-                                      return next;
-                                    });
-                                  }
-                                }} />
+                            <div className="flex justify-between gap-4">
+                              <span className="text-slate-400">Time/Page:</span>
+                              <span className="font-medium">{timePerPage > 0 ? `${timePerPage.toFixed(1)} min` : '—'}</span>
+                            </div>
+                            <div className="flex justify-between gap-4">
+                              <span className="text-slate-400">This Week:</span>
+                              <span className="font-medium">{weekMinutes > 0 ? fmtTime(weekMinutes) : '—'}</span>
+                            </div>
+                            <div className="flex justify-between gap-4">
+                              <span className="text-slate-400">Total Time:</span>
+                              <span className="font-medium">{totalMinutes > 0 ? fmtTime(totalMinutes) : '—'}</span>
+                            </div>
+                            <div className="flex justify-between gap-4">
+                              <span className="text-slate-400">Total Pages:</span>
+                              <span className="font-medium">{totalPages > 0 ? totalPages : '—'}</span>
+                            </div>
+                            <div className="flex justify-between gap-4">
+                              <span className="text-slate-400">Avg Focus:</span>
+                              <span className={`font-medium ${avgFocus > 0 ? focusColor : ''}`}>
+                                {avgFocus > 0 ? `${avgFocus.toFixed(1)}/10` : '—'}
+                              </span>
                             </div>
                           </div>
                         );
