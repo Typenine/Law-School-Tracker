@@ -5,6 +5,7 @@ import { courseColorClass } from '@/lib/colors';
 import AddCourseWizard from '@/components/AddCourseWizard';
 import TaskBacklogEntry from '@/components/TaskBacklogEntry';
 import EditCourseModal from '@/components/EditCourseModal';
+import { getSessionCourse, normCourseKey, buildTasksById, extractCourseFromNotes } from '@/lib/courseMatching';
 
 export const dynamic = 'force-dynamic';
 
@@ -25,46 +26,6 @@ function mondayOfChicago(d: Date): Date { const ymd = chicagoYmd(d); const [yy,m
 function weekKeysChicago(d: Date): string[] { const monday = mondayOfChicago(d); return Array.from({length:7},(_,i)=>{const x=new Date(monday); x.setDate(x.getDate()+i); return chicagoYmd(x);}); }
 function loadGoals(): WeeklyGoal[] { if (typeof window==='undefined') return []; try { const raw=window.localStorage.getItem(LS_GOALS); const arr=raw?JSON.parse(raw):[]; return Array.isArray(arr)?arr:[]; } catch { return []; } }
 function saveGoals(goals: WeeklyGoal[]) { if (typeof window!=='undefined') window.localStorage.setItem(LS_GOALS, JSON.stringify(goals)); }
-function extractCourseFromNotes(notes?: string | null): string {
-  if (!notes) return '';
-  const m = notes.match(/^\s*\[([^\]]+)\]/);
-  return m ? m[1].trim() : '';
-}
-
-// Normalize course name for matching (same as log page)
-function normCourseKey(name?: string | null): string {
-  let x = (name || '').toString().toLowerCase().trim();
-  if (!x) return '';
-  x = x.replace(/&/g, 'and');
-  x = x.replace(/[^a-z0-9]+/g, ' ').trim().replace(/\s+/g, ' ');
-  if (/\blaw$/.test(x)) x = x.replace(/\s*law$/, '');
-  return x;
-}
-
-// Get course name from a session (same logic as log page)
-function getSessionCourse(session: any, tasksById: Map<string, any>): string {
-  let course = '';
-  // First try to get from linked task
-  if (session.taskId && tasksById.has(session.taskId)) {
-    course = tasksById.get(session.taskId)?.course || '';
-  }
-  // If no task course, check activity or notes
-  if (!course) {
-    const act = (session.activity || '').toLowerCase();
-    if (act === 'internship') {
-      course = 'Internship';
-    } else {
-      course = extractCourseFromNotes(session.notes);
-    }
-  }
-  // Special handling for sports law review
-  const courseL = (course || '').toLowerCase();
-  const notesL = (session.notes || '').toLowerCase();
-  if (courseL.includes('sports law review') || /\bslr\b/i.test(session.notes || '')) {
-    course = 'Sports Law Review';
-  }
-  return course;
-}
 
 export default function CoursesPage() {
   const [courses, setCourses] = useState<Course[]>([]);
