@@ -382,15 +382,12 @@ export default function ImportCsvPage() {
           continue; 
         }
         const p = res as Parsed;
-        // Subtract internship minutes from main entry to avoid double-counting
-        const mainMinutes = Math.max(0, (p.minutes || 0) - (hoursIncludeIntern ? (p.internshipMinutes || 0) : 0));
-        const entries: Array<Parsed & { _minutes: number; _course: string; _taskType: string } > = [
-          { ...p, _minutes: mainMinutes, _course: p.course, _taskType: p.taskType },
-        ];
-        if (p.internshipMinutes > 0) {
-          entries.push({ ...p, _minutes: p.internshipMinutes, _course: 'Internship', _taskType: 'Internship' });
-        }
-        for (const e of entries) {
+        // Just use the hours as-is - one session per row
+        const sessionMinutes = p.minutes || 0;
+        if (sessionMinutes <= 0) { invalid++; continue; }
+        
+        const e = { ...p, _minutes: sessionMinutes, _course: p.course, _taskType: p.taskType };
+        {
           // Dedup key ignores notes; minutes rounded
           const key = `${e.whenISO.slice(0,10)}|${e._course}|${Math.round(e._minutes)}|${e.focus ?? ''}|${e.pagesRead}|${e.outlinePages}|${e.practiceQs}|${e._taskType}`;
           const h = await sha1Hex(key);
