@@ -5,7 +5,7 @@ import { courseColorClass } from '@/lib/colors';
 import AddCourseWizard from '@/components/AddCourseWizard';
 import TaskBacklogEntry from '@/components/TaskBacklogEntry';
 import EditCourseModal from '@/components/EditCourseModal';
-import { getSessionCourse, normCourseKey, buildTasksById, extractCourseFromNotes } from '@/lib/courseMatching';
+import { extractCourseFromNotes } from '@/lib/courseMatching';
 
 export const dynamic = 'force-dynamic';
 
@@ -26,6 +26,7 @@ function mondayOfChicago(d: Date): Date { const ymd = chicagoYmd(d); const [yy,m
 function weekKeysChicago(d: Date): string[] { const monday = mondayOfChicago(d); return Array.from({length:7},(_,i)=>{const x=new Date(monday); x.setDate(x.getDate()+i); return chicagoYmd(x);}); }
 function loadGoals(): WeeklyGoal[] { if (typeof window==='undefined') return []; try { const raw=window.localStorage.getItem(LS_GOALS); const arr=raw?JSON.parse(raw):[]; return Array.isArray(arr)?arr:[]; } catch { return []; } }
 function saveGoals(goals: WeeklyGoal[]) { if (typeof window!=='undefined') window.localStorage.setItem(LS_GOALS, JSON.stringify(goals)); }
+function normCourseKey(s: string): string { return (s || '').toLowerCase().trim().replace(/advanced/g, 'advance').replace(/&/g, 'and').replace(/[^a-z0-9]+/g, ' ').trim(); }
 
 export default function CoursesPage() {
   const [courses, setCourses] = useState<Course[]>([]);
@@ -120,14 +121,35 @@ export default function CoursesPage() {
     const m = new Map<string, number>();
     const tasksById = new Map<string, any>();
     for (const t of (tasks||[])) if (t && t.id) tasksById.set(t.id, t);
+    
+    // Derive course - same logic as Log page
+    function deriveCourse(s: any): string {
+      let course = '';
+      if (s.taskId && tasksById.has(s.taskId)) course = tasksById.get(s.taskId)?.course || '';
+      if (!course) {
+        const act = (s.activity || '').toLowerCase();
+        if (act === 'internship') course = 'Internship';
+        else course = extractCourseFromNotes(s.notes);
+      }
+      const courseL = (course || '').toLowerCase();
+      const notesL = (s.notes || '').toLowerCase();
+      if (courseL.includes('sports law review') || courseL.includes('law journal') || /\bslr\b/i.test(s.notes || '') || notesL.includes('law journal')) {
+        course = 'Sports Law Review';
+      }
+      return course || '';
+    }
+    
+    // Normalize for matching
+    function norm(s: string): string {
+      return s.toLowerCase().trim().replace(/advanced/g, 'advance').replace(/&/g, 'and').replace(/[^a-z0-9]+/g, ' ').trim();
+    }
+    
     for (const s of (sessions||[])) {
       const k = chicagoYmd(new Date(s.when));
       if (!weekKeys.includes(k)) continue;
-      // Use same course extraction as Stats column for consistency
-      const course = getSessionCourse(s, tasksById);
+      const course = deriveCourse(s);
       if (!course) continue;
-      // Use normalized key for lookup consistency
-      const courseKey = normCourseKey(course);
+      const courseKey = norm(course);
       if (!courseKey) continue;
       m.set(courseKey, (m.get(courseKey)||0) + (s.minutes||0));
     }
@@ -273,46 +295,45 @@ export default function CoursesPage() {
                     </td>
                     <td className="py-2 pr-4 whitespace-nowrap align-top">
                       {(() => {
-                        // Build tasks lookup map
+                        // Use EXACT same logic as Log page to derive course for each session
                         const tasksById = new Map<string, any>();
                         for (const t of tasks) if (t && t.id) tasksById.set(t.id, t);
                         
-                        // Get all variations of this course name for matching
-                        const courseTitle = (c.title || '').trim();
-                        const courseCode = (c.code || '').trim();
-                        const courseKey = normCourseKey(courseTitle);
-                        const codeKey = normCourseKey(courseCode);
+                        // Derive course for a session - SAME as Log page
+                        function deriveSessionCourse(s: any): string {
+                          let course = '';
+                          if (s.taskId && tasksById.has(s.taskId)) course = tasksById.get(s.taskId)?.course || '';
+                          if (!course) {
+                            const act = (s.activity || '').toLowerCase();
+                            if (act === 'internship') course = 'Internship';
+                            else course = extractCourseFromNotes(s.notes);
+                          }
+                          // Special mappings
+                          const courseL = (course || '').toLowerCase();
+                          const notesL = (s.notes || '').toLowerCase();
+                          if (courseL.includes('sports law review') || courseL.includes('law journal') || /\bslr\b/i.test(s.notes || '') || notesL.includes('law journal')) {
+                            course = 'Sports Law Review';
+                          }
+                          return course || '';
+                        }
                         
-                        // Also get initials (e.g., "Advance Legal Research" -> "alr")
-                        const initials = courseTitle.split(/\s+/).map(w => w[0]?.toLowerCase() || '').join('');
+                        // Normalize for comparison (handle "Advanced" vs "Advance", etc)
+                        function norm(s: string): string {
+                          return s.toLowerCase().trim()
+                            .replace(/advanced/g, 'advance')
+                            .replace(/&/g, 'and')
+                            .replace(/[^a-z0-9]+/g, ' ')
+                            .trim();
+                        }
                         
-                        // Match sessions - check multiple ways
+                        const courseTitle = norm(c.title || '');
+                        const courseCode = norm(c.code || '');
+                        
                         const courseSessions = (sessions || []).filter(s => {
-                          // Get course name from session (via task or notes)
-                          const sessionCourse = getSessionCourse(s, tasksById);
-                          const sessionKey = normCourseKey(sessionCourse);
-                          
-                          if (!sessionKey || sessionKey === 'unassigned') return false;
-                          
-                          // Exact matches
-                          if (sessionKey === courseKey) return true;
-                          if (codeKey && sessionKey === codeKey) return true;
-                          if (initials && sessionKey === initials) return true;
-                          
-                          // Partial matches (one contains the other)
-                          if (sessionKey && courseKey) {
-                            if (sessionKey.includes(courseKey) || courseKey.includes(sessionKey)) return true;
-                          }
-                          if (codeKey && sessionKey.includes(codeKey)) return true;
-                          
-                          // Also check if session was logged directly to this course (task.course matches)
-                          if (s.taskId && tasksById.has(s.taskId)) {
-                            const task = tasksById.get(s.taskId);
-                            const taskCourseKey = normCourseKey(task?.course);
-                            if (taskCourseKey === courseKey || taskCourseKey === codeKey) return true;
-                          }
-                          
-                          return false;
+                          const derived = norm(deriveSessionCourse(s));
+                          if (!derived) return false;
+                          // Match: normalized derived equals normalized title or code
+                          return derived === courseTitle || (courseCode && derived === courseCode);
                         });
                         
                         const totalMinutes = courseSessions.reduce((sum: number, s: any) => sum + (Number(s.minutes) || 0), 0);
