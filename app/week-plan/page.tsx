@@ -129,6 +129,7 @@ export default function WeekPlanPage() {
   const [undoSnapshot, setUndoSnapshot] = useState<ScheduledBlock[] | null>(null);
   const [showCatchup, setShowCatchup] = useState(false);
   const [settingsReady, setSettingsReady] = useState<boolean>(false);
+  const [blocksLoaded, setBlocksLoaded] = useState<boolean>(false);
   const [catchupPreview, setCatchupPreview] = useState<{
     days: Array<{ day: string; total: number; usedBefore: number; usedAfter: number; items: Array<{ taskId: string; title: string; course: string; minutes: number; guessed: boolean }> }>;
     unschedulable: Array<{ taskId: string; title: string; remaining: number; dueYmd: string }>;
@@ -206,22 +207,32 @@ export default function WeekPlanPage() {
             }
           }
         }
-      } catch {}
+        // Mark blocks as loaded AFTER all loading logic is complete
+        setBlocksLoaded(true);
+      } catch {
+        // Even if loading fails, mark as loaded so user changes can still be saved
+        setBlocksLoaded(true);
+      }
     })();
     return () => { canceled = true; };
   }, []);
   // Persist changes locally and to server
+  // IMPORTANT: Only save blocks after initial load is complete to avoid overwriting with empty array
   useEffect(() => { saveAvailability(availability); }, [availability]);
-  useEffect(() => { saveSchedule(blocks); }, [blocks]);
+  useEffect(() => { 
+    if (!blocksLoaded) return; // Don't save until initial load is complete
+    saveSchedule(blocks); 
+  }, [blocks, blocksLoaded]);
   // Debounced server save for blocks (persist to API only)
   useEffect(() => {
+    if (!blocksLoaded) return; // Don't save until initial load is complete
     const id = setTimeout(() => {
       try {
         void fetch('/api/schedule', { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ blocks }) });
       } catch {}
     }, 400);
     return () => clearTimeout(id);
-  }, [blocks]);
+  }, [blocks, blocksLoaded]);
   
   // Keep a ref to blocks for use in cleanup/unload handlers
   const blocksRef = useRef(blocks);

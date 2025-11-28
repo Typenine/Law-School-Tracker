@@ -31,6 +31,41 @@ function extractCourseFromNotes(notes?: string | null): string {
   return m ? m[1].trim() : '';
 }
 
+// Normalize course name for matching (same as log page)
+function normCourseKey(name?: string | null): string {
+  let x = (name || '').toString().toLowerCase().trim();
+  if (!x) return '';
+  x = x.replace(/&/g, 'and');
+  x = x.replace(/[^a-z0-9]+/g, ' ').trim().replace(/\s+/g, ' ');
+  if (/\blaw$/.test(x)) x = x.replace(/\s*law$/, '');
+  return x;
+}
+
+// Get course name from a session (same logic as log page)
+function getSessionCourse(session: any, tasksById: Map<string, any>): string {
+  let course = '';
+  // First try to get from linked task
+  if (session.taskId && tasksById.has(session.taskId)) {
+    course = tasksById.get(session.taskId)?.course || '';
+  }
+  // If no task course, check activity or notes
+  if (!course) {
+    const act = (session.activity || '').toLowerCase();
+    if (act === 'internship') {
+      course = 'Internship';
+    } else {
+      course = extractCourseFromNotes(session.notes);
+    }
+  }
+  // Special handling for sports law review
+  const courseL = (course || '').toLowerCase();
+  const notesL = (session.notes || '').toLowerCase();
+  if (courseL.includes('sports law review') || /\bslr\b/i.test(session.notes || '')) {
+    course = 'Sports Law Review';
+  }
+  return course;
+}
+
 export default function CoursesPage() {
   const [courses, setCourses] = useState<Course[]>([]);
   const [loading, setLoading] = useState(true);
@@ -118,20 +153,22 @@ export default function CoursesPage() {
     });
   }, [courses, yearFilter, semFilter]);
 
-  // Per-course logged minutes this week
+  // Per-course logged minutes this week (uses normalized keys for consistent matching)
   const weekKeys = useMemo(() => weekKeysChicago(new Date()), []);
-  const minutesByCourse = useMemo(() => {
+  const minutesByCourseKey = useMemo(() => {
     const m = new Map<string, number>();
     const tasksById = new Map<string, any>();
     for (const t of (tasks||[])) if (t && t.id) tasksById.set(t.id, t);
     for (const s of (sessions||[])) {
       const k = chicagoYmd(new Date(s.when));
       if (!weekKeys.includes(k)) continue;
-      let course = '';
-      if (s.taskId && tasksById.has(s.taskId)) course = tasksById.get(s.taskId)?.course || '';
-      if (!course) course = extractCourseFromNotes(s.notes);
+      // Use same course extraction as Stats column for consistency
+      const course = getSessionCourse(s, tasksById);
       if (!course) continue;
-      m.set(course, (m.get(course)||0) + (s.minutes||0));
+      // Use normalized key for lookup consistency
+      const courseKey = normCourseKey(course);
+      if (!courseKey) continue;
+      m.set(courseKey, (m.get(courseKey)||0) + (s.minutes||0));
     }
     return m;
   }, [sessions, tasks, weekKeys]);
@@ -233,7 +270,7 @@ export default function CoursesPage() {
                       ? [{ days: c.meetingDays, start: c.meetingStart, end: c.meetingEnd, location: c.room || c.location || null }]
                       : []);
                 const goalMin = goals.find(g => g.scope==='course' && (g.course||'')===c.title)?.weeklyMinutes || 0;
-                const loggedMin = minutesByCourse.get(c.title) || 0;
+                const loggedMin = minutesByCourseKey.get(normCourseKey(c.title)) || 0;
                 const pct = goalMin>0 ? Math.min(1, loggedMin/goalMin) : 0;
                 return (
                   <tr key={c.id} className="border-t border-[#1b2344]">
@@ -275,32 +312,24 @@ export default function CoursesPage() {
                     </td>
                     <td className="py-2 pr-4 whitespace-nowrap align-top">
                       {(() => {
-                        // Calculate stats for this course
-                        const courseTitle = c.title;
-                        const courseCode = c.code || '';
-                        const courseLower = courseTitle.toLowerCase().trim();
-                        const codeLower = courseCode.toLowerCase().trim();
+                        // Build tasks lookup map
+                        const tasksById = new Map<string, any>();
+                        for (const t of tasks) if (t && t.id) tasksById.set(t.id, t);
                         
-                        // Match sessions by multiple criteria
+                        // Calculate stats for this course using normalized matching
+                        const courseKey = normCourseKey(c.title);
+                        const codeKey = normCourseKey(c.code);
+                        
+                        // Match sessions using same logic as log page
                         const courseSessions = (sessions || []).filter(s => {
-                          // Check task's course field
-                          const task = s.taskId ? tasks.find((t: any) => t.id === s.taskId) : null;
-                          const taskCourse = (task?.course || '').toLowerCase().trim();
+                          const sessionCourse = getSessionCourse(s, tasksById);
+                          const sessionKey = normCourseKey(sessionCourse);
                           
-                          // Check session's direct course field (if exists)
-                          const sessionCourse = (s.course || '').toLowerCase().trim();
-                          
-                          // Check notes for [CourseName] pattern
-                          const notesCourse = extractCourseFromNotes(s.notes).toLowerCase().trim();
-                          
-                          // Match if any source matches course title or code
-                          const sources = [taskCourse, sessionCourse, notesCourse].filter(Boolean);
-                          return sources.some(src => 
-                            src === courseLower || 
-                            src === codeLower ||
-                            src.includes(courseLower) ||
-                            courseLower.includes(src) ||
-                            (codeLower && (src === codeLower || src.includes(codeLower)))
+                          // Match if normalized keys match or one contains the other
+                          return (
+                            sessionKey === courseKey ||
+                            (codeKey && sessionKey === codeKey) ||
+                            (sessionKey && courseKey && (sessionKey.includes(courseKey) || courseKey.includes(sessionKey)))
                           );
                         });
                         
