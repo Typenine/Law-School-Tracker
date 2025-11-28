@@ -11,6 +11,8 @@ export function normCourseKey(name?: string | null): string {
   x = x.replace(/[^a-z0-9]+/g, ' ').trim().replace(/\s+/g, ' ');
   // Remove trailing "law" for matching (e.g., "criminal law" -> "criminal")
   if (/\blaw$/.test(x)) x = x.replace(/\s*law$/, '');
+  // Normalize "advanced" -> "advance" for matching typos
+  x = x.replace(/\badvanced\b/g, 'advance');
   return x;
 }
 

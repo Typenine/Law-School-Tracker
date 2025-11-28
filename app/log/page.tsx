@@ -29,6 +29,7 @@ function normCourseKey(name?: string | null): string {
   x = x.replace(/&/g, 'and');
   x = x.replace(/[^a-z0-9]+/g, ' ').trim().replace(/\s+/g, ' ');
   if (/\blaw$/.test(x)) x = x.replace(/\s*law$/, '');
+  x = x.replace(/\badvanced\b/g, 'advance');
   return x;
 }
 function activityLabel(a?: string | null): string {

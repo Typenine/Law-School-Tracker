@@ -66,6 +66,7 @@ function normCourseKey(name?: string | null): string {
   x = x.replace(/&/g, 'and');
   x = x.replace(/[^a-z0-9]+/g, ' ').trim().replace(/\s+/g, ' ');
   if (/\blaw$/.test(x)) x = x.replace(/\s*law$/, '');
+  x = x.replace(/\badvanced\b/g, 'advance');
   return x;
 }
 
@@ -73,7 +74,7 @@ export default function TaskTable() {
   const [tasks, setTasks] = useState<Task[]>([]);
   const [courses, setCourses] = useState<Course[]>([]);
   const [loading, setLoading] = useState(true);
-  const [statusFilter, setStatusFilter] = useState<'all' | 'todo' | 'done'>('all');
+  const [statusFilter, setStatusFilter] = useState<'all' | 'todo' | 'done'>('todo');
   const [courseFilter, setCourseFilter] = useState('');
   const [editingId, setEditingId] = useState<string | null>(null);
   const [editTitle, setEditTitle] = useState('');
