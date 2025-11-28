@@ -144,7 +144,7 @@ export default function ImportCsvPage() {
   const [preview, setPreview] = useState<PreviewRow[]>([]);
   const [dedup, setDedup] = useState<Set<string>>(new Set());
   const [status, setStatus] = useState<string>("");
-  const [summary, setSummary] = useState<{ imported: number; duplicates: number; invalid: number } | null>(null);
+  const [summary, setSummary] = useState<{ imported: number; duplicates: number; invalid: number; tasksMarkedDone?: number } | null>(null);
   const [units, setUnits] = useState<'hours'|'minutes'>(() => (typeof window!=='undefined' ? ((window.localStorage.getItem('importUnits') as any)||'hours') : 'hours'));
   const [hoursIncludeIntern, setHoursIncludeIntern] = useState<boolean>(() => (typeof window!=='undefined' ? ((window.localStorage.getItem('importHoursIncludeIntern')||'true')==='true') : true));
 
@@ -293,17 +293,52 @@ export default function ImportCsvPage() {
     setPreview(out);
   }
 
+  // Normalize course name for matching
+  function normCourse(name?: string | null): string {
+    let x = (name || '').toString().toLowerCase().trim();
+    if (!x) return '';
+    x = x.replace(/&/g, 'and');
+    x = x.replace(/[^a-z0-9]+/g, ' ').trim().replace(/\s+/g, ' ');
+    if (/\blaw$/.test(x)) x = x.replace(/\s*law$/, '');
+    x = x.replace(/\badvanced\b/g, 'advance');
+    // Map law journal to sports law review
+    if (x.includes('law journal')) x = 'sports law review';
+    return x;
+  }
+
   async function importRows(mode: 'append' | 'replace') {
     if (!rows.length) return;
     setStatus(mode === 'replace' ? 'Resetting sessions…' : 'Importing…');
     setSummary(null);
     try {
-      let imported = 0, duplicates = 0, invalid = 0;
+      let imported = 0, duplicates = 0, invalid = 0, tasksMarkedDone = 0;
+      
+      // Fetch existing incomplete tasks to match against
+      const tasksRes = await fetch('/api/tasks', { cache: 'no-store' });
+      const tasksData = tasksRes.ok ? await tasksRes.json() : { tasks: [] };
+      const incompleteTasks: any[] = (tasksData.tasks || []).filter((t: any) => t.status !== 'done');
+      
+      // Build lookup: course -> tasks by due date
+      const tasksByCourseDate = new Map<string, any[]>();
+      for (const t of incompleteTasks) {
+        const courseKey = normCourse(t.course);
+        const dueDate = t.due ? t.due.slice(0, 10) : '';
+        if (courseKey && dueDate) {
+          const key = `${courseKey}|${dueDate}`;
+          if (!tasksByCourseDate.has(key)) tasksByCourseDate.set(key, []);
+          tasksByCourseDate.get(key)!.push(t);
+        }
+      }
+      
+      // Track which tasks we've already marked done
+      const markedTaskIds = new Set<string>();
+      
       if (mode === 'replace') {
         const r = await fetch('/api/sessions/reset', { method: 'POST' });
         if (!r.ok) throw new Error('Failed to reset sessions');
         setDedup(new Set());
       }
+      
       for (let i = 0; i < rows.length; i++) {
         const vals = rows[i];
         const res = coerceParsed(vals, mapping, units);
@@ -322,6 +357,22 @@ export default function ImportCsvPage() {
           const key = `${e.whenISO.slice(0,10)}|${e._course}|${Math.round(e._minutes)}|${e.focus ?? ''}|${e.pagesRead}|${e.outlinePages}|${e.practiceQs}|${e._taskType}`;
           const h = await sha1Hex(key);
           if (dedup.has(h)) { duplicates++; continue; }
+          
+          // Find matching task to link and mark as done
+          const sessionDate = e.whenISO.slice(0, 10);
+          const courseKey = normCourse(e._course);
+          const matchKey = `${courseKey}|${sessionDate}`;
+          const matchingTasks = tasksByCourseDate.get(matchKey) || [];
+          let matchedTask: any = null;
+          
+          // Find first unmatched task for this course+date
+          for (const t of matchingTasks) {
+            if (!markedTaskIds.has(t.id)) {
+              matchedTask = t;
+              break;
+            }
+          }
+          
           const body: any = {
             when: e.whenISO,
             minutes: e._minutes,
@@ -331,6 +382,7 @@ export default function ImportCsvPage() {
             outlinePages: e.outlinePages || null,
             practiceQs: e.practiceQs || null,
             activity: toActivity(e._taskType),
+            taskId: matchedTask?.id || null,
           };
           if (e._course) {
             body.notes = body.notes ? `[${e._course}] ${body.notes}` : `[${e._course}]`;
@@ -339,12 +391,25 @@ export default function ImportCsvPage() {
           if (resp.ok) {
             imported++;
             setDedup(prev => new Set(prev).add(h));
+            
+            // Mark matched task as done
+            if (matchedTask && !markedTaskIds.has(matchedTask.id)) {
+              markedTaskIds.add(matchedTask.id);
+              try {
+                await fetch(`/api/tasks/${matchedTask.id}`, {
+                  method: 'PATCH',
+                  headers: { 'Content-Type': 'application/json' },
+                  body: JSON.stringify({ status: 'done', actualMinutes: e._minutes }),
+                });
+                tasksMarkedDone++;
+              } catch {}
+            }
           } else {
             invalid++;
           }
         }
       }
-      setSummary({ imported, duplicates, invalid });
+      setSummary({ imported, duplicates, invalid, tasksMarkedDone });
       setStatus('Done.');
     } catch (e: any) {
       setStatus(`Import failed: ${e?.message || e}`);
@@ -529,7 +594,12 @@ export default function ImportCsvPage() {
           </div>
           {status && <div className="text-xs text-slate-300/70">{status}</div>}
           {summary && (
-            <div className="text-xs text-slate-300/70">Imported: {summary.imported} · Duplicates: {summary.duplicates} · Invalid: {summary.invalid}</div>
+            <div className="text-xs text-slate-300/70">
+              Imported: {summary.imported} · Duplicates: {summary.duplicates} · Invalid: {summary.invalid}
+              {summary.tasksMarkedDone !== undefined && summary.tasksMarkedDone > 0 && (
+                <span className="text-emerald-400"> · Tasks marked done: {summary.tasksMarkedDone}</span>
+              )}
+            </div>
           )}
         </section>
       )}

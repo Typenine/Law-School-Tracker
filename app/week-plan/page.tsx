@@ -257,12 +257,23 @@ export default function WeekPlanPage() {
     if (!blocksLoaded) return;
     const id = setTimeout(() => {
       console.log('[WeekPlan] Debounced API save:', blocks.length, 'blocks');
+      // Save to schedule API
       fetch('/api/schedule', { 
         method: 'PUT', 
         headers: { 'Content-Type': 'application/json' }, 
         body: JSON.stringify({ blocks }),
-        keepalive: true // Ensure request completes even during navigation
+        keepalive: true
       }).catch(e => console.error('[WeekPlan] API save failed:', e));
+      
+      // Also save to settings as backup (survives database resets)
+      if (blocks.length > 0) {
+        fetch('/api/settings', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ key: 'weekScheduleV1', value: blocks }),
+          keepalive: true
+        }).catch(() => {});
+      }
     }, 300);
     return () => clearTimeout(id);
   }, [blocks, blocksLoaded]);
