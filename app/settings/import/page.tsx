@@ -318,15 +318,40 @@ export default function ImportCsvPage() {
       const tasksData = tasksRes.ok ? await tasksRes.json() : { tasks: [] };
       const incompleteTasks: any[] = (tasksData.tasks || []).filter((t: any) => t.status !== 'done');
       
-      // Build lookup: course -> tasks by due date
-      const tasksByCourseDate = new Map<string, any[]>();
+      // Extract page numbers from a string like "pp. 1-19" or "pp 42-58" or "70-108"
+      function extractPages(s: string): number[] {
+        if (!s) return [];
+        const pages: number[] = [];
+        // Match patterns like "pp. 1-19", "pp 42-58", "1-19", "p. 5"
+        const matches = s.matchAll(/(?:pp?\.?\s*)?(\d+)(?:\s*[-–—]\s*(\d+))?/gi);
+        for (const m of matches) {
+          const start = parseInt(m[1], 10);
+          const end = m[2] ? parseInt(m[2], 10) : start;
+          if (!isNaN(start)) pages.push(start);
+          if (!isNaN(end) && end !== start) pages.push(end);
+        }
+        return pages;
+      }
+      
+      // Check if two page ranges overlap
+      function pagesOverlap(pages1: number[], pages2: number[]): boolean {
+        if (pages1.length === 0 || pages2.length === 0) return false;
+        // Get ranges
+        const min1 = Math.min(...pages1), max1 = Math.max(...pages1);
+        const min2 = Math.min(...pages2), max2 = Math.max(...pages2);
+        // Check overlap
+        return !(max1 < min2 || max2 < min1);
+      }
+      
+      // Build lookup: course -> tasks with their page numbers
+      const tasksByCourse = new Map<string, any[]>();
       for (const t of incompleteTasks) {
         const courseKey = normCourse(t.course);
-        const dueDate = t.due ? t.due.slice(0, 10) : '';
-        if (courseKey && dueDate) {
-          const key = `${courseKey}|${dueDate}`;
-          if (!tasksByCourseDate.has(key)) tasksByCourseDate.set(key, []);
-          tasksByCourseDate.get(key)!.push(t);
+        if (courseKey) {
+          if (!tasksByCourse.has(courseKey)) tasksByCourse.set(courseKey, []);
+          // Extract pages from task title (e.g., "Read pp. 1-19")
+          const taskPages = extractPages(t.title || '');
+          tasksByCourse.get(courseKey)!.push({ ...t, _pages: taskPages });
         }
       }
       
@@ -359,17 +384,26 @@ export default function ImportCsvPage() {
           if (dedup.has(h)) { duplicates++; continue; }
           
           // Find matching task to link and mark as done
-          const sessionDate = e.whenISO.slice(0, 10);
+          // Match by course + page numbers (from Notes column like "pp. 1-19")
           const courseKey = normCourse(e._course);
-          const matchKey = `${courseKey}|${sessionDate}`;
-          const matchingTasks = tasksByCourseDate.get(matchKey) || [];
+          const sessionPages = extractPages(e.notes || '');
+          const matchingTasks = tasksByCourse.get(courseKey) || [];
           let matchedTask: any = null;
           
-          // Find first unmatched task for this course+date
+          // Find first unmatched task for this course with overlapping pages
           for (const t of matchingTasks) {
             if (!markedTaskIds.has(t.id)) {
-              matchedTask = t;
-              break;
+              // If session has pages, try to match by page overlap
+              if (sessionPages.length > 0 && t._pages.length > 0) {
+                if (pagesOverlap(sessionPages, t._pages)) {
+                  matchedTask = t;
+                  break;
+                }
+              } else if (sessionPages.length === 0 && t._pages.length === 0) {
+                // Both have no pages - match by course only (for non-reading tasks)
+                matchedTask = t;
+                break;
+              }
             }
           }
           
