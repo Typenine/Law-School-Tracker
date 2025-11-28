@@ -69,6 +69,7 @@ export type LogSubmitData = {
   pagesCompleted?: string;
   moveToDay?: string;
   isPartial: boolean;
+  completionDate?: string;
 };
 
 export default function LogModal({ isOpen, onClose, onSubmit, task, mode, defaultMinutes, coursePph = 18 }: LogModalProps) {
@@ -77,6 +78,7 @@ export default function LogModal({ isOpen, onClose, onSubmit, task, mode, defaul
   const [notes, setNotes] = useState('');
   const [pagesCompleted, setPagesCompleted] = useState('');
   const [moveToDay, setMoveToDay] = useState('');
+  const [completionDate, setCompletionDate] = useState('');
 
   // Determine if this is a reading task with page ranges
   const pageRanges = useMemo(() => {
@@ -106,6 +108,12 @@ export default function LogModal({ isOpen, onClose, onSubmit, task, mode, defaul
       setNotes('');
       setPagesCompleted('');
       setMoveToDay('');
+      // Default completion date to today
+      const today = new Date();
+      const yyyy = today.getFullYear();
+      const mm = String(today.getMonth() + 1).padStart(2, '0');
+      const dd = String(today.getDate()).padStart(2, '0');
+      setCompletionDate(`${yyyy}-${mm}-${dd}`);
     }
   }, [isOpen, task, mode, defaultMinutes]);
 
@@ -131,6 +139,7 @@ export default function LogModal({ isOpen, onClose, onSubmit, task, mode, defaul
       pagesCompleted: pagesCompleted || undefined,
       moveToDay: moveToDay || undefined,
       isPartial: mode === 'partial',
+      completionDate: completionDate || undefined,
     });
   };
 
@@ -193,6 +202,17 @@ export default function LogModal({ isOpen, onClose, onSubmit, task, mode, defaul
               <span>Low</span>
               <span>High</span>
             </div>
+          </div>
+
+          {/* Completion Date */}
+          <div>
+            <label className="block text-xs text-slate-400 mb-1">Completion Date</label>
+            <input
+              type="date"
+              value={completionDate}
+              onChange={e => setCompletionDate(e.target.value)}
+              className="w-full bg-slate-800 border border-white/10 rounded px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+            />
           </div>
 
           {/* Pages completed (for reading tasks) */}

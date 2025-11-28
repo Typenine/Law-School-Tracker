@@ -45,9 +45,11 @@ export function getSessionCourse(
     }
   }
   
-  // 3) Special handling for sports law review
+  // 3) Special handling for sports law review / law journal
   const courseL = (course || '').toLowerCase();
-  if (courseL.includes('sports law review') || /\bslr\b/i.test(session.notes || '')) {
+  const notesL = (session.notes || '').toLowerCase();
+  if (courseL.includes('sports law review') || courseL.includes('law journal') || 
+      /\bslr\b/i.test(session.notes || '') || notesL.includes('law journal')) {
     course = 'Sports Law Review';
   }
   

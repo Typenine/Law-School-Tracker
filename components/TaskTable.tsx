@@ -352,7 +352,10 @@ export default function TaskTable() {
     if (!logModalTask) return;
     const t = logModalTask;
     
-    // Log the session
+    // Log the session - use completion date if provided, otherwise now
+    const sessionWhen = data.completionDate 
+      ? new Date(data.completionDate + 'T12:00:00').toISOString()
+      : new Date().toISOString();
     try {
       await fetch('/api/sessions', {
         method: 'POST',
@@ -364,7 +367,7 @@ export default function TaskTable() {
           minutes: data.minutes,
           focus: data.focus,
           notes: data.notes || null,
-          when: new Date().toISOString(),
+          when: sessionWhen,
         }),
       });
     } catch {}
