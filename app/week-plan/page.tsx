@@ -115,7 +115,22 @@ export default function WeekPlanPage() {
     return saturdayOf(new Date());
   });
   const [availability, setAvailability] = useState<AvailabilityTemplate>({ 0:120,1:240,2:240,3:240,4:240,5:240,6:120 });
-  const [blocks, setBlocks] = useState<ScheduledBlock[]>([]);
+  const [blocks, setBlocksRaw] = useState<ScheduledBlock[]>([]);
+  
+  // Wrapper that saves to localStorage immediately on every change
+  const setBlocks = useCallback((updater: ScheduledBlock[] | ((prev: ScheduledBlock[]) => ScheduledBlock[])) => {
+    setBlocksRaw(prev => {
+      const next = typeof updater === 'function' ? updater(prev) : updater;
+      // Save to localStorage IMMEDIATELY (synchronous)
+      try { 
+        window.localStorage.setItem(LS_SCHEDULE, JSON.stringify(next)); 
+        console.log('[WeekPlan] Saved to localStorage:', next.length, 'blocks');
+      } catch (e) { 
+        console.error('[WeekPlan] Failed to save to localStorage:', e); 
+      }
+      return next;
+    });
+  }, []);
   const [backlog, setBacklog] = useState<BacklogItem[]>([]);
   const { tasks } = useTasks();
   const [sessions, setSessions] = useState<any[]>([]);
@@ -138,7 +153,10 @@ export default function WeekPlanPage() {
   // Initial load: local first for instant UI, then server, and migrate if server empty
   useEffect(() => {
     setAvailability(loadAvailability());
-    setBlocks(loadSchedule());
+    // Use setBlocksRaw for initial load to avoid triggering the save wrapper
+    const localBlocks = loadSchedule();
+    setBlocksRaw(localBlocks);
+    console.log('[WeekPlan] Initial load from localStorage:', localBlocks.length, 'blocks');
     setBacklog(loadBacklog());
     // Load windows and breaks from localStorage
     try {
@@ -189,21 +207,30 @@ export default function WeekPlanPage() {
           const bj = await schRes.json().catch(() => ({ blocks: [] }));
           const remote = Array.isArray(bj?.blocks) ? bj.blocks : [];
           const local = loadSchedule();
-          if (remote.length > 0) {
-            setBlocks(remote as any);
-            // Also save to localStorage for offline access
+          console.log('[WeekPlan] API returned:', remote.length, 'blocks, localStorage has:', local.length, 'blocks');
+          
+          // PRIORITY: localStorage > API (localStorage is always freshest due to immediate saves)
+          // Only use API data if localStorage is empty AND API has data
+          if (local.length > 0) {
+            // Keep localStorage data, but sync TO server if server is empty/different
+            console.log('[WeekPlan] Using localStorage data (primary source)');
+            if (remote.length === 0 || remote.length < local.length) {
+              console.log('[WeekPlan] Syncing localStorage to server');
+              try { await fetch('/api/schedule', { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ blocks: local }) }); } catch {}
+            }
+          } else if (remote.length > 0) {
+            // localStorage is empty but API has data - restore from API
+            console.log('[WeekPlan] Restoring from API (localStorage was empty)');
+            setBlocksRaw(remote as any);
             saveSchedule(remote as any);
           } else {
-            // Try settings backup, then localStorage
+            // Both empty - try settings backup
             const fromSettings = (settingsCache as any)?.weekScheduleV1;
             if (Array.isArray(fromSettings) && fromSettings.length > 0) {
-              setBlocks(fromSettings as any);
+              console.log('[WeekPlan] Restoring from settings backup');
+              setBlocksRaw(fromSettings as any);
               saveSchedule(fromSettings as any);
               try { await fetch('/api/schedule', { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ blocks: fromSettings }) }); } catch {}
-            } else if (local.length > 0) {
-              // Load from localStorage and sync to server
-              setBlocks(local as any);
-              try { await fetch('/api/schedule', { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ blocks: local }) }); } catch {}
             }
           }
         }
@@ -216,21 +243,22 @@ export default function WeekPlanPage() {
     })();
     return () => { canceled = true; };
   }, []);
-  // Persist changes locally and to server
-  // IMPORTANT: Only save blocks after initial load is complete to avoid overwriting with empty array
+  // Persist availability changes
   useEffect(() => { saveAvailability(availability); }, [availability]);
-  useEffect(() => { 
-    if (!blocksLoaded) return; // Don't save until initial load is complete
-    saveSchedule(blocks); 
-  }, [blocks, blocksLoaded]);
-  // Debounced server save for blocks (persist to API only)
+  
+  // Debounced server save for blocks
+  // Note: localStorage save happens immediately in setBlocks wrapper
   useEffect(() => {
-    if (!blocksLoaded) return; // Don't save until initial load is complete
+    if (!blocksLoaded) return;
     const id = setTimeout(() => {
-      try {
-        void fetch('/api/schedule', { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ blocks }) });
-      } catch {}
-    }, 400);
+      console.log('[WeekPlan] Debounced API save:', blocks.length, 'blocks');
+      fetch('/api/schedule', { 
+        method: 'PUT', 
+        headers: { 'Content-Type': 'application/json' }, 
+        body: JSON.stringify({ blocks }),
+        keepalive: true // Ensure request completes even during navigation
+      }).catch(e => console.error('[WeekPlan] API save failed:', e));
+    }, 300);
     return () => clearTimeout(id);
   }, [blocks, blocksLoaded]);
   
@@ -238,20 +266,35 @@ export default function WeekPlanPage() {
   const blocksRef = useRef(blocks);
   useEffect(() => { blocksRef.current = blocks; }, [blocks]);
   
-  // Immediate save function
+  // Immediate save function for page unload/navigation
   const saveBlocksNow = useCallback(() => {
     const currentBlocks = blocksRef.current;
+    console.log('[WeekPlan] saveBlocksNow called with', currentBlocks.length, 'blocks');
+    
+    // Always save to localStorage first (most reliable)
+    try { 
+      window.localStorage.setItem(LS_SCHEDULE, JSON.stringify(currentBlocks)); 
+      console.log('[WeekPlan] Saved to localStorage on unload');
+    } catch (e) { 
+      console.error('[WeekPlan] localStorage save failed:', e); 
+    }
+    
+    // Then try to save to API
     if (currentBlocks.length > 0) {
       const data = JSON.stringify({ blocks: currentBlocks });
       // Try sendBeacon first (works on page unload)
       if (navigator.sendBeacon) {
-        navigator.sendBeacon('/api/schedule', new Blob([data], { type: 'application/json' }));
+        const sent = navigator.sendBeacon('/api/schedule', new Blob([data], { type: 'application/json' }));
+        console.log('[WeekPlan] sendBeacon result:', sent);
       } else {
-        // Fallback to fetch
-        try { void fetch('/api/schedule', { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: data }); } catch {}
+        // Fallback to fetch with keepalive
+        fetch('/api/schedule', { 
+          method: 'POST', // Use POST for keepalive compatibility
+          headers: { 'Content-Type': 'application/json' }, 
+          body: data,
+          keepalive: true 
+        }).catch(e => console.error('[WeekPlan] Unload fetch failed:', e));
       }
-      // Also save to localStorage immediately
-      try { window.localStorage.setItem(LS_SCHEDULE, JSON.stringify(currentBlocks)); } catch {}
     }
   }, []);
   
