@@ -307,7 +307,11 @@ export default function ImportCsvPage() {
   }
 
   async function importRows(mode: 'append' | 'replace') {
-    if (!rows.length) return;
+    console.log('[Import] importRows called, mode:', mode, 'rows:', rows.length);
+    if (!rows.length) {
+      setStatus('No rows to import');
+      return;
+    }
     setStatus(mode === 'replace' ? 'Resetting sessions…' : 'Importing…');
     setSummary(null);
     try {
@@ -443,9 +447,11 @@ export default function ImportCsvPage() {
           }
         }
       }
+      console.log('[Import] Complete:', { imported, duplicates, invalid, tasksMarkedDone });
       setSummary({ imported, duplicates, invalid, tasksMarkedDone });
       setStatus('Done.');
     } catch (e: any) {
+      console.error('[Import] Error:', e);
       setStatus(`Import failed: ${e?.message || e}`);
     }
   }
