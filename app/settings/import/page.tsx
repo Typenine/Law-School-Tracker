@@ -310,23 +310,28 @@ export default function ImportCsvPage() {
     console.log('[Import] importRows called, mode:', mode, 'rows:', rows.length);
     if (!rows.length) {
       setStatus('No rows to import');
+      console.log('[Import] No rows, exiting');
       return;
     }
     setStatus(mode === 'replace' ? 'Resetting sessions…' : 'Importing…');
     setSummary(null);
+    
+    // Clear dedup for replace mode or fresh import
+    let currentDedup = mode === 'replace' ? new Set<string>() : new Set(dedup);
+    
     try {
       let imported = 0, duplicates = 0, invalid = 0, tasksMarkedDone = 0;
       
-      // Fetch existing incomplete tasks to match against
+      console.log('[Import] Fetching tasks...');
       const tasksRes = await fetch('/api/tasks', { cache: 'no-store' });
       const tasksData = tasksRes.ok ? await tasksRes.json() : { tasks: [] };
       const incompleteTasks: any[] = (tasksData.tasks || []).filter((t: any) => t.status !== 'done');
+      console.log('[Import] Found', incompleteTasks.length, 'incomplete tasks');
       
       // Extract page numbers from a string like "pp. 1-19" or "pp 42-58" or "70-108"
       function extractPages(s: string): number[] {
         if (!s) return [];
         const pages: number[] = [];
-        // Match patterns like "pp. 1-19", "pp 42-58", "1-19", "p. 5"
         const matches = s.matchAll(/(?:pp?\.?\s*)?(\d+)(?:\s*[-–—]\s*(\d+))?/gi);
         for (const m of matches) {
           const start = parseInt(m[1], 10);
@@ -337,41 +342,45 @@ export default function ImportCsvPage() {
         return pages;
       }
       
-      // Check if two page ranges overlap
       function pagesOverlap(pages1: number[], pages2: number[]): boolean {
         if (pages1.length === 0 || pages2.length === 0) return false;
-        // Get ranges
         const min1 = Math.min(...pages1), max1 = Math.max(...pages1);
         const min2 = Math.min(...pages2), max2 = Math.max(...pages2);
-        // Check overlap
         return !(max1 < min2 || max2 < min1);
       }
       
-      // Build lookup: course -> tasks with their page numbers
       const tasksByCourse = new Map<string, any[]>();
       for (const t of incompleteTasks) {
         const courseKey = normCourse(t.course);
         if (courseKey) {
           if (!tasksByCourse.has(courseKey)) tasksByCourse.set(courseKey, []);
-          // Extract pages from task title (e.g., "Read pp. 1-19")
           const taskPages = extractPages(t.title || '');
           tasksByCourse.get(courseKey)!.push({ ...t, _pages: taskPages });
         }
       }
       
-      // Track which tasks we've already marked done
       const markedTaskIds = new Set<string>();
       
       if (mode === 'replace') {
+        console.log('[Import] Resetting sessions...');
         const r = await fetch('/api/sessions/reset', { method: 'POST' });
         if (!r.ok) throw new Error('Failed to reset sessions');
-        setDedup(new Set());
+        currentDedup = new Set<string>();
+        console.log('[Import] Sessions reset complete');
       }
       
+      console.log('[Import] Starting import of', rows.length, 'rows');
       for (let i = 0; i < rows.length; i++) {
+        if (i % 20 === 0) {
+          setStatus(`Importing row ${i + 1} of ${rows.length}...`);
+        }
         const vals = rows[i];
         const res = coerceParsed(vals, mapping, units);
-        if ('error' in res) { invalid++; continue; }
+        if ('error' in res) { 
+          console.log('[Import] Row', i, 'invalid:', res.error);
+          invalid++; 
+          continue; 
+        }
         const p = res as Parsed;
         // Subtract internship minutes from main entry to avoid double-counting
         const mainMinutes = Math.max(0, (p.minutes || 0) - (hoursIncludeIntern ? (p.internshipMinutes || 0) : 0));
@@ -385,7 +394,7 @@ export default function ImportCsvPage() {
           // Dedup key ignores notes; minutes rounded
           const key = `${e.whenISO.slice(0,10)}|${e._course}|${Math.round(e._minutes)}|${e.focus ?? ''}|${e.pagesRead}|${e.outlinePages}|${e.practiceQs}|${e._taskType}`;
           const h = await sha1Hex(key);
-          if (dedup.has(h)) { duplicates++; continue; }
+          if (currentDedup.has(h)) { duplicates++; continue; }
           
           // Find matching task to link and mark as done
           // Match by course + page numbers (from Notes column like "pp. 1-19")
@@ -428,7 +437,7 @@ export default function ImportCsvPage() {
           const resp = await fetch('/api/sessions', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
           if (resp.ok) {
             imported++;
-            setDedup(prev => new Set(prev).add(h));
+            currentDedup.add(h);
             
             // Mark matched task as done
             if (matchedTask && !markedTaskIds.has(matchedTask.id)) {
@@ -448,11 +457,12 @@ export default function ImportCsvPage() {
         }
       }
       console.log('[Import] Complete:', { imported, duplicates, invalid, tasksMarkedDone });
+      setDedup(currentDedup);
       setSummary({ imported, duplicates, invalid, tasksMarkedDone });
-      setStatus('Done.');
+      setStatus(`Done! Imported ${imported}, ${duplicates} duplicates skipped, ${invalid} invalid.`);
     } catch (e: any) {
       console.error('[Import] Error:', e);
-      setStatus(`Import failed: ${e?.message || e}`);
+      setStatus(`Import failed: ${e?.message || String(e)}`);
     }
   }
 
@@ -592,8 +602,20 @@ export default function ImportCsvPage() {
           <div className="flex items-center justify-between">
             <div className="text-sm font-medium">Preview (first 25 rows)</div>
             <div className="flex items-center gap-2">
-              <button onClick={() => importRows('append')} className="px-3 py-2 rounded bg-blue-600 hover:bg-blue-500 text-sm">Append</button>
-              <button onClick={() => importRows('replace')} className="px-3 py-2 rounded border border-rose-600 text-rose-400 text-sm">Replace all sessions</button>
+              <button 
+                onClick={() => { console.log('[Import] Append clicked'); importRows('append'); }} 
+                disabled={status.includes('…')}
+                className="px-3 py-2 rounded bg-blue-600 hover:bg-blue-500 text-sm disabled:opacity-50"
+              >
+                {status.includes('Importing') ? 'Importing...' : 'Append'}
+              </button>
+              <button 
+                onClick={() => { console.log('[Import] Replace clicked'); importRows('replace'); }} 
+                disabled={status.includes('…')}
+                className="px-3 py-2 rounded border border-rose-600 text-rose-400 text-sm disabled:opacity-50"
+              >
+                {status.includes('Resetting') ? 'Resetting...' : 'Replace all sessions'}
+              </button>
             </div>
           </div>
           <div className="overflow-x-auto">
