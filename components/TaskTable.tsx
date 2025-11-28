@@ -4,6 +4,7 @@ import type { Task, Course } from '@/lib/types';
 import AddTaskPanel from '@/components/AddTaskPanel';
 import MultiAddDrawer from '@/components/MultiAddDrawer';
 import LogModal, { type LogSubmitData } from '@/components/LogModal';
+import { parsePageRanges, countPages, formatPageRanges, extractPageRangesFromTitle } from '@/lib/pageRanges';
 
 function fmtHM(min: number | null | undefined): string {
   const n = Math.max(0, Math.round(Number(min) || 0));
@@ -113,7 +114,8 @@ export default function TaskTable() {
   const [editModalOpen, setEditModalOpen] = useState(false);
   const [editModalTask, setEditModalTask] = useState<Task | null>(null);
   const [editActivity, setEditActivity] = useState('');
-  const [editPages, setEditPages] = useState('');
+  const [editPageRanges, setEditPageRanges] = useState('');
+  const [editPagesCalculated, setEditPagesCalculated] = useState(0);
   
   // Undo support
   const [undoStack, setUndoStack] = useState<Array<{ type: 'delete' | 'update'; task: Task; prevState?: Task }>>([]);
@@ -494,7 +496,17 @@ export default function TaskTable() {
     setEditDepends((t.dependsOn || []).join(', '));
     setEditTags((t.tags || []).join(', '));
     setEditActivity((t as any).activity || '');
-    setEditPages(typeof (t as any).pagesRead === 'number' ? String((t as any).pagesRead) : '');
+    // Extract page ranges from title if present
+    const ranges = extractPageRangesFromTitle(t.title);
+    if (ranges) {
+      setEditPageRanges(ranges);
+      setEditPagesCalculated(countPages(parsePageRanges(ranges)));
+    } else {
+      // Fall back to pagesRead if no ranges in title
+      const pages = typeof (t as any).pagesRead === 'number' ? (t as any).pagesRead : 0;
+      setEditPageRanges('');
+      setEditPagesCalculated(pages);
+    }
     setEditModalOpen(true);
   }
 
@@ -508,16 +520,38 @@ export default function TaskTable() {
     setEditPriority('');
     setEditNotes('');
     setEditActivity('');
-    setEditPages('');
+    setEditPageRanges('');
+    setEditPagesCalculated(0);
+  }
+  
+  // Update calculated pages when page ranges change
+  function handlePageRangesChange(value: string) {
+    setEditPageRanges(value);
+    const ranges = parsePageRanges(value);
+    setEditPagesCalculated(countPages(ranges));
   }
 
   async function saveEditModal() {
     if (!editModalTask) return;
+    
+    // Build the new title with page ranges if provided
+    let newTitle = editTitle;
+    if (editPageRanges.trim()) {
+      const ranges = parsePageRanges(editPageRanges);
+      if (ranges.length > 0) {
+        const formatted = formatPageRanges(ranges);
+        // Remove any existing page range from title
+        newTitle = newTitle.replace(/\s*p(?:ages?)?\.?\s*[0-9,\s–-]+/gi, '').trim();
+        // Append new page range
+        newTitle = `${newTitle} p. ${formatted}`;
+      }
+    }
+    
     const body: any = { 
-      title: editTitle, 
+      title: newTitle, 
       course: editCourse || null,
       activity: editActivity || null,
-      pagesRead: editPages ? parseInt(editPages, 10) : null,
+      pagesRead: editPagesCalculated > 0 ? editPagesCalculated : null,
     };
     if (editDue) body.dueDate = new Date(editDue).toISOString();
     body.estimatedMinutes = editEst ? parseInt(editEst, 10) : null;
@@ -1259,18 +1293,22 @@ export default function TaskTable() {
                   </div>
                 </div>
                 
-                {/* Pages & Estimate Row */}
-                <div className="grid grid-cols-2 gap-3">
+                {/* Page Ranges & Estimate Row */}
+                <div className="space-y-3">
                   <div>
-                    <label className="block text-xs text-slate-400 mb-1">Pages</label>
+                    <label className="block text-xs text-slate-400 mb-1">Page Ranges</label>
                     <input
-                      type="number"
-                      min={0}
-                      value={editPages}
-                      onChange={e => setEditPages(e.target.value)}
-                      placeholder="Number of pages"
+                      type="text"
+                      value={editPageRanges}
+                      onChange={e => handlePageRangesChange(e.target.value)}
+                      placeholder="e.g., 510-515, 520-525"
                       className="w-full bg-[#0b1020] border border-[#1b2344] rounded-lg px-3 py-2 text-sm focus:border-blue-500 focus:outline-none"
                     />
+                    {editPagesCalculated > 0 && (
+                      <div className="text-xs text-slate-400 mt-1">
+                        = {editPagesCalculated} page{editPagesCalculated !== 1 ? 's' : ''}
+                      </div>
+                    )}
                   </div>
                   <div>
                     <label className="block text-xs text-slate-400 mb-1">Estimate (minutes)</label>

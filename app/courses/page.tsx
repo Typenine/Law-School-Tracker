@@ -220,7 +220,7 @@ export default function CoursesPage() {
                 <th className="py-2 pr-4">Meeting</th>
                 <th className="py-2 pr-4">Dates</th>
                 <th className="py-2 pr-4">Term</th>
-                <th className="py-2 pr-4">Reading Pace</th>
+                <th className="py-2 pr-4">Stats</th>
                 <th className="py-2 pr-4">Weekly Goal</th>
                 <th className="py-2 pr-4">Actions</th>
               </tr>
@@ -277,10 +277,31 @@ export default function CoursesPage() {
                       {(() => {
                         // Calculate stats for this course
                         const courseTitle = c.title;
+                        const courseCode = c.code || '';
+                        const courseLower = courseTitle.toLowerCase().trim();
+                        const codeLower = courseCode.toLowerCase().trim();
+                        
+                        // Match sessions by multiple criteria
                         const courseSessions = (sessions || []).filter(s => {
+                          // Check task's course field
                           const task = s.taskId ? tasks.find((t: any) => t.id === s.taskId) : null;
-                          const sCourse = task?.course || extractCourseFromNotes(s.notes) || '';
-                          return sCourse.toLowerCase() === courseTitle.toLowerCase();
+                          const taskCourse = (task?.course || '').toLowerCase().trim();
+                          
+                          // Check session's direct course field (if exists)
+                          const sessionCourse = (s.course || '').toLowerCase().trim();
+                          
+                          // Check notes for [CourseName] pattern
+                          const notesCourse = extractCourseFromNotes(s.notes).toLowerCase().trim();
+                          
+                          // Match if any source matches course title or code
+                          const sources = [taskCourse, sessionCourse, notesCourse].filter(Boolean);
+                          return sources.some(src => 
+                            src === courseLower || 
+                            src === codeLower ||
+                            src.includes(courseLower) ||
+                            courseLower.includes(src) ||
+                            (codeLower && (src === codeLower || src.includes(codeLower)))
+                          );
                         });
                         
                         const totalMinutes = courseSessions.reduce((sum: number, s: any) => sum + (Number(s.minutes) || 0), 0);
