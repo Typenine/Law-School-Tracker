@@ -206,31 +206,36 @@ export default function WeekPlanPage() {
         if (schRes.ok) {
           const bj = await schRes.json().catch(() => ({ blocks: [] }));
           const remote = Array.isArray(bj?.blocks) ? bj.blocks : [];
+          // Re-read localStorage in case it was updated since initial load
           const local = loadSchedule();
-          console.log('[WeekPlan] API returned:', remote.length, 'blocks, localStorage has:', local.length, 'blocks');
+          console.log('[WeekPlan] API:', remote.length, 'blocks | localStorage:', local.length, 'blocks');
           
-          // PRIORITY: localStorage > API (localStorage is always freshest due to immediate saves)
-          // Only use API data if localStorage is empty AND API has data
+          // CRITICAL: localStorage is ALWAYS the source of truth
+          // The server is just a backup - we NEVER overwrite localStorage with server data
+          // unless localStorage is completely empty
           if (local.length > 0) {
-            // Keep localStorage data, but sync TO server if server is empty/different
-            console.log('[WeekPlan] Using localStorage data (primary source)');
-            if (remote.length === 0 || remote.length < local.length) {
-              console.log('[WeekPlan] Syncing localStorage to server');
-              try { await fetch('/api/schedule', { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ blocks: local }) }); } catch {}
-            }
+            // localStorage has data - this is our truth, sync it to server
+            console.log('[WeekPlan] Keeping localStorage data (source of truth)');
+            // Always sync to server to ensure it matches
+            fetch('/api/schedule', { 
+              method: 'PUT', 
+              headers: { 'Content-Type': 'application/json' }, 
+              body: JSON.stringify({ blocks: local }),
+              keepalive: true
+            }).catch(() => {});
           } else if (remote.length > 0) {
-            // localStorage is empty but API has data - restore from API
-            console.log('[WeekPlan] Restoring from API (localStorage was empty)');
+            // localStorage is empty, restore from server
+            console.log('[WeekPlan] Restoring from server (localStorage was empty)');
             setBlocksRaw(remote as any);
             saveSchedule(remote as any);
           } else {
-            // Both empty - try settings backup
+            // Both empty - check settings backup
             const fromSettings = (settingsCache as any)?.weekScheduleV1;
             if (Array.isArray(fromSettings) && fromSettings.length > 0) {
               console.log('[WeekPlan] Restoring from settings backup');
               setBlocksRaw(fromSettings as any);
               saveSchedule(fromSettings as any);
-              try { await fetch('/api/schedule', { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ blocks: fromSettings }) }); } catch {}
+              fetch('/api/schedule', { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ blocks: fromSettings }) }).catch(() => {});
             }
           }
         }

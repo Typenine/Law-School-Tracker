@@ -277,21 +277,42 @@ export default function CoursesPage() {
                         const tasksById = new Map<string, any>();
                         for (const t of tasks) if (t && t.id) tasksById.set(t.id, t);
                         
-                        // Calculate stats for this course using normalized matching
-                        const courseKey = normCourseKey(c.title);
-                        const codeKey = normCourseKey(c.code);
+                        // Get all variations of this course name for matching
+                        const courseTitle = (c.title || '').trim();
+                        const courseCode = (c.code || '').trim();
+                        const courseKey = normCourseKey(courseTitle);
+                        const codeKey = normCourseKey(courseCode);
                         
-                        // Match sessions using same logic as log page
+                        // Also get initials (e.g., "Advance Legal Research" -> "alr")
+                        const initials = courseTitle.split(/\s+/).map(w => w[0]?.toLowerCase() || '').join('');
+                        
+                        // Match sessions - check multiple ways
                         const courseSessions = (sessions || []).filter(s => {
+                          // Get course name from session (via task or notes)
                           const sessionCourse = getSessionCourse(s, tasksById);
                           const sessionKey = normCourseKey(sessionCourse);
                           
-                          // Match if normalized keys match or one contains the other
-                          return (
-                            sessionKey === courseKey ||
-                            (codeKey && sessionKey === codeKey) ||
-                            (sessionKey && courseKey && (sessionKey.includes(courseKey) || courseKey.includes(sessionKey)))
-                          );
+                          if (!sessionKey || sessionKey === 'unassigned') return false;
+                          
+                          // Exact matches
+                          if (sessionKey === courseKey) return true;
+                          if (codeKey && sessionKey === codeKey) return true;
+                          if (initials && sessionKey === initials) return true;
+                          
+                          // Partial matches (one contains the other)
+                          if (sessionKey && courseKey) {
+                            if (sessionKey.includes(courseKey) || courseKey.includes(sessionKey)) return true;
+                          }
+                          if (codeKey && sessionKey.includes(codeKey)) return true;
+                          
+                          // Also check if session was logged directly to this course (task.course matches)
+                          if (s.taskId && tasksById.has(s.taskId)) {
+                            const task = tasksById.get(s.taskId);
+                            const taskCourseKey = normCourseKey(task?.course);
+                            if (taskCourseKey === courseKey || taskCourseKey === codeKey) return true;
+                          }
+                          
+                          return false;
                         });
                         
                         const totalMinutes = courseSessions.reduce((sum: number, s: any) => sum + (Number(s.minutes) || 0), 0);
