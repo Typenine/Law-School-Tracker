@@ -1,6 +1,9 @@
 "use client";
 import { useEffect, useMemo, useRef, useState } from "react";
 import type { Course, NewTaskInput, Task } from "@/lib/types";
+import { notifyTasksChanged } from '@/lib/taskBus';
+import { apiFetch } from '@/lib/apiClient';
+import { notifyToast } from '@/lib/toastBus';
 
 type Props = { onCreated?: () => void };
 
@@ -65,14 +68,12 @@ export default function AddTaskPanel({ onCreated }: Props) {
   useEffect(() => {
     (async () => {
       try {
-        const [cRes, tRes] = await Promise.all([
-          fetch('/api/courses', { cache: 'no-store' }),
-          fetch('/api/tasks', { cache: 'no-store' })
+        const [cj, tj] = await Promise.all([
+          apiFetch<{ courses: Course[] }>("/api/courses"),
+          apiFetch<{ tasks: Task[] }>("/api/tasks"),
         ]);
-        const cj = await cRes.json().catch(() => ({ courses: [] }));
-        const tj = await tRes.json().catch(() => ({ tasks: [] }));
-        setCourses(Array.isArray(cj?.courses) ? cj.courses : []);
-        setTasks(Array.isArray(tj?.tasks) ? tj.tasks : []);
+        setCourses(Array.isArray((cj as any)?.courses) ? (cj as any).courses : []);
+        setTasks(Array.isArray((tj as any)?.tasks) ? (tj as any).tasks : []);
       } catch {}
       try { const last = window.localStorage.getItem('lastTaskCourse') || ''; if (last) setCourse(last); } catch {}
     })();
@@ -168,7 +169,8 @@ export default function AddTaskPanel({ onCreated }: Props) {
   async function saveDefaultActivity() {
     if (!setDefaultForCourse || !courseId) return;
     try {
-      await fetch(`/api/courses/${courseId}`, { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ defaultActivity: activity }) });
+      await apiFetch(`/api/courses/${courseId}`, { method: 'PATCH', body: { defaultActivity: activity } });
+      try { notifyToast({ kind: 'success', message: 'Default activity saved.' }); } catch {}
     } catch {}
   }
 
@@ -195,19 +197,14 @@ export default function AddTaskPanel({ onCreated }: Props) {
         pagesRead: activity==='reading' ? (pages||null) : null,
         activity: activity || null,
       } as any;
-      const r = await fetch('/api/tasks', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) });
-      if (!r.ok) throw new Error('create failed');
+      const created = await apiFetch<{ task: Task }>("/api/tasks", { method: 'POST', body: payload });
+      try { notifyToast({ kind: 'success', message: 'Task added.' }); } catch {}
       if (plan) {
         try {
-          const tj = await r.json().catch(()=>null);
-          const newId = tj?.task?.id || null;
+          const newId = (created as any)?.task?.id || null;
           // Fetch current schedule from API
-          const schRes = await fetch('/api/schedule', { cache: 'no-store' });
-          let arr: any[] = [];
-          if (schRes.ok) {
-            const schJson = await schRes.json().catch(() => ({ blocks: [] }));
-            arr = Array.isArray(schJson?.blocks) ? schJson.blocks : [];
-          }
+          const sj = await apiFetch<{ blocks: any[] }>("/api/schedule");
+          let arr: any[] = Array.isArray((sj as any)?.blocks) ? (sj as any).blocks : [];
           // availability by day-of-week
           let avail: Record<number, number> = {};
           try { avail = JSON.parse(window.localStorage.getItem('availabilityTemplateV1') || '{}'); } catch {}
@@ -233,14 +230,12 @@ export default function AddTaskPanel({ onCreated }: Props) {
           }
           arr.push({ id: crypto.randomUUID(), taskId: newId, day: placeYmd, plannedMinutes: est || 0, title, course });
           // Save only through API
-          await fetch('/api/schedule', {
-            method: 'PUT',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ blocks: arr }),
-          });
+          await apiFetch('/api/schedule', { method: 'PUT', body: { blocks: arr } });
+          try { notifyToast({ kind: 'success', message: 'Added and planned.' }); } catch {}
         } catch {}
       }
       setTitle(''); setRange(''); setManualEst(''); setEstimateOrigin(null); setDupWarn('');
+      try { notifyTasksChanged(); } catch {}
       onCreated?.();
     } catch {
     } finally { setSaving(false); }

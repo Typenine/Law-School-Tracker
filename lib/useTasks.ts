@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useState } from "react";
 import type { Task } from "@/lib/types";
+import { onTasksChanged } from "@/lib/taskBus";
 
 export function useTasks() {
   const [tasks, setTasks] = useState<Task[]>([]);
@@ -26,6 +27,11 @@ export function useTasks() {
 
   useEffect(() => {
     void refresh();
+    // Subscribe to cross-tab/task mutation notifications
+    const off = onTasksChanged(() => { void refresh(); });
+    // Gentle polling as a backstop in case a notifier is missed
+    const id = setInterval(() => { void refresh(); }, 60000);
+    return () => { off(); clearInterval(id); };
   }, [refresh]);
 
   return { tasks, setTasks, loading, error, refresh };

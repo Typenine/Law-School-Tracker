@@ -1,6 +1,9 @@
 "use client";
 import { useEffect, useMemo, useState } from 'react';
 import { Task } from '@/lib/types';
+import { notifyTasksChanged, onTasksChanged } from '@/lib/taskBus';
+import { useSemester } from '@/lib/useSemester';
+import { tasksClient } from '@/lib/tasksClient';
 
 function normalize(s: string) { return (s || '').toLowerCase(); }
 
@@ -8,6 +11,7 @@ export default function CommandPalette() {
   const [open, setOpen] = useState(false);
   const [q, setQ] = useState('');
   const [tasks, setTasks] = useState<Task[]>([]);
+  const { currentTerm, showAllTerms } = useSemester();
 
   useEffect(() => {
     function onKey(e: KeyboardEvent) {
@@ -34,26 +38,40 @@ export default function CommandPalette() {
       } catch {}
     })();
   }, [open]);
+  useEffect(() => {
+    if (!open) return;
+    const off = onTasksChanged(() => {
+      (async () => {
+        try {
+          const res = await fetch('/api/tasks', { cache: 'no-store' });
+          const data = await res.json();
+          setTasks((data.tasks || []) as Task[]);
+        } catch {}
+      })();
+    });
+    return off;
+  }, [open]);
 
   const results = useMemo(() => {
+    const scoped = tasks.filter(t => (showAllTerms || !currentTerm || (t.term || '') === currentTerm));
     const n = normalize(q);
-    if (!n) return tasks.slice(0, 20);
-    return tasks.filter(t =>
+    if (!n) return scoped.slice(0, 20);
+    return scoped.filter(t =>
       normalize(t.title).includes(n) ||
       normalize(t.course || '').includes(n) ||
       normalize(t.notes || '').includes(n) ||
       (t.tags || []).some(tag => normalize(tag).includes(n))
     ).slice(0, 50);
-  }, [q, tasks]);
+  }, [q, tasks, currentTerm, showAllTerms]);
 
   async function toggleDone(t: Task) {
-    await fetch(`/api/tasks/${t.id}`, { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ status: t.status === 'done' ? 'todo' : 'done' }) });
+    await tasksClient.update(t.id, { status: t.status === 'done' ? 'todo' : 'done' } as any);
     setTasks(prev => prev.map(x => x.id === t.id ? { ...x, status: t.status === 'done' ? 'todo' : 'done' } : x));
   }
 
   async function movePlusOne(t: Task) {
     const d = new Date(t.dueDate); d.setDate(d.getDate() + 1); d.setHours(23,59,59,999);
-    await fetch(`/api/tasks/${t.id}`, { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ dueDate: d.toISOString() }) });
+    await tasksClient.update(t.id, { dueDate: d.toISOString() } as any);
     setTasks(prev => prev.map(x => x.id === t.id ? { ...x, dueDate: d.toISOString() } : x));
   }
 

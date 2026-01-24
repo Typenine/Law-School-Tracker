@@ -2,6 +2,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useTasks } from "@/lib/useTasks";
 import { estimateMinutesForTask } from "@/lib/taskEstimate";
+import { notifyTasksChanged } from "@/lib/taskBus";
 
 type BacklogItem = {
   id: string;
@@ -495,7 +496,7 @@ export default function TodayPage() {
           const si = nextSched.findIndex(b => b.taskId === it.id && b.day === plan.dateKey);
           if (si !== -1) { nextSched[si] = { ...nextSched[si], plannedMinutes: 0 }; scheduleChanged = true; }
           // best-effort mark task done
-          if (isUUID(it.id)) { try { void fetch(`/api/tasks/${it.id}`, { method:'PATCH', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ status: 'done' }) }); } catch {} }
+          if (isUUID(it.id)) { try { void fetch(`/api/tasks/${it.id}`, { method:'PATCH', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ status: 'done' }) }); notifyTasksChanged(); } catch {} }
           continue;
         }
         const newMinutes = Math.max(1, Math.round(pagesLeft * minutesPerPageForCourse(it.course)));
@@ -508,7 +509,7 @@ export default function TodayPage() {
           const si = nextSched.findIndex(b => b.taskId === it.id && b.day === plan.dateKey);
           if (si !== -1) { nextSched[si] = { ...nextSched[si], title: desiredTitle, plannedMinutes: newMinutes, guessed: false }; scheduleChanged = true; }
           // persist task
-          if (isUUID(it.id)) { try { void fetch(`/api/tasks/${it.id}`, { method:'PATCH', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ title: desiredTitle, estimatedMinutes: newMinutes }) }); } catch {} }
+          if (isUUID(it.id)) { try { void fetch(`/api/tasks/${it.id}`, { method:'PATCH', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ title: desiredTitle, estimatedMinutes: newMinutes }) }); notifyTasksChanged(); } catch {} }
         } else {
           nextItems.push(it);
         }
@@ -830,7 +831,7 @@ export default function TodayPage() {
     try { await fetch('/api/sessions', { method:'POST', headers:{ 'Content-Type':'application/json' }, body: JSON.stringify(body) }); } catch {}
     await refreshSessionsNow();
     if (logModal.mode === 'finish') {
-      if (taskId) { try { await fetch(`/api/tasks/${taskId}`, { method:'PATCH', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ status: 'done' }) }); } catch {} }
+      if (taskId) { try { await fetch(`/api/tasks/${taskId}`, { method:'PATCH', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ status: 'done' }) }); notifyTasksChanged(); } catch {} }
       setPlan(p => ({ ...p, items: p.items.filter(x => x.id !== it.id) }));
     } else {
       // Partial: recompute remaining ranges & minutes using cumulative pages read
@@ -893,13 +894,13 @@ export default function TodayPage() {
           // Also update the due date on the task if needed
           if (taskId) {
             const newDueDate = new Date(targetDay + 'T23:59:59').toISOString();
-            try { await fetch(`/api/tasks/${taskId}`, { method:'PATCH', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ title: newTitle, estimatedMinutes: newMinutes, dueDate: newDueDate, remainingPageRanges: remainLabel }) }); } catch {}
+            try { await fetch(`/api/tasks/${taskId}`, { method:'PATCH', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ title: newTitle, estimatedMinutes: newMinutes, dueDate: newDueDate, remainingPageRanges: remainLabel }) }); notifyTasksChanged(); } catch {}
           }
         } else {
           // Keep on today
           setPlan(p => ({ ...p, items: p.items.map(x => x.id === it.id ? { ...x, title: newTitle, minutes: newMinutes, guessed: false } : x) }));
           // Persist to Task so changes show everywhere
-          if (taskId) { try { await fetch(`/api/tasks/${taskId}`, { method:'PATCH', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ title: newTitle, estimatedMinutes: newMinutes, remainingPageRanges: remainLabel }) }); } catch {} }
+          if (taskId) { try { await fetch(`/api/tasks/${taskId}`, { method:'PATCH', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ title: newTitle, estimatedMinutes: newMinutes, remainingPageRanges: remainLabel }) }); notifyTasksChanged(); } catch {} }
           // Update this week's schedule block for the task (today's block)
           try {
             const nextSched = (schedule||[]).map(b => (b.taskId === (taskId||it.id) && b.day === plan.dateKey) ? { ...b, plannedMinutes: newMinutes, title: newTitle, guessed: false } : b);
@@ -912,7 +913,7 @@ export default function TodayPage() {
       } else {
         // No pages left; remove from plan and optionally mark task/schedule as done-ish
         setPlan(p => ({ ...p, items: p.items.filter(x => x.id !== it.id) }));
-        if (taskId) { try { await fetch(`/api/tasks/${taskId}`, { method:'PATCH', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ status: 'done' }) }); } catch {} }
+        if (taskId) { try { await fetch(`/api/tasks/${taskId}`, { method:'PATCH', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ status: 'done' }) }); notifyTasksChanged(); } catch {} }
         try {
           const nextSched = (schedule||[]).map(b => (b.taskId === (taskId||it.id) && b.day === plan.dateKey) ? { ...b, plannedMinutes: 0 } : b);
           if (nextSched !== schedule) {
@@ -986,7 +987,7 @@ export default function TodayPage() {
       }
     } catch {}
     await logSessionForItem(it, minutes);
-    if (isUUID(id)) { try { await fetch(`/api/tasks/${id}`, { method:'PATCH', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ status: 'done' }) }); } catch {} }
+    if (isUUID(id)) { try { await fetch(`/api/tasks/${id}`, { method:'PATCH', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ status: 'done' }) }); notifyTasksChanged(); } catch {} }
     setPlan(p => ({ ...p, items: p.items.filter(x => x.id !== id) }));
     setItemSeconds(prev => ({ ...prev, [id]: 0 }));
     if (activeItemId === id) setActiveItemId(null);

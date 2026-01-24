@@ -3,6 +3,14 @@ import { useEffect, useMemo, useState } from 'react';
 import { Task, CalendarEvent, EventCategory } from '@/lib/types';
 import { courseColorClass } from '@/lib/colors';
 import TimePickerField from '@/components/TimePickerField';
+import { notifyTasksChanged, onTasksChanged } from '@/lib/taskBus';
+import { useSemester } from '@/lib/useSemester';
+import { useTasks } from '@/lib/useTasks';
+import { useCourses } from '@/lib/useCourses';
+import { useSchedule, useAvailability } from '@/lib/useSchedule';
+import { apiFetch } from '@/lib/apiClient';
+import { notifyToast } from '@/lib/toastBus';
+import { tasksClient } from '@/lib/tasksClient';
 
 export const dynamic = 'force-dynamic';
 
@@ -71,8 +79,9 @@ function BulkAddEvents({ courses, onDone }: { courses: any[]; onDone: () => void
       return { title: r.title, course: r.course || null, dueDate: due, status: 'todo', estimatedMinutes: r.est ? parseInt(r.est, 10) : null, tags };
     });
     if (!items.length) return;
-    const res = await fetch('/api/tasks/bulk', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ tasks: items }) });
-    if (res.ok) { setRows([]); setOpen(false); onDone(); }
+    await apiFetch('/api/tasks/bulk', { method: 'POST', body: { tasks: items } });
+    setRows([]); setOpen(false); onDone(); try { notifyTasksChanged(); } catch {}
+    try { notifyToast({ kind: 'success', message: `Created ${items.length} task${items.length>1?'s':''}.` }); } catch {}
   }
   return (
     <div>
@@ -124,14 +133,17 @@ function BulkAddEvents({ courses, onDone }: { courses: any[]; onDone: () => void
 function keyOf(d: Date) { const x = startOfDay(d); return `${x.getFullYear()}-${String(x.getMonth()+1).padStart(2,'0')}-${String(x.getDate()).padStart(2,'0')}`; }
 
 export default function CalendarPage() {
-  const [tasks, setTasks] = useState<Task[]>([]);
+  const { tasks, refresh: refreshTasks } = useTasks();
+  const { courses, refresh: refreshCourses } = useCourses();
+  const { blocks } = useSchedule();
+  const { availability } = useAvailability();
   const [loading, setLoading] = useState(false);
   const [year, setYear] = useState<number>(() => new Date().getFullYear());
   const [month, setMonth] = useState<number>(() => new Date().getMonth());
   const [courseFilter, setCourseFilter] = useState('');
   const [statusFilter, setStatusFilter] = useState<'all' | 'todo' | 'done'>('all');
   const [selectedDayKey, setSelectedDayKey] = useState<string | null>(null);
-  const [courses, setCourses] = useState<any[]>([]);
+  // courses provided by useCourses
   const [monthOpen, setMonthOpen] = useState(false);
   const [addOpen, setAddOpen] = useState(false);
   const [addTitle, setAddTitle] = useState('');
@@ -172,26 +184,23 @@ export default function CalendarPage() {
   const [editType, setEditType] = useState('');
   const [editStartTime, setEditStartTime] = useState('');
   const [editEndTime, setEditEndTime] = useState('');
+  const { currentTerm, showAllTerms, toggleShowAll } = useSemester();
 
   async function refresh() {
     setLoading(true);
-    const res = await fetch('/api/tasks', { cache: 'no-store' });
-    const data = await res.json();
-    setTasks(data.tasks as Task[]);
-    try {
-      const cr = await fetch('/api/courses', { cache: 'no-store' });
-      const cd = await cr.json();
-      setCourses(cd.courses || []);
-    } catch {}
+    try { await refreshCourses(); } catch {}
     // Load personal events
     try {
-      const er = await fetch('/api/events', { cache: 'no-store' });
-      const ed = await er.json();
-      setEvents(ed.events || []);
+      const ed = await apiFetch<{ events: CalendarEvent[] }>('/api/events');
+      setEvents((ed as any)?.events || []);
     } catch {}
     setLoading(false);
   }
-  useEffect(() => { refresh(); }, []);
+  useEffect(() => { refreshTasks(); refresh(); }, []);
+  useEffect(() => {
+    const off = onTasksChanged(() => { refreshTasks(); refresh(); });
+    return off;
+  }, []);
   useEffect(() => {
     if (typeof window !== 'undefined') {
       const v = window.localStorage.getItem('calendarShowClasses');
@@ -202,13 +211,13 @@ export default function CalendarPage() {
     }
   }, []);
   // Server-backed density setting
-  useEffect(() => { (async () => { try { const r = await fetch('/api/settings?keys=calendarDensity', { cache: 'no-store' }); if (!r.ok) return; const j = await r.json(); const s = (j?.settings||{}) as Record<string,any>; const d = s.calendarDensity; if (d === 'comfortable' || d === 'compact') setDensity(d); } catch {} })(); }, []);
+  useEffect(() => { (async () => { try { const j = await apiFetch<{ settings: Record<string, any> }>('/api/settings?keys=calendarDensity'); const s = (j?.settings||{}) as Record<string,any>; const d = s.calendarDensity; if (d === 'comfortable' || d === 'compact') setDensity(d); } catch {} })(); }, []);
   useEffect(() => {
     if (typeof window !== 'undefined') window.localStorage.setItem('calendarShowClasses', String(showClasses));
   }, [showClasses]);
   useEffect(() => {
     if (typeof window !== 'undefined') window.localStorage.setItem('calendarDensity', density);
-    try { void fetch('/api/settings', { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ calendarDensity: density }) }); } catch {}
+    try { void apiFetch('/api/settings', { method: 'PATCH', body: { calendarDensity: density } }); } catch {}
   }, [density]);
 
   const first = new Date(year, month, 1);
@@ -227,7 +236,10 @@ export default function CalendarPage() {
 
   const byDay = useMemo(() => {
     const m: Record<string, Task[]> = {};
-    const filtered = tasks.filter(t => (statusFilter === 'all' || t.status === statusFilter) && (!courseFilter || (t.course || '').toLowerCase().includes(courseFilter.toLowerCase())));
+    const filtered = tasks
+      .filter(t => (showAllTerms || !currentTerm || (t.term || '') === currentTerm))
+      .filter(t => (statusFilter === 'all' || t.status === statusFilter))
+      .filter(t => (!courseFilter || (t.course || '').toLowerCase().includes(courseFilter.toLowerCase())));
     for (const t of filtered) {
       const k = keyOf(new Date(t.dueDate));
       (m[k] ||= []).push(t);
@@ -246,7 +258,7 @@ export default function CalendarPage() {
       return (a.title || '').localeCompare(b.title || '');
     });
     return m;
-  }, [tasks, courseFilter, statusFilter]);
+  }, [tasks, courseFilter, statusFilter, currentTerm, showAllTerms]);
 
   const classesByDay = useMemo(() => {
     type ClassItem = { title: string; code?: string | null; time?: string | null; room?: string | null; colorKey: string; color?: string | null; startMin?: number; endMin?: number; conflict?: boolean };
@@ -306,6 +318,21 @@ export default function CalendarPage() {
     }
     return m;
   }, [courses, weeks, year, month, courseFilter]);
+
+  // Planned study minutes by day (from Schedule)
+  const plannedByDay = useMemo(() => {
+    const m: Record<string, number> = {};
+    for (const row of weeks) for (const d of row) m[keyOf(d)] = 0;
+    for (const b of (blocks || [])) { if (m[b.day] !== undefined) m[b.day] += b.plannedMinutes || 0; }
+    return m;
+  }, [blocks, weeks]);
+
+  // Capacity (availability) minutes by day
+  const capacityByDay = useMemo(() => {
+    const m: Record<string, number> = {};
+    for (const row of weeks) for (const d of row) { const dow = d.getDay(); m[keyOf(d)] = (availability as any)?.[dow] ?? 240; }
+    return m;
+  }, [availability, weeks]);
 
   // Finals as calendar-only events (not tasks)
   const finalsByDay = useMemo(() => {
@@ -408,15 +435,15 @@ export default function CalendarPage() {
     if (addStartTime) body.startTime = addStartTime;
     const effectiveEnd = addEndTime || (addStartTime ? toEnd(addStartTime) : '');
     if (effectiveEnd) body.endTime = effectiveEnd;
-    const res = await fetch('/api/tasks', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
-    if (res.ok) {
+    try {
+      await tasksClient.create(body as any);
       if (stay) {
         setAddTitle(''); setAddEst('');
       } else {
         setAddOpen(false); setAddTitle(''); setAddCourse(''); setAddEst(''); setAddType(''); setAddStartTime(''); setAddEndTime('');
       }
       await refresh();
-    }
+    } catch {}
   }
 
   function onDragStart(e: React.DragEvent, t: Task) {
@@ -426,7 +453,7 @@ export default function CalendarPage() {
   async function moveTaskToDay(taskId: string, day: Date) {
     const next = new Date(day);
     next.setHours(23, 59, 59, 999);
-    await fetch(`/api/tasks/${taskId}`, { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ dueDate: next.toISOString() }) });
+    await tasksClient.update(taskId, { dueDate: next.toISOString() } as any);
     await refresh();
   }
 
@@ -437,7 +464,7 @@ export default function CalendarPage() {
   }
 
   async function toggleDone(t: Task) {
-    await fetch(`/api/tasks/${t.id}`, { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ status: t.status === 'done' ? 'todo' : 'done' }) });
+    await tasksClient.update(t.id, { status: t.status === 'done' ? 'todo' : 'done' } as any);
     await refresh();
   }
 
@@ -445,7 +472,7 @@ export default function CalendarPage() {
     const d = new Date(t.dueDate);
     d.setDate(d.getDate() + 1);
     d.setHours(23,59,59,999);
-    await fetch(`/api/tasks/${t.id}`, { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ dueDate: d.toISOString() }) });
+    await tasksClient.update(t.id, { dueDate: d.toISOString() } as any);
     await refresh();
   }
 
@@ -487,19 +514,15 @@ export default function CalendarPage() {
       description: eventForm.description || null,
       location: eventForm.location || null,
     };
-    const res = await fetch('/api/events', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(body),
-    });
-    if (res.ok) {
-      setEventModalOpen(false);
-      await refresh();
-    }
+    await apiFetch('/api/events', { method: 'POST', body });
+    setEventModalOpen(false);
+    try { notifyToast({ kind: 'success', message: 'Event created.' }); } catch {}
+    await refresh();
   }
 
   async function deleteEvent(id: string) {
-    await fetch(`/api/events/${id}`, { method: 'DELETE' });
+    await apiFetch(`/api/events/${id}`, { method: 'DELETE' });
+    try { notifyToast({ kind: 'success', message: 'Event deleted.' }); } catch {}
     await refresh();
   }
 
@@ -533,14 +556,14 @@ export default function CalendarPage() {
         body.dueDate = nd.toISOString();
       }
     }
-    await fetch(`/api/tasks/${editTask.id}`, { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
+    await tasksClient.update(editTask.id, body as any);
     setEditOpen(false); setEditTask(null);
     await refresh();
   }
 
   async function deleteEdit() {
     if (!editTask) return;
-    await fetch(`/api/tasks/${editTask.id}`, { method: 'DELETE' });
+    await tasksClient.remove(editTask.id);
     setEditOpen(false); setEditTask(null);
     await refresh();
   }
@@ -728,7 +751,7 @@ export default function CalendarPage() {
       <div className="card p-4">
         <BulkAddEvents courses={courses} onDone={refresh} />
       </div>
-      <div className="grid grid-cols-1 md:grid-cols-3 gap-2">
+      <div className="grid grid-cols-1 md:grid-cols-4 gap-2">
         <div>
           <label className="block text-xs text-slate-300/70 mb-1">Course contains</label>
           <input value={courseFilter} onChange={e => setCourseFilter(e.target.value)} placeholder="e.g., Torts" className="w-full bg-[#0b1020] border border-[#1b2344] rounded px-3 py-2" />
@@ -756,6 +779,10 @@ export default function CalendarPage() {
             </label>
           </div>
         </div>
+        <div>
+          <label className="block text-xs text-slate-300/70 mb-1">Semester</label>
+          <label className="inline-flex items-center gap-2 text-sm"><input type="checkbox" checked={showAllTerms} onChange={() => toggleShowAll()} /> All semesters</label>
+        </div>
       </div>
       {loading && <div className="text-xs text-slate-300/70">Loading…</div>}
       <div className="grid grid-cols-7 gap-2">
@@ -767,11 +794,28 @@ export default function CalendarPage() {
           const monthClass = d.getMonth() === month ? '' : 'opacity-50';
           const list = byDay[k] || [];
           return (
-            <div key={idx} className={`border border-[#1b2344] rounded p-3 min-h-[160px] sm:min-h-[180px] md:min-h-[220px] ${monthClass}`} onClick={() => setSelectedDayKey(k)} onDragOver={(e) => e.preventDefault()} onDrop={(e) => onDropDay(e, d)}>
+            <div key={idx} className={`relative overflow-hidden border border-[#1b2344] rounded p-3 min-h-[160px] sm:min-h-[180px] md:min-h-[220px] ${monthClass}`} onClick={() => setSelectedDayKey(k)} onDragOver={(e) => e.preventDefault()} onDrop={(e) => onDropDay(e, d)}>
               <div className="text-xs text-slate-300/70 mb-1 flex items-center justify-between">
                 <span className={`${fmtYmd(new Date())===k ? 'text-slate-200 font-semibold' : ''}`}>{d.getDate()}</span>
                 {selectedDayKey === k && <span className="text-[10px] text-slate-300/60">Agenda</span>}
               </div>
+              {plannedByDay[k] > 0 && (
+                <div className="text-[10px] text-emerald-400 mb-1">Planned {Math.round(plannedByDay[k])}m</div>
+              )}
+              {(() => { 
+                const cap = capacityByDay[k] || 0; 
+                const planned = plannedByDay[k] || 0; 
+                const baseRatio = cap > 0 ? planned / cap : 0; 
+                const ratio = Math.max(0, Math.min(baseRatio, 1));
+                const color = baseRatio > 1 ? 'rose' : baseRatio >= 0.8 ? 'amber' : 'emerald';
+                const track = color === 'rose' ? 'bg-rose-500/10' : (color === 'amber' ? 'bg-amber-500/10' : 'bg-emerald-500/10');
+                const bar = color === 'rose' ? 'bg-rose-500/70' : (color === 'amber' ? 'bg-amber-500/70' : 'bg-emerald-500/60');
+                return (
+                  <div className={`absolute left-0 right-0 bottom-0 h-1 ${track}`}>
+                    <div className={`h-full ${bar}`} style={{ width: `${Math.round(ratio*100)}%` }} />
+                  </div>
+                ); 
+              })()}
               {/* Class meetings */}
               {showClasses && (classesByDay[k] && classesByDay[k].length > 0) && (
                 <ul className="space-y-0.5 mb-1">

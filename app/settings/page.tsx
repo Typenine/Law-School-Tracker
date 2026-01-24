@@ -1,6 +1,9 @@
 "use client";
 import { useEffect, useState, useMemo } from "react";
 import type { WindowsByDow, BreaksByDow, SemesterInfo } from '@/lib/types';
+import { notifySemesterChanged } from '@/lib/semesterBus';
+import { apiFetch } from '@/lib/apiClient';
+import { notifyToast } from '@/lib/toastBus';
 
 function uid() { return Math.random().toString(36).slice(2) + Date.now().toString(36); }
 function hueFromString(s: string): number { let h = 0; for (let i=0;i<s.length;i++) { h = (h * 31 + s.charCodeAt(i)) >>> 0; } return h % 360; }
@@ -56,10 +59,8 @@ export default function SettingsPage() {
   useEffect(() => {
     (async () => {
       try {
-        const r = await fetch('/api/settings', { cache: 'no-store' });
-        if (!r.ok) return;
-        const j = await r.json();
-        const s = (j?.settings || {}) as Record<string, any>;
+        const j = await apiFetch<{ settings: Record<string, any> }>('/api/settings');
+        const s = ((j as any)?.settings || {}) as Record<string, any>;
         if (typeof s.remindersEnabled === 'boolean') setRemindersEnabled(!!s.remindersEnabled);
         if (typeof s.remindersLeadHours !== 'undefined') setRemindersLeadHours(String(Math.max(1, parseFloat(String(s.remindersLeadHours)) || 24)));
         if (typeof s.minutesPerPage !== 'undefined') setMinutesPerPage(String(Math.max(1, Math.round(parseFloat(String(s.minutesPerPage)) || 3))));
@@ -78,7 +79,7 @@ export default function SettingsPage() {
 
   useEffect(() => {
     (async () => {
-      try { const r = await fetch('/api/courses', { cache: 'no-store' }); const d = await r.json(); const list = Array.isArray(d?.courses) ? d.courses : []; setCourses(list); const init: Record<string,string> = {}; for (const c of list) init[c.id] = c.color || fallbackHex(c.title); setLocalColors(init); } catch {}
+      try { const d = await apiFetch<{ courses: any[] }>('/api/courses'); const list = Array.isArray((d as any)?.courses) ? (d as any).courses : []; setCourses(list); const init: Record<string,string> = {}; for (const c of list) init[c.id] = c.color || fallbackHex(c.title); setLocalColors(init); } catch {}
     })();
   }, []);
   useEffect(() => {
@@ -98,20 +99,16 @@ export default function SettingsPage() {
   useEffect(() => {
     (async () => {
       try {
-        const r = await fetch('/api/settings?keys=availabilityWindowsV1,availabilityBreaksV1', { cache: 'no-store' });
-        if (!r.ok) return;
-        const j = await r.json();
-        const s = j?.settings || {};
+        const j = await apiFetch<{ settings: any }>('/api/settings?keys=availabilityWindowsV1,availabilityBreaksV1');
+        const s = (j as any)?.settings || {};
         if (s.availabilityWindowsV1) setWindowsByDow(s.availabilityWindowsV1);
         if (s.availabilityBreaksV1) setBreaksByDow(s.availabilityBreaksV1);
       } catch {}
       // Load semesters
       try {
-        const r = await fetch('/api/semesters', { cache: 'no-store' });
-        if (!r.ok) return;
-        const j = await r.json();
-        setSemesters(j.semesters || []);
-        const active = (j.semesters || []).find((s: SemesterInfo) => s.isActive);
+        const j = await apiFetch<{ semesters: SemesterInfo[] }>('/api/semesters');
+        setSemesters(((j as any)?.semesters) || []);
+        const active = (((j as any)?.semesters) || []).find((s: SemesterInfo) => s.isActive);
         if (active) setActiveSemesterId(active.id);
       } catch {}
     })();
@@ -141,14 +138,8 @@ export default function SettingsPage() {
   async function saveAvailability() {
     setAvailSaving(true);
     try {
-      await fetch('/api/settings', {
-        method: 'PATCH',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          availabilityWindowsV1: windowsByDow,
-          availabilityBreaksV1: breaksByDow,
-        }),
-      });
+      await apiFetch('/api/settings', { method: 'PATCH', body: { availabilityWindowsV1: windowsByDow, availabilityBreaksV1: breaksByDow } });
+      try { notifyToast({ kind: 'success', message: 'Availability saved.' }); } catch {}
     } catch {}
     setAvailSaving(false);
   }
@@ -176,44 +167,44 @@ export default function SettingsPage() {
     if (typeof window === "undefined") return;
     window.localStorage.setItem("remindersEnabled", remindersEnabled ? "true" : "false");
   }, [remindersEnabled]);
-  useEffect(() => { try { void fetch('/api/settings', { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ remindersEnabled }) }); } catch {} }, [remindersEnabled]);
+  useEffect(() => { try { void apiFetch('/api/settings', { method: 'PATCH', body: { remindersEnabled } }); } catch {} }, [remindersEnabled]);
   useEffect(() => {
     if (typeof window === "undefined") return;
     const n = Math.max(1, parseFloat(remindersLeadHours || "24") || 24);
     window.localStorage.setItem("remindersLeadHours", String(n));
   }, [remindersLeadHours]);
-  useEffect(() => { const n = Math.max(1, parseFloat(remindersLeadHours || '24') || 24); try { void fetch('/api/settings', { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ remindersLeadHours: n }) }); } catch {} }, [remindersLeadHours]);
+  useEffect(() => { const n = Math.max(1, parseFloat(remindersLeadHours || '24') || 24); try { void apiFetch('/api/settings', { method: 'PATCH', body: { remindersLeadHours: n } }); } catch {} }, [remindersLeadHours]);
   useEffect(() => {
     if (typeof window === "undefined") return;
     const n = Math.max(1, Math.round(parseFloat(minutesPerPage || "3") || 3));
     window.localStorage.setItem("minutesPerPage", String(n));
   }, [minutesPerPage]);
-  useEffect(() => { const n = Math.max(1, Math.round(parseFloat(minutesPerPage || '3') || 3)); try { void fetch('/api/settings', { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ minutesPerPage: n }) }); } catch {} }, [minutesPerPage]);
+  useEffect(() => { const n = Math.max(1, Math.round(parseFloat(minutesPerPage || '3') || 3)); try { void apiFetch('/api/settings', { method: 'PATCH', body: { minutesPerPage: n } }); } catch {} }, [minutesPerPage]);
   useEffect(() => {
     if (typeof window === "undefined") return;
     const n = Math.min(10, Math.max(1, Math.round(parseFloat(defaultFocus || "5") || 5)));
     window.localStorage.setItem("defaultFocus", String(n));
   }, [defaultFocus]);
-  useEffect(() => { const n = Math.min(10, Math.max(1, Math.round(parseFloat(defaultFocus || '5') || 5))); try { void fetch('/api/settings', { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ defaultFocus: n }) }); } catch {} }, [defaultFocus]);
+  useEffect(() => { const n = Math.min(10, Math.max(1, Math.round(parseFloat(defaultFocus || '5') || 5))); try { void apiFetch('/api/settings', { method: 'PATCH', body: { defaultFocus: n } }); } catch {} }, [defaultFocus]);
   useEffect(() => {
     if (typeof window === "undefined") return;
     window.localStorage.setItem("icsToken", icsToken || "");
   }, [icsToken]);
-  useEffect(() => { try { void fetch('/api/settings', { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ icsToken: icsToken || '' }) }); } catch {} }, [icsToken]);
+  useEffect(() => { try { void apiFetch('/api/settings', { method: 'PATCH', body: { icsToken: icsToken || '' } }); } catch {} }, [icsToken]);
   async function saveCourseColor(id: string, color: string) {
-    try { setSavingId(id); const r = await fetch(`/api/courses/${id}`, { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ color }) }); if (r.ok) { const d = await r.json(); const updated = d?.course; if (updated) { setCourses(prev => prev.map((c:any)=>c.id===id?updated:c)); } } } finally { setSavingId(null); }
+    try { setSavingId(id); const d = await apiFetch<{ course: any }>(`/api/courses/${id}`, { method: 'PATCH', body: { color } }); const updated = (d as any)?.course; if (updated) { setCourses(prev => prev.map((c:any)=>c.id===id?updated:c)); try { notifyToast({ kind: 'success', message: 'Course color saved.' }); } catch {} } } finally { setSavingId(null); }
   }
   async function resetCourseColor(id: string) {
     const c = courses.find((x:any)=>x.id===id); const title = c?.title || '';
-    try { setSavingId(id); const r = await fetch(`/api/courses/${id}`, { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ color: null }) }); if (r.ok) { const d = await r.json(); const updated = d?.course; if (updated) { setCourses(prev => prev.map((c:any)=>c.id===id?updated:c)); setLocalColors(prev => ({ ...prev, [id]: fallbackHex(title) })); } } } finally { setSavingId(null); }
+    try { setSavingId(id); const d = await apiFetch<{ course: any }>(`/api/courses/${id}`, { method: 'PATCH', body: { color: null } }); const updated = (d as any)?.course; if (updated) { setCourses(prev => prev.map((c:any)=>c.id===id?updated:c)); setLocalColors(prev => ({ ...prev, [id]: fallbackHex(title) })); try { notifyToast({ kind: 'success', message: 'Course color reset.' }); } catch {} } } finally { setSavingId(null); }
   }
   function saveInternColor() { try { if (typeof window !== 'undefined') window.localStorage.setItem('internshipColor', internshipColor || fallbackHex('Internship')); } catch {} }
-  function resetInternColor() { const def = fallbackHex('Internship'); setInternshipColor(def); try { if (typeof window !== 'undefined') window.localStorage.removeItem('internshipColor'); } catch {} try { void fetch('/api/settings', { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ internshipColor: null }) }); } catch {} }
-  function saveSlrColor() { try { if (typeof window !== 'undefined') window.localStorage.setItem('sportsLawReviewColor', sportsLawReviewColor || fallbackHex('Sports Law Review')); } catch {} try { void fetch('/api/settings', { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ sportsLawReviewColor: sportsLawReviewColor || fallbackHex('Sports Law Review') }) }); } catch {} }
-  function resetSlrColor() { const def = fallbackHex('Sports Law Review'); setSportsLawReviewColor(def); try { if (typeof window !== 'undefined') window.localStorage.removeItem('sportsLawReviewColor'); } catch {} try { void fetch('/api/settings', { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ sportsLawReviewColor: null }) }); } catch {} }
+  function resetInternColor() { const def = fallbackHex('Internship'); setInternshipColor(def); try { if (typeof window !== 'undefined') window.localStorage.removeItem('internshipColor'); } catch {} try { void apiFetch('/api/settings', { method: 'PATCH', body: { internshipColor: null } }); } catch {} }
+  function saveSlrColor() { try { if (typeof window !== 'undefined') window.localStorage.setItem('sportsLawReviewColor', sportsLawReviewColor || fallbackHex('Sports Law Review')); } catch {} try { void apiFetch('/api/settings', { method: 'PATCH', body: { sportsLawReviewColor: sportsLawReviewColor || fallbackHex('Sports Law Review') } }); } catch {} }
+  function resetSlrColor() { const def = fallbackHex('Sports Law Review'); setSportsLawReviewColor(def); try { if (typeof window !== 'undefined') window.localStorage.removeItem('sportsLawReviewColor'); } catch {} try { void apiFetch('/api/settings', { method: 'PATCH', body: { sportsLawReviewColor: null } }); } catch {} }
   // Persist internship color to server on change via Save button
   useEffect(() => { /* mirror to server only when value is changed via color input + Save */ }, [internshipColor]);
-  function saveInternColorServer() { try { if (typeof window !== 'undefined') window.localStorage.setItem('internshipColor', internshipColor || fallbackHex('Internship')); } catch {} try { void fetch('/api/settings', { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ internshipColor: internshipColor || fallbackHex('Internship') }) }); } catch {} }
+  function saveInternColorServer() { try { if (typeof window !== 'undefined') window.localStorage.setItem('internshipColor', internshipColor || fallbackHex('Internship')); } catch {} try { void apiFetch('/api/settings', { method: 'PATCH', body: { internshipColor: internshipColor || fallbackHex('Internship') } }); } catch {} }
   // Save Nudges
   useEffect(() => { if (typeof window!== 'undefined') window.localStorage.setItem('nudgesEnabled', nudgesEnabled ? 'true':'false'); }, [nudgesEnabled]);
   useEffect(() => { if (typeof window!== 'undefined' && /^(\d{2}):(\d{2})$/.test(dailyReminderTime||'')) window.localStorage.setItem('nudgesReminderTime', dailyReminderTime); }, [dailyReminderTime]);
@@ -412,6 +403,8 @@ export default function SettingsPage() {
                       setSemesters(updated);
                       setActiveSemesterId(sem.id);
                       await fetch('/api/semesters', { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ semesters: updated }) });
+                      try { if (typeof window !== 'undefined') window.localStorage.setItem('currentTerm', sem.id); } catch {}
+                      try { notifySemesterChanged(); } catch {}
                       // Load this semester's availability if it has any
                       if (sem.windowsByDow) setWindowsByDow(sem.windowsByDow);
                       if (sem.breaksByDow) setBreaksByDow(sem.breaksByDow);

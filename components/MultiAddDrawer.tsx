@@ -1,6 +1,7 @@
 "use client";
 import { useEffect, useMemo, useState } from "react";
 import type { Course, NewTaskInput, Task } from "@/lib/types";
+import { notifyTasksChanged } from '@/lib/taskBus';
 
 type Props = { onCreated?: () => void };
 
@@ -156,6 +157,7 @@ export default function MultiAddDrawer({ onCreated }: Props) {
       }
       const token = crypto.randomUUID();
       try { window.localStorage.setItem('lastMultiAddBatchToken', token); window.localStorage.setItem(`multiBatch:${token}`, JSON.stringify(created)); } catch {}
+      try { notifyTasksChanged(); } catch {}
       onCreated?.();
       setPaste(''); setGrid(g=>g.map(x=>({ text:'', due:'' })));
     } finally { setSaving(false); }
@@ -171,6 +173,7 @@ export default function MultiAddDrawer({ onCreated }: Props) {
         await fetch(`/api/tasks/${id}`, { method: 'DELETE' });
       }
       window.localStorage.removeItem(`multiBatch:${token}`);
+      try { notifyTasksChanged(); } catch {}
       onCreated?.();
     } catch {}
   }

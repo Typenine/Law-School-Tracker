@@ -5,6 +5,7 @@ import ReminderManager from '@/components/ReminderManager'
 import PWARegister from '@/components/PWARegister'
 import CommandPalette from '@/components/CommandPalette'
 import ThemeToggleButton from '@/components/ThemeToggleButton'
+import Providers from '@/app/providers'
 
 export const metadata: Metadata = {
   title: 'Law School Tracker',
@@ -32,8 +33,9 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
         }} />
       </head>
       <body>
-        <div className="app-container">
-          <header className="mb-6 space-y-3">
+        <Providers>
+          <div className="app-container">
+            <header className="mb-6 space-y-3">
             <div className="flex items-center justify-between">
               <div>
                 <h1 className="text-2xl font-semibold">Law School Tracker</h1>
@@ -52,12 +54,13 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
               <Link href="/review" className="nav-link">Review</Link>
               <Link href="/log" className="nav-link">Log</Link>
             </nav>
-          </header>
-          {children}
-        </div>
-        <ReminderManager />
-        <PWARegister />
-        <CommandPalette />
+            </header>
+            {children}
+          </div>
+          <ReminderManager />
+          <PWARegister />
+          <CommandPalette />
+        </Providers>
       </body>
     </html>
   )

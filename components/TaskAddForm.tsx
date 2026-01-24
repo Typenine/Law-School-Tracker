@@ -1,5 +1,6 @@
 "use client";
 import { useEffect, useState } from 'react';
+import { notifyTasksChanged } from '@/lib/taskBus';
 
 type Props = { onCreated?: () => void };
 
@@ -64,6 +65,7 @@ export default function TaskAddForm({ onCreated }: Props) {
       });
       if (res.ok) {
         setNewTitle(''); setNewCourse(''); setNewDue(''); setNewEst('');
+        try { notifyTasksChanged(); } catch {}
         onCreated?.();
       }
     } catch (_) {}
@@ -74,6 +76,7 @@ export default function TaskAddForm({ onCreated }: Props) {
         arr.push(item);
         window.localStorage.setItem('offlineQueue', JSON.stringify(arr));
         setNewTitle(''); setNewCourse(''); setNewDue(''); setNewEst('');
+        try { notifyTasksChanged(); } catch {}
       } catch {}
     }
   }

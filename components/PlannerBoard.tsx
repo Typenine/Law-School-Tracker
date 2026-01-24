@@ -3,6 +3,13 @@ import { useEffect, useMemo, useState } from 'react';
 import { Task, StudySession } from '@/lib/types';
 import { courseColorClass } from '@/lib/colors';
 import TaskAddForm from '@/components/TaskAddForm';
+import { notifyTasksChanged, onTasksChanged } from '@/lib/taskBus';
+import { onSemesterChanged } from '@/lib/semesterBus';
+import { useSemester } from '@/lib/useSemester';
+import { tasksClient } from '@/lib/tasksClient';
+import { apiFetch } from '@/lib/apiClient';
+import { notifyToast } from '@/lib/toastBus';
+import { useSchedule } from '@/lib/useSchedule';
 
 function startOfDay(d: Date) { const x = new Date(d); x.setHours(0,0,0,0); return x; }
 function keyOf(d: Date) { const x = startOfDay(d); return `${x.getFullYear()}-${String(x.getMonth()+1).padStart(2,'0')}-${String(x.getDate()).padStart(2,'0')}`; }
@@ -13,6 +20,7 @@ export default function PlannerBoard() {
   const [sessions, setSessions] = useState<StudySession[]>([]);
   const [loading, setLoading] = useState(false);
   const [currentTerm, setCurrentTerm] = useState<string>('');
+  const { showAllTerms, toggleShowAll } = useSemester();
   const [courseScales, setCourseScales] = useState<Record<string, number>>({});
   const [openLogKey, setOpenLogKey] = useState<string | null>(null);
   const [logTaskId, setLogTaskId] = useState<string>('');
@@ -43,6 +51,17 @@ export default function PlannerBoard() {
   }
   useEffect(() => { refresh(); }, []);
   useEffect(() => {
+    const off = onTasksChanged(() => { refresh(); });
+    return off;
+  }, []);
+  useEffect(() => {
+    const off = onSemesterChanged(() => {
+      try { if (typeof window !== 'undefined') setCurrentTerm(window.localStorage.getItem('currentTerm') || ''); } catch {}
+      refresh();
+    });
+    return off;
+  }, []);
+  useEffect(() => {
     if (typeof window !== 'undefined') {
       setCurrentTerm(window.localStorage.getItem('currentTerm') || '');
       try {
@@ -68,6 +87,14 @@ export default function PlannerBoard() {
     for (let i=0;i<7;i++) { const d = new Date(today); d.setDate(d.getDate()+i); arr.push({ date: d, key: keyOf(d), label: labelOf(d) }); }
     return arr;
   }, []);
+
+  // Planned study minutes from Schedule (read-only)
+  const { blocks } = useSchedule();
+  const plannedByKey = useMemo(() => {
+    const m: Record<string, number> = Object.fromEntries(days.map(d => [d.key, 0] as const));
+    for (const b of (blocks || [])) { if (m[b.day] !== undefined) m[b.day] += b.plannedMinutes || 0; }
+    return m;
+  }, [blocks, days]);
 
   // Load-balancing assist: move tasks from heavy to lighter days within +/-2 days
   async function balanceWeek() {
@@ -109,12 +136,12 @@ export default function PlannerBoard() {
     for (const m of moves) {
       const [y, mo, d] = m.toKey.split('-').map(n => parseInt(n, 10));
       const nd = new Date(y, mo - 1, d, 23, 59, 59, 999);
-      await fetch(`/api/tasks/${m.id}`, { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ dueDate: nd.toISOString() }) });
+      await tasksClient.update(m.id, { dueDate: nd.toISOString() } as any);
     }
     if (moves.length) await refresh();
   }
 
-  const filteredTasks = useMemo(() => tasks.filter(t => (!currentTerm || (t.term || '') === currentTerm)), [tasks, currentTerm]);
+  const filteredTasks = useMemo(() => tasks.filter(t => (showAllTerms || !currentTerm || (t.term || '') === currentTerm)), [tasks, currentTerm, showAllTerms]);
 
   const buckets = useMemo(() => {
     const map: Record<string, Task[]> = Object.fromEntries(days.map(d => [d.key, [] as Task[]]));
@@ -196,23 +223,20 @@ export default function PlannerBoard() {
         const p = s.plan[i];
         const [y, m, d] = p.key.split('-').map(n => parseInt(n, 10));
         const due = new Date(y, m - 1, d, 23, 59, 59, 999);
-        const res = await fetch('/api/tasks', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({
+        const created = await tasksClient.create({
           title: `[Prep] ${s.title} (part ${i+1}/${total})`,
           course: s.course || null,
           dueDate: due.toISOString(),
           status: 'todo',
           estimatedMinutes: p.minutes,
           term: currentTerm || null,
-        })});
-        if (!res.ok) throw new Error('failed to create prep');
-        const data = await res.json();
-        createdIds.push(data.task.id);
+        } as any);
+        createdIds.push(created.id);
       }
       // Update main task dependsOn
       const main = tasks.find(t => t.id === s.id);
       const prev = (main?.dependsOn || []) as string[];
-      const patch = await fetch(`/api/tasks/${s.id}`, { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ dependsOn: [...prev, ...createdIds] }) });
-      if (!patch.ok) throw new Error('failed to update main task');
+      await tasksClient.update(s.id, { dependsOn: [...prev, ...createdIds] } as any);
       await refresh();
     } catch { /* ignore for now, could add toast */ }
   }
@@ -228,8 +252,8 @@ export default function PlannerBoard() {
     const next = new Date(day);
     // date-only preference: normalize to end-of-day
     next.setHours(23, 59, 59, 999);
-    const res = await fetch(`/api/tasks/${taskId}`, { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ dueDate: next.toISOString() }) });
-    if (res.ok) await refresh();
+    await tasksClient.update(taskId, { dueDate: next.toISOString() } as any);
+    await refresh();
   }
 
   function onDropDay(e: React.DragEvent, day: Date) {
@@ -239,7 +263,7 @@ export default function PlannerBoard() {
   }
 
   async function toggleDone(id: string, done: boolean) {
-    await fetch(`/api/tasks/${id}`, { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ status: done ? 'done' : 'todo' }) });
+    await tasksClient.update(id, { status: done ? 'done' : 'todo' } as any);
     await refresh();
   }
 
@@ -258,17 +282,22 @@ export default function PlannerBoard() {
       practiceQs: logPracticeQs ? parseInt(logPracticeQs, 10) : null,
       activity: logActivity || null,
     };
-    const res = await fetch('/api/sessions', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
-    if (res.ok) {
+    try {
+      await apiFetch('/api/sessions', { method: 'POST', body });
+      try { notifyToast({ kind: 'success', message: 'Session logged.' }); } catch {}
       setOpenLogKey(null);
       setLogTaskId(''); setLogActivity('reading'); setLogHours('1.0'); setLogFocus('5'); setLogNotes(''); setLogPages(''); setLogOutlinePages(''); setLogPracticeQs('');
       await refresh();
-    }
+    } catch {}
   }
 
 
   return (
     <div className="space-y-4">
+      <div className="flex items-center justify-between">
+        <div className="text-sm text-slate-300/70">Planner</div>
+        <label className="inline-flex items-center gap-2 text-sm"><input type="checkbox" checked={showAllTerms} onChange={() => toggleShowAll()} /> All semesters</label>
+      </div>
       <div className="card p-4">
         <TaskAddForm onCreated={refresh} />
       </div>
@@ -296,7 +325,10 @@ export default function PlannerBoard() {
           <div key={d.key} className="card p-4"
                onDragOver={(e) => e.preventDefault()}
                onDrop={(e) => onDropDay(e, d.date)}>
-            <div className="text-slate-300/80 text-sm mb-2">{d.label}</div>
+            <div className="text-slate-300/80 text-sm mb-1">{d.label}</div>
+            {plannedByKey[d.key] > 0 && (
+              <div className="text-[11px] text-emerald-400 mb-1">Planned {Math.round(plannedByKey[d.key])}m</div>
+            )}
             {loading && <div className="text-xs text-slate-300/70">Loading...</div>}
             {buckets[d.key].length === 0 ? (
               <div className="text-sm text-slate-300/70">No tasks.</div>

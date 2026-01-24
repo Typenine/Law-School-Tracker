@@ -2,6 +2,11 @@
 import { useEffect, useMemo, useState } from 'react';
 import type { Task, Course, CourseMeetingBlock } from '@/lib/types';
 import { courseColorClass } from '@/lib/colors';
+import { onTasksChanged } from '@/lib/taskBus';
+import { useTasks } from '@/lib/useTasks';
+import { useSemester } from '@/lib/useSemester';
+import { tasksClient } from '@/lib/tasksClient';
+import { useCourses } from '@/lib/useCourses';
 
 function sameLocalDate(a: Date, b: Date) {
   return a.getFullYear() === b.getFullYear() && a.getMonth() === b.getMonth() && a.getDate() === b.getDate();
@@ -15,27 +20,21 @@ function toMin(hhmm: string | null | undefined) {
 }
 
 export default function DashboardToday() {
-  const [tasks, setTasks] = useState<Task[]>([]);
-  const [courses, setCourses] = useState<Course[]>([]);
+  const { tasks, refresh: refreshTasks } = useTasks();
+  const { courses, refresh: refreshCourses, loading: coursesLoading } = useCourses();
   const [loading, setLoading] = useState(true);
+  const { currentTerm, showAllTerms, toggleShowAll } = useSemester();
 
   async function refresh() {
     setLoading(true);
-    try {
-      const [tRes, cRes] = await Promise.all([
-        fetch('/api/tasks', { cache: 'no-store' }),
-        fetch('/api/courses', { cache: 'no-store' }),
-      ]);
-      const tJson = await tRes.json();
-      const cJson = await cRes.json();
-      setTasks(tJson.tasks || []);
-      setCourses(cJson.courses || []);
-    } finally {
-      setLoading(false);
-    }
+    try { await refreshCourses(); } finally { setLoading(false); }
   }
 
-  useEffect(() => { refresh(); }, []);
+  useEffect(() => { refreshTasks(); refresh(); }, []);
+  useEffect(() => {
+    const off = onTasksChanged(() => { refreshTasks(); refresh(); });
+    return off;
+  }, []);
 
   const today = new Date();
   const dayIdx = today.getDay(); // 0..6
@@ -66,12 +65,14 @@ export default function DashboardToday() {
   }, [courses]);
 
   const tasksToday = useMemo(() => {
-    return tasks.filter(t => sameLocalDate(new Date(t.dueDate), today));
-  }, [tasks]);
+    return tasks
+      .filter(t => (showAllTerms || !currentTerm || (t.term || '') === currentTerm))
+      .filter(t => sameLocalDate(new Date(t.dueDate), today));
+  }, [tasks, currentTerm, showAllTerms]);
 
   async function toggleDone(id: string, done: boolean) {
-    await fetch(`/api/tasks/${id}`, { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ status: done ? 'done' : 'todo' }) });
-    refresh();
+    await tasksClient.update(id, { status: done ? 'done' : 'todo' } as any);
+    refreshTasks();
   }
 
   const fmtTime = (m: number) => {
@@ -84,7 +85,10 @@ export default function DashboardToday() {
     <div>
       <div className="flex items-center justify-between mb-2">
         <h2 className="text-lg font-medium">Today</h2>
-        <div className="text-sm text-slate-300/70">{today.toLocaleDateString(undefined, { weekday: 'long', year: 'numeric', month: 'short', day: 'numeric' })}</div>
+        <div className="flex items-center gap-4">
+          <label className="inline-flex items-center gap-2 text-sm"><input type="checkbox" checked={showAllTerms} onChange={toggleShowAll} /> All semesters</label>
+          <div className="text-sm text-slate-300/70">{today.toLocaleDateString(undefined, { weekday: 'long', year: 'numeric', month: 'short', day: 'numeric' })}</div>
+        </div>
       </div>
       {loading ? (
         <div className="text-sm">Loading…</div>

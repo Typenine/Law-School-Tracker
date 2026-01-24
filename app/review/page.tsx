@@ -1,6 +1,9 @@
 ﻿"use client";
-import { useEffect, useMemo, useState } from "react";
+import { useMemo, useState } from "react";
 import { getSessionCourse, buildTasksById } from "@/lib/courseMatching";
+import { useTasks } from "@/lib/useTasks";
+import { useSessions } from "@/lib/useSessions";
+import { useCourses } from "@/lib/useCourses";
 
 type Task = { id: string; title: string; course?: string | null };
 type Session = { id: string; taskId?: string | null; when: string; minutes: number; focus?: number | null; notes?: string | null; activity?: string | null; pagesRead?: number | null };
@@ -28,25 +31,11 @@ function focusColor(f: number): string {
 }
 
 export default function ReviewPage() {
-  const [tasks, setTasks] = useState<Task[]>([]);
-  const [sessions, setSessions] = useState<Session[]>([]);
-  const [courses, setCourses] = useState<Course[]>([]);
-  const [loading, setLoading] = useState(true);
+  const { tasks, loading: tasksLoading } = useTasks();
+  const { sessions, loading: sessionsLoading } = useSessions();
+  const { courses, loading: coursesLoading } = useCourses();
   const [period, setPeriod] = useState<string>("7d");
-
-  useEffect(() => {
-    (async () => {
-      const [tRes, sRes, cRes] = await Promise.all([
-        fetch("/api/tasks", { cache: "no-store" }),
-        fetch("/api/sessions", { cache: "no-store" }),
-        fetch("/api/courses", { cache: "no-store" }),
-      ]);
-      if (tRes.ok) setTasks((await tRes.json()).tasks || []);
-      if (sRes.ok) setSessions((await sRes.json()).sessions || []);
-      if (cRes.ok) setCourses((await cRes.json()).courses || []);
-      setLoading(false);
-    })();
-  }, []);
+  const loading = tasksLoading || sessionsLoading || coursesLoading;
 
   const semesters = useMemo(() => {
     const set = new Set<string>();

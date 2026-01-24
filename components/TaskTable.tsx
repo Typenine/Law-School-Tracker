@@ -5,6 +5,13 @@ import AddTaskPanel from '@/components/AddTaskPanel';
 import MultiAddDrawer from '@/components/MultiAddDrawer';
 import LogModal, { type LogSubmitData } from '@/components/LogModal';
 import { parsePageRanges, countPages, formatPageRanges, extractPageRangesFromTitle } from '@/lib/pageRanges';
+import { notifyTasksChanged, onTasksChanged } from '@/lib/taskBus';
+import { useSemester } from '@/lib/useSemester';
+import { tasksClient } from '@/lib/tasksClient';
+import { onSemesterChanged } from '@/lib/semesterBus';
+import { notifySessionsChanged } from '@/lib/sessionsBus';
+import { apiFetch } from '@/lib/apiClient';
+import { notifyToast } from '@/lib/toastBus';
 
 function fmtHM(min: number | null | undefined): string {
   const n = Math.max(0, Math.round(Number(min) || 0));
@@ -106,6 +113,8 @@ export default function TaskTable() {
   const [backlogCount, setBacklogCount] = useState<number>(0);
   const [timers, setTimers] = useState<Record<string, { accMs: number; running: boolean; startedAt?: number }>>({});
   const [timerTick, setTimerTick] = useState(0);
+  // Semester filter state (global)
+  const { showAllTerms, toggleShowAll } = useSemester();
   // Log modal state
   const [logModalOpen, setLogModalOpen] = useState(false);
   const [logModalTask, setLogModalTask] = useState<Task | null>(null);
@@ -124,9 +133,8 @@ export default function TaskTable() {
 
   async function refresh() {
     setLoading(true);
-    const res = await fetch('/api/tasks', { cache: 'no-store' });
-    const data = await res.json();
-    setTasks(data.tasks as Task[]);
+    const data = await apiFetch<{ tasks: Task[] }>('/api/tasks');
+    setTasks(((data as any)?.tasks || []) as Task[]);
     setLoading(false);
   }
 
@@ -148,9 +156,8 @@ export default function TaskTable() {
 
   async function refreshSessions() {
     try {
-      const r = await fetch('/api/sessions', { cache: 'no-store' });
-      const j = await r.json();
-      setSessions(Array.isArray(j?.sessions) ? j.sessions : []);
+      const j = await apiFetch<{ sessions: any[] }>('/api/sessions');
+      setSessions(Array.isArray((j as any)?.sessions) ? (j as any).sessions : []);
     } catch {}
   }
 
@@ -159,14 +166,29 @@ export default function TaskTable() {
     refreshSessions();
   }, []);
 
+  useEffect(() => {
+    const off = onTasksChanged(() => {
+      refresh();
+      refreshSessions();
+    });
+    return off;
+  }, [refresh]);
+
+  // React to semester changes (e.g., from Settings)
+  useEffect(() => {
+    const off = onSemesterChanged(() => {
+      try { if (typeof window !== 'undefined') setCurrentTerm(window.localStorage.getItem('currentTerm') || ''); } catch {}
+      refresh();
+    });
+    return off;
+  }, []);
+
   // Mirror core settings from server to local for cross-device consistency
   useEffect(() => {
     (async () => {
       try {
-        const r = await fetch('/api/settings?keys=minutesPerPage,internshipColor,sportsLawReviewColor,icsToken', { cache: 'no-store' });
-        if (!r.ok) return;
-        const j = await r.json();
-        const s = (j?.settings || {}) as Record<string, any>;
+        const j = await apiFetch<{ settings: Record<string, any> }>('/api/settings?keys=minutesPerPage,internshipColor,sportsLawReviewColor,icsToken');
+        const s = ((j as any)?.settings || {}) as Record<string, any>;
         try {
           if (typeof s.minutesPerPage !== 'undefined' && typeof window !== 'undefined') {
             const n = Math.max(1, Math.round(parseFloat(String(s.minutesPerPage)) || 3));
@@ -188,10 +210,8 @@ export default function TaskTable() {
   useEffect(() => {
     (async () => {
       try {
-        const r = await fetch('/api/settings?keys=taskTimersV1', { cache: 'no-store' });
-        if (!r.ok) return;
-        const j = await r.json();
-        const s = (j?.settings || {}) as Record<string, any>;
+        const j = await apiFetch<{ settings: Record<string, any> }>('/api/settings?keys=taskTimersV1');
+        const s = ((j as any)?.settings || {}) as Record<string, any>;
         const tt = s.taskTimersV1;
         if (tt && typeof tt === 'object') setTimers(tt as any);
       } catch {}
@@ -204,7 +224,7 @@ export default function TaskTable() {
   // Debounced persist of timers to server
   useEffect(() => {
     const id = setTimeout(() => {
-      try { void fetch('/api/settings', { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ taskTimersV1: timers }) }); } catch {}
+      try { void apiFetch('/api/settings', { method: 'PATCH', body: { taskTimersV1: timers } }); } catch {}
     }, 1000);
     return () => clearTimeout(id);
   }, [timers]);
@@ -221,9 +241,8 @@ export default function TaskTable() {
   useEffect(() => {
     (async () => {
       try {
-        const r = await fetch('/api/courses', { cache: 'no-store' });
-        const j = await r.json();
-        setCourses(Array.isArray(j?.courses) ? j.courses : []);
+        const j = await apiFetch<{ courses: Course[] }>('/api/courses');
+        setCourses(Array.isArray((j as any)?.courses) ? (j as any).courses : []);
       } catch {}
     })();
   }, []);
@@ -300,12 +319,7 @@ export default function TaskTable() {
         if (!Array.isArray(arr) || arr.length === 0) return;
         const remaining: any[] = [];
         for (const item of arr) {
-          try {
-            const res = await fetch('/api/tasks', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(item) });
-            if (!res.ok) throw new Error('failed');
-          } catch {
-            remaining.push(item);
-          }
+          try { await apiFetch('/api/tasks', { method: 'POST', body: item }); } catch { remaining.push(item); }
         }
         window.localStorage.setItem('offlineQueue', JSON.stringify(remaining));
         setOfflineCount(remaining.length);
@@ -357,41 +371,27 @@ export default function TaskTable() {
       ? new Date(data.completionDate + 'T12:00:00').toISOString()
       : new Date().toISOString();
     try {
-      await fetch('/api/sessions', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          taskId: t.id,
-          taskTitle: t.title,
-          course: t.course || null,
-          minutes: data.minutes,
-          focus: data.focus,
-          notes: data.notes || null,
-          when: sessionWhen,
-        }),
-      });
+      await apiFetch('/api/sessions', { method: 'POST', body: {
+        taskId: t.id,
+        taskTitle: t.title,
+        course: t.course || null,
+        minutes: data.minutes,
+        focus: data.focus,
+        notes: data.notes || null,
+        when: sessionWhen,
+      }});
+      try { notifySessionsChanged(); } catch {}
+      try { notifyToast({ kind: 'success', message: 'Session logged.' }); } catch {}
     } catch {}
 
     // Update task based on mode
     if (data.isPartial) {
       // Partial: reduce estimated time, keep as todo
       const newEst = Math.max(0, (t.estimatedMinutes || 0) - data.minutes);
-      try {
-        await fetch(`/api/tasks/${t.id}`, {
-          method: 'PATCH',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ estimatedMinutes: newEst }),
-        });
-      } catch {}
+      try { await apiFetch(`/api/tasks/${t.id}`, { method: 'PATCH', body: { estimatedMinutes: newEst } }); try { notifyToast({ kind: 'success', message: 'Task updated.' }); } catch {} } catch {}
     } else {
       // Finish: mark as done
-      try {
-        await fetch(`/api/tasks/${t.id}`, {
-          method: 'PATCH',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ status: 'done', actualMinutes: data.minutes }),
-        });
-      } catch {}
+      try { await apiFetch(`/api/tasks/${t.id}`, { method: 'PATCH', body: { status: 'done', actualMinutes: data.minutes } }); try { notifyToast({ kind: 'success', message: 'Task completed.' }); } catch {} } catch {}
       clearTimerFor(t.id);
     }
 
@@ -399,6 +399,7 @@ export default function TaskTable() {
     setLogModalTask(null);
     refresh();
     refreshSessions();
+    try { notifyTasksChanged(); } catch {}
   }
 
   async function toggleDone(t: Task) {
@@ -409,21 +410,19 @@ export default function TaskTable() {
       return;
     }
     // Un-marking done - just toggle status
-    const res = await fetch(`/api/tasks/${t.id}`, { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ status: 'todo' }) });
-    if (res.ok) refresh();
+    await tasksClient.update(t.id, { status: 'todo' } as any);
+    await refresh();
   }
 
   async function remove(id: string) {
     const taskToDelete = tasks.find(t => t.id === id);
-    const res = await fetch(`/api/tasks/${id}`, { method: 'DELETE' });
-    if (res.ok) {
-      setTasks(prev => prev.filter(t => t.id !== id));
-      // Add to undo stack
-      if (taskToDelete) {
-        setUndoStack(prev => [...prev.slice(-9), { type: 'delete', task: taskToDelete }]);
-        setShowUndo(true);
-        setTimeout(() => setShowUndo(false), 8000);
-      }
+    await tasksClient.remove(id);
+    setTasks(prev => prev.filter(t => t.id !== id));
+    // Add to undo stack
+    if (taskToDelete) {
+      setUndoStack(prev => [...prev.slice(-9), { type: 'delete', task: taskToDelete }]);
+      setShowUndo(true);
+      setTimeout(() => setShowUndo(false), 8000);
     }
   }
 
@@ -435,21 +434,13 @@ export default function TaskTable() {
       // Recreate the deleted task
       const { id, ...taskData } = last.task;
       try {
-        await fetch('/api/tasks', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify(taskData),
-        });
+        await tasksClient.create(taskData as any);
         await refresh();
       } catch {}
     } else if (last.type === 'update' && last.prevState) {
       // Restore previous state
       try {
-        await fetch(`/api/tasks/${last.task.id}`, {
-          method: 'PATCH',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify(last.prevState),
-        });
+        await tasksClient.update(last.task.id, last.prevState as any);
         await refresh();
       } catch {}
     }
@@ -564,11 +555,9 @@ export default function TaskTable() {
     body.attachments = editAttachments ? editAttachments.split(',').map((s: string) => s.trim()).filter(Boolean) : null;
     body.dependsOn = editDepends ? editDepends.split(',').map((s: string) => s.trim()).filter(Boolean) : null;
     body.tags = editTags ? editTags.split(',').map((s: string) => s.trim()).filter(Boolean) : null;
-    const res = await fetch(`/api/tasks/${editModalTask.id}`, { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
-    if (res.ok) {
-      closeEditModal();
-      await refresh();
-    }
+    await tasksClient.update(editModalTask.id, body as any);
+    closeEditModal();
+    await refresh();
   }
   
   // Legacy inline edit functions (kept for compatibility but now opens modal)
@@ -657,6 +646,7 @@ export default function TaskTable() {
 
   const filteredTasks = useMemo(() => {
     return tasks
+      .filter(t => (showAllTerms || !currentTerm || (t.term || '') === currentTerm))
       .filter(t => (statusFilter === 'all' || t.status === statusFilter))
       .filter(t => {
         if (!courseFilter) return true;
@@ -665,7 +655,7 @@ export default function TaskTable() {
       })
       .filter(t => (!tagFilter || (t.tags || []).some(tag => tag.toLowerCase().includes(tagFilter.toLowerCase()))))
       .filter(t => (!textFilter || (t.title || '').toLowerCase().includes(textFilter.toLowerCase())));
-  }, [tasks, statusFilter, courseFilter, tagFilter, textFilter]);
+  }, [tasks, statusFilter, courseFilter, tagFilter, textFilter, showAllTerms, currentTerm]);
 
   const allSelected = filteredTasks.length > 0 && filteredTasks.every(t => selected.has(t.id));
   function toggleSelect(id: string) {
@@ -689,18 +679,18 @@ export default function TaskTable() {
     await Promise.all(list.map(async (t) => {
       const body = build(t);
       if (!body || Object.keys(body).length === 0) return;
-      await fetch(`/api/tasks/${t.id}`, { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
+      await tasksClient.update(t.id, body as any, { silent: true });
     }));
     setSelected(new Set());
     await refresh();
+    try { if (list.length) notifyToast({ kind: 'success', message: `Updated ${list.length} task${list.length!==1?'s':''}.` }); } catch {}
   }
   async function bulkDelete() {
     const list = tasks.filter(t => selected.has(t.id));
-    await Promise.all(list.map(async (t) => {
-      await fetch(`/api/tasks/${t.id}`, { method: 'DELETE' });
-    }));
+    await Promise.all(list.map(async (t) => { await tasksClient.remove(t.id, { silent: true }); }));
     setSelected(new Set());
     await refresh();
+    try { if (list.length) notifyToast({ kind: 'success', message: `Deleted ${list.length} task${list.length!==1?'s':''}.` }); } catch {}
   }
 
   async function importCsv() {
@@ -709,12 +699,12 @@ export default function TaskTable() {
       setImportStatus('Uploading...');
       const fd = new FormData();
       fd.append('file', importFile);
-      const res = await fetch('/api/tasks/import', { method: 'POST', body: fd });
-      if (!res.ok) throw new Error(await res.text());
-      const data = await res.json();
-      setImportStatus(`Imported ${data.created} tasks`);
+      const data: any = await apiFetch('/api/tasks/import', { method: 'POST', body: fd });
+      setImportStatus(`Imported ${data?.created || 0} tasks`);
+      try { notifyToast({ kind: 'success', message: `Imported ${data?.created || 0} tasks.` }); } catch {}
       setImportFile(null);
       await refresh();
+      try { notifyTasksChanged(); } catch {}
     } catch (e: any) {
       setImportStatus('Import failed: ' + (e?.message || 'Unknown error'));
     }
@@ -882,8 +872,8 @@ export default function TaskTable() {
       term: currentTerm || null,
     };
     try {
-      const res = await fetch('/api/tasks', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
-      if (!res.ok) throw new Error('failed');
+      await apiFetch('/api/tasks', { method: 'POST', body });
+      try { notifyToast({ kind: 'success', message: 'Task added.' }); } catch {}
       setQaInput('');
       await refresh();
     } catch (e: any) {
@@ -901,10 +891,11 @@ export default function TaskTable() {
         const tags = Array.isArray(it.tags) ? Array.from(new Set([...(it.tags||[]), 'inbox'])) : ['inbox'];
         return { title: it.title, course: it.course || null, dueDate: dueIso, status: 'todo', estimatedMinutes: it.estimatedMinutes ?? null, priority: it.priority ?? null, tags, term: currentTerm || null };
       });
-      const res = await fetch('/api/tasks/bulk', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ tasks: payload }) });
-      if (res.ok) {
+      await apiFetch('/api/tasks/bulk', { method: 'POST', body: { tasks: payload } });
+      {
         window.localStorage.setItem('backlogItemsV1', '[]');
         setBacklogCount(0);
+        try { notifyToast({ kind: 'success', message: `Created ${payload.length} task${payload.length>1?'s':''}.` }); } catch {}
         await refresh();
       }
     } catch {}
@@ -923,14 +914,7 @@ export default function TaskTable() {
               try { arr = JSON.parse(raw); } catch { arr = []; }
               if (!arr.length) return;
               const remaining: any[] = [];
-              for (const item of arr) {
-                try {
-                  const res = await fetch('/api/tasks', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(item) });
-                  if (!res.ok) throw new Error('failed');
-                } catch {
-                  remaining.push(item);
-                }
-              }
+              for (const item of arr) { try { await apiFetch('/api/tasks', { method: 'POST', body: item }); } catch { remaining.push(item); } }
               window.localStorage.setItem('offlineQueue', JSON.stringify(remaining));
               setOfflineCount(remaining.length);
               if (remaining.length !== arr.length) await refresh();
@@ -996,12 +980,7 @@ export default function TaskTable() {
                   const d = new Date(start); d.setDate(d.getDate() + i * step); d.setHours(23,59,59,999);
                   return { title: x.title, course: x.course || courseFilter, dueDate: d.toISOString(), status: 'todo', estimatedMinutes: x.estimatedMinutes ?? null, priority: x.priority ?? null, tags: x.tags ?? [], term: currentTerm || null };
                 });
-                try {
-                  const res = await fetch('/api/tasks/bulk', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ tasks: payload }) });
-                  if (res.ok) {
-                    await refresh();
-                  }
-                } catch {}
+                try { await apiFetch('/api/tasks/bulk', { method: 'POST', body: { tasks: payload } }); await refresh(); } catch {}
               }}>Apply template</button>
           </div>
         </div>
@@ -1009,7 +988,7 @@ export default function TaskTable() {
       {importOpen && (
         <MultiAddDrawer onCreated={refresh} />
       )}
-      <div className="mb-3 grid grid-cols-1 md:grid-cols-4 gap-2">
+      <div className="mb-3 grid grid-cols-1 md:grid-cols-5 gap-2">
         <div>
           <label className="block text-xs text-slate-300/70 mb-1">Status</label>
           <select value={statusFilter} onChange={e => setStatusFilter(e.target.value as any)} className="w-full bg-[#0b1020] border border-[#1b2344] rounded px-3 py-2">
@@ -1029,6 +1008,10 @@ export default function TaskTable() {
         <div>
           <label className="block text-xs text-slate-300/70 mb-1">Text search</label>
           <input value={textFilter} onChange={e => setTextFilter(e.target.value)} placeholder="title contains…" className="w-full bg-[#0b1020] border border-[#1b2344] rounded px-3 py-2" />
+        </div>
+        <div>
+          <label className="block text-xs text-slate-300/70 mb-1">Semester</label>
+          <label className="inline-flex items-center gap-2 text-sm"><input type="checkbox" checked={showAllTerms} onChange={() => toggleShowAll()} /> All semesters</label>
         </div>
       </div>
 

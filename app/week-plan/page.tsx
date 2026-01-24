@@ -3,6 +3,11 @@ import { useEffect, useMemo, useState, useRef, useCallback } from "react";
 import type { Task } from "@/lib/types";
 import { useTasks } from "@/lib/useTasks";
 import { estimateMinutesForTask } from "@/lib/taskEstimate";
+import { useSessions } from "@/lib/useSessions";
+import { useCourses } from "@/lib/useCourses";
+import { useSchedule, useAvailability } from "@/lib/useSchedule";
+import { apiFetch } from "@/lib/apiClient";
+import { notifyToast } from "@/lib/toastBus";
 type BacklogItem = {
   id: string;
   title: string;
@@ -114,32 +119,17 @@ export default function WeekPlanPage() {
     } catch {}
     return saturdayOf(new Date());
   });
-  const [availability, setAvailability] = useState<AvailabilityTemplate>({ 0:120,1:240,2:240,3:240,4:240,5:240,6:120 });
-  const [blocks, setBlocksRaw] = useState<ScheduledBlock[]>([]);
-  
-  // Wrapper that saves to localStorage immediately on every change
-  const setBlocks = useCallback((updater: ScheduledBlock[] | ((prev: ScheduledBlock[]) => ScheduledBlock[])) => {
-    setBlocksRaw(prev => {
-      const next = typeof updater === 'function' ? updater(prev) : updater;
-      // Save to localStorage IMMEDIATELY (synchronous)
-      try { 
-        window.localStorage.setItem(LS_SCHEDULE, JSON.stringify(next)); 
-        console.log('[WeekPlan] Saved to localStorage:', next.length, 'blocks');
-      } catch (e) { 
-        console.error('[WeekPlan] Failed to save to localStorage:', e); 
-      }
-      return next;
-    });
-  }, []);
+  const { blocks, setBlocks } = useSchedule();
+  const { availability, setAvailability } = useAvailability();
   const [backlog, setBacklog] = useState<BacklogItem[]>([]);
   const { tasks } = useTasks();
-  const [sessions, setSessions] = useState<any[]>([]);
+  const { sessions } = useSessions();
   const [goals, setGoals] = useState<WeeklyGoal[]>([]);
   const [breaksByDow, setBreaksByDow] = useState<Record<number, Array<{ start?: string; end?: string }>>>({ 0:[],1:[],2:[],3:[],4:[],5:[],6:[] });
   const [windowsByDow, setWindowsByDow] = useState<Record<number, Array<{ start?: string; end?: string }>>>({ 0:[],1:[],2:[],3:[],4:[],5:[],6:[] });
   const [rowMenu, setRowMenu] = useState<{ kind: 'win'|'br'; dow: number; index: number } | null>(null);
   const [toolbarMenu, setToolbarMenu] = useState<{ dow: number } | null>(null);
-  const [courses, setCourses] = useState<any[]>([]);
+  const { courses } = useCourses();
   const [twoWeeksOnly, setTwoWeeksOnly] = useState<boolean>(false);
   const [undoSnapshot, setUndoSnapshot] = useState<ScheduledBlock[] | null>(null);
   const [showCatchup, setShowCatchup] = useState(false);
@@ -150,13 +140,10 @@ export default function WeekPlanPage() {
     unschedulable: Array<{ taskId: string; title: string; remaining: number; dueYmd: string }>;
   } | null>(null);
 
-  // Initial load: local first for instant UI, then server, and migrate if server empty
+  // Initial load: server/setting backups and migration while keeping localStorage as the source of truth
   useEffect(() => {
-    setAvailability(loadAvailability());
-    // Use setBlocksRaw for initial load to avoid triggering the save wrapper
-    const localBlocks = loadSchedule();
-    setBlocksRaw(localBlocks);
-    console.log('[WeekPlan] Initial load from localStorage:', localBlocks.length, 'blocks');
+    const localBlocks = loadSchedule(); // for server sync decisions only
+    console.log('[WeekPlan] Initial load from localStorage (hook will hydrate separately):', localBlocks.length, 'blocks');
     setBacklog(loadBacklog());
     // Load windows and breaks from localStorage
     try {
@@ -171,13 +158,12 @@ export default function WeekPlanPage() {
     let settingsCache: Record<string, any> = {};
     (async () => {
       try {
-        const [schRes, setRes] = await Promise.all([
-          fetch('/api/schedule', { cache: 'no-store' }),
-          fetch('/api/settings?keys=availabilityTemplateV1,weeklyGoalsV1,weekPlanShowConflicts,weekPlanWeekStartYmd,weekPlanTwoWeeksOnly,internshipColor,sportsLawReviewColor,availabilityBreaksV1,availabilityWindowsV1,weekScheduleV1', { cache: 'no-store' })
+        const [bj, sj] = await Promise.all([
+          apiFetch<{ blocks: any[] }>("/api/schedule"),
+          apiFetch<{ settings: Record<string, any> }>("/api/settings?keys=availabilityTemplateV1,weeklyGoalsV1,weekPlanShowConflicts,weekPlanWeekStartYmd,weekPlanTwoWeeksOnly,internshipColor,sportsLawReviewColor,availabilityBreaksV1,availabilityWindowsV1,weekScheduleV1")
         ]);
         if (canceled) return;
-        if (setRes.ok) {
-          const sj = await setRes.json().catch(() => ({ settings: {} }));
+        {
           const settings = (sj?.settings || {}) as Record<string, any>;
           settingsCache = settings;
           if (settings.availabilityTemplateV1 && typeof settings.availabilityTemplateV1 === 'object') {
@@ -203,8 +189,7 @@ export default function WeekPlanPage() {
           if (bestBr && typeof bestBr === 'object') setBreaksByDow(bestBr as Record<number, Array<{ start?: string; end?: string }>>);
           setSettingsReady(true);
         }
-        if (schRes.ok) {
-          const bj = await schRes.json().catch(() => ({ blocks: [] }));
+        {
           const remote = Array.isArray(bj?.blocks) ? bj.blocks : [];
           // Re-read localStorage in case it was updated since initial load
           const local = loadSchedule();
@@ -217,25 +202,20 @@ export default function WeekPlanPage() {
             // localStorage has data - this is our truth, sync it to server
             console.log('[WeekPlan] Keeping localStorage data (source of truth)');
             // Always sync to server to ensure it matches
-            fetch('/api/schedule', { 
-              method: 'PUT', 
-              headers: { 'Content-Type': 'application/json' }, 
-              body: JSON.stringify({ blocks: local }),
-              keepalive: true
-            }).catch(() => {});
+            apiFetch('/api/schedule', { method: 'PUT', body: { blocks: local } }).catch(() => {});
           } else if (remote.length > 0) {
             // localStorage is empty, restore from server
             console.log('[WeekPlan] Restoring from server (localStorage was empty)');
-            setBlocksRaw(remote as any);
+            setBlocks(remote as any);
             saveSchedule(remote as any);
           } else {
             // Both empty - check settings backup
             const fromSettings = (settingsCache as any)?.weekScheduleV1;
             if (Array.isArray(fromSettings) && fromSettings.length > 0) {
               console.log('[WeekPlan] Restoring from settings backup');
-              setBlocksRaw(fromSettings as any);
+              setBlocks(fromSettings as any);
               saveSchedule(fromSettings as any);
-              fetch('/api/schedule', { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ blocks: fromSettings }) }).catch(() => {});
+              apiFetch('/api/schedule', { method: 'PUT', body: { blocks: fromSettings } }).catch(() => {});
             }
           }
         }
@@ -248,8 +228,7 @@ export default function WeekPlanPage() {
     })();
     return () => { canceled = true; };
   }, []);
-  // Persist availability changes
-  useEffect(() => { saveAvailability(availability); }, [availability]);
+  
   
   // Debounced server save for blocks
   // Note: localStorage save happens immediately in setBlocks wrapper
@@ -258,21 +237,13 @@ export default function WeekPlanPage() {
     const id = setTimeout(() => {
       console.log('[WeekPlan] Debounced API save:', blocks.length, 'blocks');
       // Save to schedule API
-      fetch('/api/schedule', { 
-        method: 'PUT', 
-        headers: { 'Content-Type': 'application/json' }, 
-        body: JSON.stringify({ blocks }),
-        keepalive: true
-      }).catch(e => console.error('[WeekPlan] API save failed:', e));
+      apiFetch('/api/schedule', { method: 'PUT', body: { blocks } })
+        .then(() => { const now = Date.now(); if (now - (lastSavedToastRef.current || 0) > 5000) { try { notifyToast({ kind: 'success', message: 'Schedule saved.' }); } catch {} lastSavedToastRef.current = now; } })
+        .catch(e => console.error('[WeekPlan] API save failed:', e));
       
       // Also save to settings as backup (survives database resets)
       if (blocks.length > 0) {
-        fetch('/api/settings', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ key: 'weekScheduleV1', value: blocks }),
-          keepalive: true
-        }).catch(() => {});
+        apiFetch('/api/settings', { method: 'POST', body: { key: 'weekScheduleV1', value: blocks } }).catch(() => {});
       }
     }, 300);
     return () => clearTimeout(id);
@@ -281,6 +252,8 @@ export default function WeekPlanPage() {
   // Keep a ref to blocks for use in cleanup/unload handlers
   const blocksRef = useRef(blocks);
   useEffect(() => { blocksRef.current = blocks; }, [blocks]);
+  // Throttle success toast for debounced saves
+  const lastSavedToastRef = useRef<number>(0);
   
   // Immediate save function for page unload/navigation
   const saveBlocksNow = useCallback(() => {
@@ -336,12 +309,12 @@ export default function WeekPlanPage() {
     };
   }, [saveBlocksNow]);
   
-  useEffect(() => { try { if (typeof window !== 'undefined') window.localStorage.setItem(LS_WEEK_START, ymd(weekStart)); } catch {} try { void fetch('/api/settings', { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ weekPlanWeekStartYmd: ymd(weekStart) }) }); } catch {} }, [weekStart]);
-  useEffect(() => { try { void fetch('/api/settings', { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ availabilityTemplateV1: availability }) }); } catch {} }, [availability]);
-  useEffect(() => { try { void fetch('/api/settings', { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ weeklyGoalsV1: goals }) }); } catch {} }, [goals]);
+  useEffect(() => { try { if (typeof window !== 'undefined') window.localStorage.setItem(LS_WEEK_START, ymd(weekStart)); } catch {} try { void apiFetch('/api/settings', { method: 'PATCH', body: { weekPlanWeekStartYmd: ymd(weekStart) } }); } catch {} }, [weekStart]);
+  useEffect(() => { try { void apiFetch('/api/settings', { method: 'PATCH', body: { availabilityTemplateV1: availability } }); } catch {} }, [availability]);
+  useEffect(() => { try { void apiFetch('/api/settings', { method: 'PATCH', body: { weeklyGoalsV1: goals } }); } catch {} }, [goals]);
   // Persist windows and breaks
-  useEffect(() => { try { const nowIso=new Date().toISOString(); if (typeof window!=='undefined') window.localStorage.setItem(LS_AVAIL_WINDOWS, JSON.stringify({ ...windowsByDow, updatedAt: nowIso })); if (settingsReady) void fetch('/api/settings', { method:'PATCH', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ availabilityWindowsV1: { ...windowsByDow, updatedAt: nowIso } }) }); } catch {} }, [windowsByDow, settingsReady]);
-  useEffect(() => { try { const nowIso=new Date().toISOString(); if (typeof window!=='undefined') window.localStorage.setItem(LS_AVAIL_BREAKS, JSON.stringify({ ...breaksByDow, updatedAt: nowIso })); if (settingsReady) void fetch('/api/settings', { method:'PATCH', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ availabilityBreaksV1: { ...breaksByDow, updatedAt: nowIso } }) }); } catch {} }, [breaksByDow, settingsReady]);
+  useEffect(() => { try { const nowIso=new Date().toISOString(); if (typeof window!=='undefined') window.localStorage.setItem(LS_AVAIL_WINDOWS, JSON.stringify({ ...windowsByDow, updatedAt: nowIso })); if (settingsReady) void apiFetch('/api/settings', { method:'PATCH', body: { availabilityWindowsV1: { ...windowsByDow, updatedAt: nowIso } } }); } catch {} }, [windowsByDow, settingsReady]);
+  useEffect(() => { try { const nowIso=new Date().toISOString(); if (typeof window!=='undefined') window.localStorage.setItem(LS_AVAIL_BREAKS, JSON.stringify({ ...breaksByDow, updatedAt: nowIso })); if (settingsReady) void apiFetch('/api/settings', { method:'PATCH', body: { availabilityBreaksV1: { ...breaksByDow, updatedAt: nowIso } } }); } catch {} }, [breaksByDow, settingsReady]);
 
   // Derive availability minutes from Windows minus Breaks (always active now)
   useEffect(() => {
@@ -383,17 +356,10 @@ export default function WeekPlanPage() {
   }, [windowsByDow, breaksByDow]);
 
   // Tasks for catch-up and unscheduled lists come from shared useTasks hook
-  // Load goals & sessions for weekly quota
+  // Load goals and twoWeeksOnly flag from localStorage
   useEffect(() => { setGoals(loadGoals()); }, []);
-  useEffect(() => {
-    (async () => { try { const r = await fetch('/api/sessions', { cache: 'no-store' }); const d = await r.json(); setSessions(Array.isArray(d?.sessions)?d.sessions:[]); } catch {} })();
-  }, []);
-  // Load courses for class times and initial toggles
-  useEffect(() => {
-    (async () => { try { const r = await fetch('/api/courses', { cache: 'no-store' }); const d = await r.json(); setCourses(Array.isArray(d?.courses)?d.courses:[]); } catch {} })();
-    try { if (typeof window!=='undefined') setTwoWeeksOnly((window.localStorage.getItem(LS_TWO_WEEKS)||'false')==='true'); } catch {}
-  }, []);
-  useEffect(() => { if (typeof window!=='undefined') window.localStorage.setItem(LS_TWO_WEEKS, twoWeeksOnly ? 'true':'false'); try { void fetch('/api/settings', { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ weekPlanTwoWeeksOnly: twoWeeksOnly }) }); } catch {} }, [twoWeeksOnly]);
+  useEffect(() => { try { if (typeof window!=='undefined') setTwoWeeksOnly((window.localStorage.getItem(LS_TWO_WEEKS)||'false')==='true'); } catch {} }, []);
+  useEffect(() => { if (typeof window!=='undefined') window.localStorage.setItem(LS_TWO_WEEKS, twoWeeksOnly ? 'true':'false'); try { void apiFetch('/api/settings', { method: 'PATCH', body: { weekPlanTwoWeeksOnly: twoWeeksOnly } }); } catch {} }, [twoWeeksOnly]);
 
   const days = useMemo(() => Array.from({ length: 7 }, (_, i) => { const d = new Date(weekStart); d.setDate(d.getDate()+i); return d; }), [weekStart]);
 
@@ -815,7 +781,7 @@ function adjustTimeText(val: string, deltaMin: number): string {
 }
 function shiftWeek(delta: number) {
     // Save immediately before shifting to prevent data loss
-    try { void fetch('/api/schedule', { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ blocks }) }); } catch {}
+    try { void apiFetch('/api/schedule', { method: 'PUT', body: { blocks } }).then(() => { try { notifyToast({ kind: 'success', message: 'Schedule saved.' }); } catch {} }); } catch {}
     setWeekStart(prev => { const x = new Date(prev); x.setDate(x.getDate() + delta*7); return saturdayOf(x); });
   }
   function clearThisWeek() { const keys = new Set(days.map(d => ymd(d))); setBlocks(prev => prev.filter(b => !keys.has(b.day))); }
@@ -823,9 +789,9 @@ function shiftWeek(delta: number) {
     const keys = new Set(days.map(d => ymd(d))); const batch = blocks.filter(b => keys.has(b.day)); let ok = 0, fail = 0;
     for (const b of batch) {
       const body: any = { title: b.title, course: b.course || null, dueDate: endOfDayIso(b.day), status: 'todo', estimatedMinutes: b.plannedMinutes, priority: b.priority ?? null, tags: ['week-plan'] };
-      try { const res = await fetch('/api/tasks', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) }); if (res.ok) ok++; else fail++; } catch { fail++; }
+      try { await apiFetch('/api/tasks', { method: 'POST', body }); ok++; } catch { fail++; }
     }
-    if (typeof window !== 'undefined') window.alert(`Promoted ${ok} task(s)${fail?`, ${fail} failed`:''}`);
+    try { notifyToast({ kind: fail ? 'warning' : 'success', message: `Promoted ${ok} task${ok!==1?'s':''}${fail?`, ${fail} failed`:''}.` }); } catch {}
   }
 
   const noTasksToPlan = unscheduledSorted.length === 0;

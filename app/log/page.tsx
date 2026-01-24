@@ -1,5 +1,11 @@
 "use client";
 import { useEffect, useMemo, useState, useCallback } from "react";
+import { useTasks } from '@/lib/useTasks';
+import { useCourses } from '@/lib/useCourses';
+import { useSessions } from '@/lib/useSessions';
+import { notifySessionsChanged } from '@/lib/sessionsBus';
+import { apiFetch } from '@/lib/apiClient';
+import { notifyToast } from '@/lib/toastBus';
 
 // Simple helpers
 function chicagoYmd(d: Date): string {
@@ -58,10 +64,10 @@ function hueFromString(s: string): number { let h = 0; for (let i=0;i<s.length;i
 function fallbackCourseHsl(name?: string | null): string { const key=(name||'').toString().trim().toLowerCase(); if (!key) return 'hsl(215 16% 47%)'; const h=hueFromString(key); return `hsl(${h} 70% 55%)`; }
 
 export default function LogPage() {
-  const [sessions, setSessions] = useState<any[]>([]);
-  const [tasks, setTasks] = useState<any[]>([]);
-  const [courses, setCourses] = useState<any[]>([]);
-  const [loading, setLoading] = useState(true);
+  const { tasks, loading: tasksLoading } = useTasks();
+  const { courses, loading: coursesLoading } = useCourses();
+  const { sessions, refresh: refreshSessions, loading: sessionsLoading } = useSessions();
+  const loading = tasksLoading || coursesLoading || sessionsLoading;
   const [editId, setEditId] = useState<string | null>(null);
   const [editMinutes, setEditMinutes] = useState<string>('');
   const [editFocus, setEditFocus] = useState<string>('');
@@ -83,24 +89,7 @@ export default function LogPage() {
   const [sortBy, setSortBy] = useState<string>("date_desc");
   const [viewMode, setViewMode] = useState<'table' | 'cards'>('table');
 
-  async function refresh() {
-    setLoading(true);
-    try {
-      const [sRes, tRes, cRes] = await Promise.all([
-        fetch('/api/sessions', { cache: 'no-store' }),
-        fetch('/api/tasks', { cache: 'no-store' }),
-        fetch('/api/courses', { cache: 'no-store' }),
-      ]);
-      const sj = await sRes.json().catch(()=>({ sessions: [] }));
-      const tj = await tRes.json().catch(()=>({ tasks: [] }));
-      const cj = await cRes.json().catch(()=>({ courses: [] }));
-      setSessions(Array.isArray(sj?.sessions) ? sj.sessions : []);
-      setTasks(Array.isArray(tj?.tasks) ? tj.tasks : []);
-      setCourses(Array.isArray(cj?.courses) ? cj.courses : []);
-    } finally {
-      setLoading(false);
-    }
-  }
+  async function refresh() { await refreshSessions(); }
   function uid() { return Math.random().toString(36).slice(2) + Date.now().toString(36); }
 
   async function openEditSession(id: string) {
@@ -122,7 +111,7 @@ export default function LogPage() {
     patch.activity = editActivity || null;
     const pr = parseInt(editPagesRead || '', 10);
     if (!isNaN(pr) && pr >= 0) patch.pagesRead = pr;
-    try { await fetch(`/api/sessions/${editId}`, { method:'PATCH', headers:{'Content-Type':'application/json'}, body: JSON.stringify(patch) }); } catch {}
+    try { await apiFetch(`/api/sessions/${editId}`, { method:'PATCH', body: patch }); try { notifySessionsChanged(); } catch {} try { notifyToast({ kind: 'success', message: 'Session updated.' }); } catch {} } catch {}
     setEditId(null); setEditMinutes(''); setEditFocus(''); setEditNotes(''); setEditActivity(''); setEditPagesRead('');
     await refresh();
   }
@@ -133,7 +122,7 @@ export default function LogPage() {
     setUndoStack(prev => [...prev.slice(-9), { type: 'delete', session: s }]);
     setUndoMessage(`Deleted session (${fmtHM(s.minutes || 0)}). Click Undo to restore.`);
     setTimeout(() => setUndoMessage(null), 8000);
-    try { await fetch(`/api/sessions/${id}`, { method:'DELETE' }); } catch {}
+    try { await apiFetch(`/api/sessions/${id}`, { method:'DELETE' }); try { notifySessionsChanged(); } catch {} try { notifyToast({ kind: 'success', message: 'Session deleted.' }); } catch {} } catch {}
     await refresh();
   }
 
@@ -142,19 +131,17 @@ export default function LogPage() {
     if (!last || last.type !== 'delete') return;
     const s = last.session;
     try {
-      await fetch('/api/sessions', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          taskId: s.taskId || null,
-          when: s.when,
-          minutes: s.minutes,
-          focus: s.focus,
-          notes: s.notes,
-          activity: s.activity,
-          pagesRead: s.pagesRead,
-        }),
-      });
+      await apiFetch('/api/sessions', { method: 'POST', body: {
+        taskId: s.taskId || null,
+        when: s.when,
+        minutes: s.minutes,
+        focus: s.focus,
+        notes: s.notes,
+        activity: s.activity,
+        pagesRead: s.pagesRead,
+      } });
+      try { notifySessionsChanged(); } catch {}
+      try { notifyToast({ kind: 'success', message: 'Session restored.' }); } catch {}
     } catch {}
     setUndoStack(prev => prev.slice(0, -1));
     setUndoMessage('Session restored!');
@@ -165,15 +152,16 @@ export default function LogPage() {
   async function restoreToSchedule(id: string) {
     const s = (sessions||[]).find((x:any) => x.id === id); if (!s) return;
     try {
-      const r = await fetch('/api/schedule', { cache:'no-store' }); const j = await r.json(); const blocks = Array.isArray(j.blocks) ? j.blocks : [];
+      const j = await apiFetch<{ blocks: any[] }>('/api/schedule'); const blocks = Array.isArray((j as any).blocks) ? (j as any).blocks : [];
       const whenKey = chicagoYmd(new Date(s.when));
       const task = s.taskId ? tasks.find((t:any)=>t.id===s.taskId) : null;
       const title = task?.title || 'Restored from log';
       const course = task?.course || extractCourseFromNotes(s.notes) || '';
       blocks.push({ id: uid(), taskId: s.taskId || uid(), day: whenKey, plannedMinutes: Math.max(1, Number(s.minutes)||0), guessed: true, title, course, pages: null, priority: null, catchup: false });
-      await fetch('/api/schedule', { method:'PUT', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ blocks }) });
+      await apiFetch('/api/schedule', { method:'PUT', body: { blocks } });
       setUndoMessage('Added back to schedule!');
       setTimeout(() => setUndoMessage(null), 3000);
+      try { notifyToast({ kind: 'success', message: 'Added back to schedule.' }); } catch {}
     } catch {}
   }
 
