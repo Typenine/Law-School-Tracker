@@ -39,7 +39,7 @@ jobs:
           cat audit.json
           node -e "const fs=require('fs'); const result=JSON.parse(fs.readFileSync('audit.json','utf8')); if(!result.passed){ console.error(result.checks.filter(x=>!x.passed)); process.exit(1); }"
           : > smoke.log
-          for route in / /tasks /courses /calendar /review /questions /outline-updates /exam /week-plan /wizard /settings /class-capture /work; do
+          for route in / /tasks /courses /courses/test-course /calendar /review /questions /outline-updates /exam /week-plan /wizard /settings /class-capture /work /api/events; do
             status=$(curl --silent --output /dev/null --write-out '%{http_code}' "http://127.0.0.1:3000$route")
             echo "$status $route" | tee -a smoke.log
             test "$status" = "200"
