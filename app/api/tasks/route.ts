@@ -1,5 +1,6 @@
 import { NextRequest } from 'next/server';
 import { createTask, ensureSchema, listTasks } from '@/lib/storage';
+import { getActiveSemesterId } from '@/lib/semesterStore';
 import { NewTaskInput } from '@/lib/types';
 import { z } from 'zod';
 
@@ -14,25 +15,13 @@ export async function GET() {
 
 export async function POST(req: NextRequest) {
   await ensureSchema();
-  async function getActiveSemesterId(): Promise<string | null> {
-    try {
-      const baseUrl = process.env.VERCEL_URL ? `https://${process.env.VERCEL_URL}` : 'http://localhost:3000';
-      const res = await fetch(`${baseUrl}/api/semesters?active=true`, { cache: 'no-store' });
-      if (!res.ok) return null;
-      const data = await res.json();
-      const arr = Array.isArray(data?.semesters) ? data.semesters : [];
-      return arr[0]?.id || null;
-    } catch {
-      return null;
-    }
-  }
   const schema = z.object({
     title: z.string().min(1),
     course: z.string().trim().min(1).nullable().optional(),
-    dueDate: z.string().min(1), // ISO string from client
+    dueDate: z.string().min(1),
     status: z.enum(['todo', 'done']).optional(),
-    startTime: z.string().trim().nullable().optional().or(z.literal('')).transform(v => v === '' ? null : v),
-    endTime: z.string().trim().nullable().optional().or(z.literal('')).transform(v => v === '' ? null : v),
+    startTime: z.string().trim().nullable().optional().or(z.literal('')).transform(value => value === '' ? null : value),
+    endTime: z.string().trim().nullable().optional().or(z.literal('')).transform(value => value === '' ? null : value),
     estimatedMinutes: z.number().int().min(0).nullable().optional(),
     estimateOrigin: z.enum(['learned','default','manual']).nullable().optional(),
     priority: z.number().int().min(1).max(5).nullable().optional(),
@@ -48,7 +37,7 @@ export async function POST(req: NextRequest) {
   if (!parsed.success) return new Response('Invalid task body', { status: 400 });
   const body = parsed.data as NewTaskInput;
   const defaultTerm = body.term ?? await getActiveSemesterId();
-  const t = await createTask({
+  const task = await createTask({
     title: body.title,
     dueDate: body.dueDate,
     course: body.course ?? null,
@@ -66,5 +55,5 @@ export async function POST(req: NextRequest) {
     pagesRead: (body as any).pagesRead ?? null,
     activity: (body as any).activity ?? null,
   });
-  return Response.json({ task: t }, { status: 201 });
+  return Response.json({ task }, { status: 201 });
 }
