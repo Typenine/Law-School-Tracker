@@ -21,16 +21,20 @@ export function useTasks() {
       setError(null);
     } catch (cause: any) {
       setError(cause?.message || 'Failed to load tasks');
-    } finally {
-      setLoading(false);
-    }
+    } finally { setLoading(false); }
   }, []);
 
   useEffect(() => {
     void refresh();
     const unsubscribe = onTasksChanged(() => { void refresh(); });
+    const genericRefresh = () => { void refresh(); };
+    window.addEventListener('tracker-data-changed', genericRefresh);
     const poll = window.setInterval(() => { void refresh(); }, 60000);
-    return () => { unsubscribe(); window.clearInterval(poll); };
+    return () => {
+      unsubscribe();
+      window.removeEventListener('tracker-data-changed', genericRefresh);
+      window.clearInterval(poll);
+    };
   }, [refresh]);
 
   return { tasks, setTasks, loading, error, refresh };
