@@ -1,9 +1,18 @@
 {
   "name": "Law School Tracker",
-  "short_name": "LSTracker",
+  "short_name": "Law Tracker",
+  "description": "Course preparation, deadlines, outlines, exam planning, and study history.",
   "start_url": "/",
+  "scope": "/",
   "display": "standalone",
   "background_color": "#0b1020",
   "theme_color": "#0b1020",
-  "icons": []
+  "icons": [
+    {
+      "src": "/icon.svg",
+      "sizes": "any",
+      "type": "image/svg+xml",
+      "purpose": "any maskable"
+    }
+  ]
 }
