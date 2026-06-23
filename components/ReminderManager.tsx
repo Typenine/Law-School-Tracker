@@ -47,11 +47,10 @@ export default function ReminderManager() {
             body: item.body,
             tag: item.id,
             data: { url: item.href || '/' },
-            icon: '/icons/icon-192.png',
-            badge: '/icons/icon-192.png',
+            icon: '/icon.svg',
           });
         } else {
-          new Notification(item.title, { body: item.body, tag: item.id });
+          new Notification(item.title, { body: item.body, tag: item.id, icon: '/icon.svg' });
         }
         await update(item.id, 'browser-shown');
       }
