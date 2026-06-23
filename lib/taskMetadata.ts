@@ -42,7 +42,7 @@ export function taskMatchesCourse(task: Task, course: Pick<Course, 'id' | 'title
 }
 
 export function normalizeSyllabusText(value: string) {
-  return value.toLowerCase().replace(/\b\d+(?:\s*[-–]\s*\d+)?\b/g, ' ').replace(/[^a-z0-9]+/g, ' ').trim().replace(/\s+/g, '-');
+  return value.toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim().replace(/\s+/g, '-');
 }
 
 export function syllabusFingerprint(input: Pick<NewTaskInput, 'title' | 'activity' | 'course'> & { kind?: string }) {
