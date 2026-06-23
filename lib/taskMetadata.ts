@@ -3,6 +3,7 @@ import type { Course, NewTaskInput, Task, TaskLifecycle, UpdateTaskInput } from 
 const COURSE_TAG = 'course-id:';
 const LIFE_TAG = 'task-lifecycle:';
 const FINGERPRINT_TAG = 'syllabus-fingerprint:';
+const SOURCE_TAG = 'syllabus-source:';
 
 function valueFromTag(tags: string[] | null | undefined, prefix: string) {
   const tag = (tags || []).find(item => item.startsWith(prefix));
@@ -47,13 +48,24 @@ export function syllabusFingerprintFromTags(tags?: string[] | null) {
   return valueFromTag(tags, FINGERPRINT_TAG);
 }
 
+export function syllabusSourceFromTags(tags?: string[] | null) {
+  return valueFromTag(tags, SOURCE_TAG);
+}
+
 function encoded(prefix: string, value: string) {
   return `${prefix}${encodeURIComponent(value)}`;
 }
 
 export function mergeTaskTags(current: string[] | null | undefined, requested: string[] | null | undefined, metadata: { courseId?: string | null; lifecycle?: TaskLifecycle; fingerprint?: string | null } = {}) {
-  const protectedTags = (current || []).filter(tag => tag === 'assignment-plan-created' || tag === 'syllabus-removed' || tag.startsWith('syllabus-source:') || tag.startsWith('assignment-parent:'));
-  let tags = Array.from(new Set([...(requested || []), ...protectedTags]));
+  const requestedTags = requested || [];
+  const replacesSource = requestedTags.some(tag => tag.startsWith(SOURCE_TAG));
+  const protectedTags = (current || []).filter(tag =>
+    tag === 'assignment-plan-created' ||
+    tag === 'syllabus-removed' ||
+    tag.startsWith('assignment-parent:') ||
+    (!replacesSource && tag.startsWith(SOURCE_TAG))
+  );
+  let tags = Array.from(new Set([...requestedTags, ...protectedTags]));
   if (metadata.courseId !== undefined) {
     tags = tags.filter(tag => !tag.startsWith(COURSE_TAG));
     if (metadata.courseId) tags.push(encoded(COURSE_TAG, metadata.courseId));
@@ -66,6 +78,7 @@ export function mergeTaskTags(current: string[] | null | undefined, requested: s
     tags = tags.filter(tag => !tag.startsWith(FINGERPRINT_TAG));
     if (metadata.fingerprint) tags.push(encoded(FINGERPRINT_TAG, metadata.fingerprint));
   }
+  if (metadata.lifecycle === 'active') tags = tags.filter(tag => tag !== 'syllabus-removed');
   return Array.from(new Set(tags));
 }
 
