@@ -2,7 +2,7 @@
 
 import Link from 'next/link';
 import { useSearchParams } from 'next/navigation';
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { apiFetch } from '@/lib/apiClient';
 import { tasksClient } from '@/lib/tasksClient';
 import { useTasks } from '@/lib/useTasks';
@@ -10,6 +10,7 @@ import {
   clearWorkSession,
   elapsedSeconds,
   loadWorkSession,
+  newestWorkSession,
   newWorkSession,
   saveWorkSession,
   type PersistedWorkSession,
@@ -23,21 +24,39 @@ export default function WorkSessionClientV2() {
   const [seconds, setSeconds] = useState(0);
   const [message, setMessage] = useState('');
   const [saving, setSaving] = useState(false);
+  const suppressRemote = useRef(false);
 
   useEffect(() => {
     if (!taskId) { setSession(null); setSeconds(0); return; }
-    const restored = loadWorkSession(taskId) || newWorkSession(taskId);
-    setSession(restored);
-    setSeconds(elapsedSeconds(restored));
+    let cancelled = false;
+    void (async () => {
+      const local = loadWorkSession(taskId);
+      let remote: PersistedWorkSession | null = null;
+      try {
+        const data = await apiFetch<{ session: PersistedWorkSession | null }>(`/api/active-session?taskId=${encodeURIComponent(taskId)}`);
+        remote = data.session;
+      } catch {}
+      if (cancelled) return;
+      const restored = newestWorkSession(local, remote) || newWorkSession(taskId);
+      setSession(restored);
+      setSeconds(elapsedSeconds(restored));
+      if (remote && (!local || remote.updatedAt > local.updatedAt)) setMessage('Restored the latest active session from another device.');
+    })();
+    return () => { cancelled = true; };
   }, [taskId]);
 
   useEffect(() => {
     if (!session) return;
     saveWorkSession(session);
     setSeconds(elapsedSeconds(session));
-    if (!session.running) return;
-    const timer = window.setInterval(() => setSeconds(elapsedSeconds(session)), 1000);
-    return () => window.clearInterval(timer);
+    const syncTimer = window.setTimeout(() => {
+      if (!suppressRemote.current) void apiFetch('/api/active-session', { method: 'PUT', body: session }).catch(() => undefined);
+    }, 500);
+    const timer = session.running ? window.setInterval(() => setSeconds(elapsedSeconds(session)), 1000) : null;
+    return () => {
+      window.clearTimeout(syncTimer);
+      if (timer) window.clearInterval(timer);
+    };
   }, [session]);
 
   const notes = session?.notes || '';
@@ -46,15 +65,16 @@ export default function WorkSessionClientV2() {
   const time = useMemo(() => `${Math.floor(seconds / 60)}:${String(seconds % 60).padStart(2, '0')}`, [seconds]);
 
   function changeSession(patch: Partial<PersistedWorkSession>) {
-    setSession(current => current ? { ...current, ...patch } : current);
+    setSession(current => current ? { ...current, ...patch, updatedAt: new Date().toISOString() } : current);
   }
 
   function toggleTimer() {
     setMessage('');
     setSession(current => {
       if (!current) return current;
-      if (current.running) return { ...current, running: false, accumulatedSeconds: elapsedSeconds(current), startedAt: null };
-      return { ...current, running: true, startedAt: Date.now(), sessionStartedAt: current.accumulatedSeconds ? current.sessionStartedAt : new Date().toISOString() };
+      const updatedAt = new Date().toISOString();
+      if (current.running) return { ...current, running: false, accumulatedSeconds: elapsedSeconds(current), startedAt: null, updatedAt };
+      return { ...current, running: true, startedAt: Date.now(), sessionStartedAt: current.accumulatedSeconds ? current.sessionStartedAt : updatedAt, updatedAt };
     });
   }
 
@@ -63,7 +83,7 @@ export default function WorkSessionClientV2() {
     const exactSeconds = elapsedSeconds(session);
     if (exactSeconds < 15) { setMessage('Run the timer for at least 15 seconds before saving a study session.'); return; }
     setSaving(true);
-    const paused = { ...session, running: false, accumulatedSeconds: exactSeconds, startedAt: null };
+    const paused = { ...session, running: false, accumulatedSeconds: exactSeconds, startedAt: null, updatedAt: new Date().toISOString() };
     setSession(paused);
     const minutes = Math.max(1, Math.round(exactSeconds / 60));
     try {
@@ -82,14 +102,18 @@ export default function WorkSessionClientV2() {
         tags: Array.from(new Set([...(task.tags || []), ...(skimmed ? ['skimmed'] : [])])),
         ...(done ? { status: 'done', completedAt: new Date().toISOString() } : {}),
       }, { silent: true });
+      suppressRemote.current = true;
       clearWorkSession(task.id);
-      setSession(newWorkSession(task.id));
+      await apiFetch(`/api/active-session?taskId=${encodeURIComponent(task.id)}`, { method: 'DELETE' }).catch(() => undefined);
+      const reset = newWorkSession(task.id);
+      setSession(reset);
       setSeconds(0);
+      window.setTimeout(() => { suppressRemote.current = false; }, 1000);
       setMessage(done ? 'Completed and added to Study History.' : 'Progress saved.');
       await refresh();
     } catch (cause: any) {
       setSession(paused);
-      setMessage(cause?.message || 'The session could not be saved. Your timer state remains available.');
+      setMessage(cause?.message || 'The session could not be saved. Your timer state remains available locally and on the server.');
     } finally { setSaving(false); }
   }
 
@@ -102,7 +126,7 @@ export default function WorkSessionClientV2() {
       <p className="mt-4 text-sm text-emerald-300">{task.course || 'General work'}</p>
       <h2 className="mt-1 text-2xl font-semibold text-slate-100">{task.title}</h2>
       <p className="mt-6 font-mono text-5xl text-slate-100">{time}</p>
-      <p className="mt-2 text-xs text-slate-500">The timer is restored from timestamps after refreshes or closed tabs.</p>
+      <p className="mt-2 text-xs text-slate-500">Timer, notes, and pages are restored after refreshes, closed tabs, or switching devices.</p>
       <div className="mt-5 flex flex-wrap gap-3">
         <button disabled={saving} onClick={toggleTimer} className="rounded-lg bg-emerald-500 px-5 py-3 font-semibold text-slate-950 disabled:opacity-50">{session?.running ? 'Pause' : seconds ? 'Resume' : 'Start'}</button>
         <button disabled={!hasMeaningfulTime || saving} onClick={() => save(false)} className="rounded-lg border border-slate-600 px-4 py-3 text-sm text-slate-200 disabled:opacity-50">Save progress</button>
