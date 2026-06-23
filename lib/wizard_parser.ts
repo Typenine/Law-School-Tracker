@@ -201,7 +201,7 @@ function extractSections(lines: Line[]): ExtractedDocumentSections {
     if (/^(required|recommended)?\s*(materials?|texts?|books?)\b/.test(lower)) mode = 'required_materials';
     else if (/^(grading|evaluation|assessment)/.test(lower)) mode = 'grading_components';
     else if (/^office hours?/.test(lower)) mode = 'office_hours';
-    else if (/^(attendance|participation|academic integrity|accommodations?|polic)/.test(lower)) mode = 'policies';
+    else if (HEADER.test(line.text) && /^(attendance|participation|academic integrity|accommodations?|polic)/.test(lower)) mode = 'policies';
     else if (isHeading(line.text)) mode = null;
     if (/\b(final|midterm|exam|memo|paper|presentation|major assignment)\b/i.test(line.text) && TASK.test(line.text)) result.major_assessments.push(line.text);
     if (CANCELED.test(line.text)) result.holidays_and_breaks.push(line.text);
