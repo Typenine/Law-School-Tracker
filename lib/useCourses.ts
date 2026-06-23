@@ -16,17 +16,20 @@ export function useCourses() {
       const data = await apiFetch<{ courses: Course[] }>('/api/courses');
       setCourses(Array.isArray(data?.courses) ? data.courses : []);
       setError(null);
-    } catch (e: any) {
-      setError(e?.message || 'Failed to load courses');
-    } finally {
-      setLoading(false);
-    }
+    } catch (cause: any) {
+      setError(cause?.message || 'Failed to load courses');
+    } finally { setLoading(false); }
   }, []);
 
   useEffect(() => {
     void refresh();
     const off = onCoursesChanged(() => { void refresh(); });
-    return off;
+    const genericRefresh = () => { void refresh(); };
+    window.addEventListener('tracker-data-changed', genericRefresh);
+    return () => {
+      off();
+      window.removeEventListener('tracker-data-changed', genericRefresh);
+    };
   }, [refresh]);
 
   return { courses, loading, error, refresh };
