@@ -54,12 +54,15 @@ export function useCourseWorkspaces() {
       setError(null);
     } catch (cause: any) {
       setError(cause?.message || 'Unable to load course workspaces.');
-    } finally {
-      setLoading(false);
-    }
+    } finally { setLoading(false); }
   }, []);
 
-  useEffect(() => { void refresh(); }, [refresh]);
+  useEffect(() => {
+    void refresh();
+    const genericRefresh = () => { void refresh(); };
+    window.addEventListener('tracker-data-changed', genericRefresh);
+    return () => window.removeEventListener('tracker-data-changed', genericRefresh);
+  }, [refresh]);
 
   const saveOne = useCallback(async (courseId: string, current: ClientWorkspace, next: ClientWorkspace) => {
     let candidate = addLegacyCapture(courseId, current, next);
