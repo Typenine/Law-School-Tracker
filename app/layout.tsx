@@ -9,7 +9,7 @@ import Providers from '@/app/providers'
 
 export const metadata: Metadata = {
   title: 'Law School Tracker',
-  description: 'Structure your workload, stay on pace, and review your progress.',
+  description: 'Know what to do next, what is due soon, and where each course stands.',
 }
 
 export default function RootLayout({ children }: { children: React.ReactNode }) {
@@ -35,25 +35,32 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
       <body>
         <Providers>
           <div className="app-container">
-            <header className="mb-6 space-y-3">
-            <div className="flex items-center justify-between">
-              <div>
-                <h1 className="text-2xl font-semibold">Law School Tracker</h1>
-                <p className="text-sm opacity-80">Structure your workload, stay on pace, and review your progress.</p>
+            <header className="mb-6 space-y-4">
+              <div className="flex items-center justify-between gap-4">
+                <div>
+                  <h1 className="text-2xl font-semibold">Law School Tracker</h1>
+                  <p className="text-sm opacity-80">Know what to do next, what is due soon, and where each course stands.</p>
+                </div>
+                <ThemeToggleButton />
               </div>
-              <ThemeToggleButton />
-            </div>
-            <nav className="flex flex-wrap gap-2 text-sm">
-              <Link href="/" className="nav-link">Today</Link>
-              <Link href="/week-plan" className="nav-link">Week Plan</Link>
-              <Link href="/tasks" className="nav-link">Tasks</Link>
-              <Link href="/courses" className="nav-link">Courses</Link>
-              <Link href="/calendar" className="nav-link">Calendar</Link>
-              <Link href="/settings" className="nav-link">Settings</Link>
-              <Link href="/help" className="nav-link">Help</Link>
-              <Link href="/review" className="nav-link">Review</Link>
-              <Link href="/log" className="nav-link">Log</Link>
-            </nav>
+              <div className="flex flex-wrap items-center justify-between gap-3 border-b border-slate-700/70 pb-3">
+                <nav className="flex flex-wrap gap-2 text-sm">
+                  <Link href="/" className="nav-link">Today</Link>
+                  <Link href="/tasks" className="nav-link">Tasks</Link>
+                  <Link href="/courses" className="nav-link">Courses</Link>
+                  <Link href="/calendar" className="nav-link">Calendar</Link>
+                  <Link href="/review" className="nav-link">Weekly Review</Link>
+                  <Link href="/settings" className="nav-link">Settings</Link>
+                </nav>
+                <details className="relative text-sm">
+                  <summary className="cursor-pointer list-none rounded-lg border border-slate-600 px-3 py-2 text-slate-300 hover:bg-slate-800">More</summary>
+                  <div className="absolute right-0 z-20 mt-2 w-44 rounded-xl border border-slate-700 bg-slate-950 p-2 shadow-xl">
+                    <Link href="/week-plan" className="block rounded-lg px-3 py-2 text-slate-300 hover:bg-slate-800">Week Plan</Link>
+                    <Link href="/log" className="block rounded-lg px-3 py-2 text-slate-300 hover:bg-slate-800">Study Log</Link>
+                    <Link href="/help" className="block rounded-lg px-3 py-2 text-slate-300 hover:bg-slate-800">Help</Link>
+                  </div>
+                </details>
+              </div>
             </header>
             {children}
           </div>
