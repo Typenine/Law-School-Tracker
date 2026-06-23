@@ -1,981 +1,161 @@
 "use client";
-import { useEffect, useMemo, useState } from 'react';
-import { Task, CalendarEvent, EventCategory } from '@/lib/types';
-import { courseColorClass } from '@/lib/colors';
-import TimePickerField from '@/components/TimePickerField';
-import { notifyTasksChanged, onTasksChanged } from '@/lib/taskBus';
+
+import Link from 'next/link';
+import { FormEvent, useEffect, useMemo, useState } from 'react';
+import { apiFetch } from '@/lib/apiClient';
+import { courseBlocks } from '@/lib/courseWorkspace';
+import { useCourses } from '@/lib/useCourses';
 import { useSemester } from '@/lib/useSemester';
 import { useTasks } from '@/lib/useTasks';
-import { useCourses } from '@/lib/useCourses';
-import { useSchedule, useAvailability } from '@/lib/useSchedule';
-import { apiFetch } from '@/lib/apiClient';
-import { notifyToast } from '@/lib/toastBus';
-import { tasksClient } from '@/lib/tasksClient';
+import type { CalendarEvent, Course } from '@/lib/types';
 
-export const dynamic = 'force-dynamic';
-
-const EVENT_CATEGORY_COLORS: Record<EventCategory, string> = {
-  personal: '#8b5cf6', // purple
-  school: '#3b82f6', // blue
-  work: '#f59e0b', // amber
-  health: '#10b981', // emerald
-  social: '#ec4899', // pink
-  other: '#6b7280', // gray
-};
-
-function startOfDay(d: Date) { const x = new Date(d); x.setHours(0,0,0,0); return x; }
-
-function minutesToHM(min?: number | null) {
-  const n = Math.max(0, Math.round(Number(min || 0)));
-  const h = Math.floor(n/60);
-  const m = n % 60;
-  return `${h}:${String(m).padStart(2,'0')}`;
+function ymd(date: Date) {
+  return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')}`;
 }
 
-function extractPageRanges(title: string): string[] {
-  try {
-    const m = title.match(/p(?:ages?)?\.?\s*([0-9,\s–-]+(?:\s*,\s*[0-9–-]+)*)/i);
-    if (!m) return [];
-    const raw = m[1] || '';
-    return raw.split(/\s*,\s*/).map(x => x.replace(/-/g, '–').trim()).filter(x => /\d/.test(x));
-  } catch { return []; }
+function mondayOf(date: Date) {
+  const copy = new Date(date);
+  copy.setHours(12, 0, 0, 0);
+  const offset = copy.getDay() === 0 ? 6 : copy.getDay() - 1;
+  copy.setDate(copy.getDate() - offset);
+  return copy;
 }
 
-// Fallback course color as HSL string for left stripe
-function hueFromString(s: string): number { let h = 0; for (let i=0;i<s.length;i++) { h = (h * 31 + s.charCodeAt(i)) >>> 0; } return h % 360; }
-function fallbackCourseHsl(name?: string | null): string { const key=(name||'').toString().trim().toLowerCase(); if (!key) return 'hsl(215 16% 47%)'; const h=hueFromString(key); return `hsl(${h} 70% 55%)`; }
-function fmtYmd(d: Date) {
-  const yyyy = d.getFullYear();
-  const mm = String(d.getMonth()+1).padStart(2,'0');
-  const dd = String(d.getDate()).padStart(2,'0');
-  return `${yyyy}-${mm}-${dd}`;
+function addDays(date: Date, days: number) {
+  const copy = new Date(date);
+  copy.setDate(copy.getDate() + days);
+  return copy;
 }
 
-function fmt12(hhmm?: string | null) {
-  if (!hhmm || !/^\d{2}:\d{2}$/.test(hhmm)) return '';
-  const [hStr, mStr] = hhmm.split(':');
-  const h = parseInt(hStr, 10);
-  const m = parseInt(mStr, 10);
-  if (isNaN(h) || isNaN(m)) return '';
-  const h12 = ((h + 11) % 12) + 1;
-  const ampm = h < 12 ? 'AM' : 'PM';
-  return `${h12}:${String(m).padStart(2,'0')} ${ampm}`;
+function formatWeekRange(start: Date) {
+  const end = addDays(start, 6);
+  const first = new Intl.DateTimeFormat('en-US', { month: 'short', day: 'numeric' }).format(start);
+  const second = new Intl.DateTimeFormat('en-US', { month: 'short', day: 'numeric', year: 'numeric' }).format(end);
+  return `${first} to ${second}`;
 }
 
-// Inline bulk-add events (tasks) for Calendar
-function BulkAddEvents({ courses, onDone }: { courses: any[]; onDone: () => void }) {
-  const [open, setOpen] = useState(false);
-  const [rows, setRows] = useState<Array<{ title: string; course: string; due: string; type: string; est: string }>>([]);
-  function addRow() { setRows(r => [...r, { title: '', course: '', due: '', type: 'other', est: '' }]); }
-  function removeRow(i: number) { setRows(r => r.filter((_, idx) => idx !== i)); }
-  function updateRow(i: number, patch: Partial<{ title: string; course: string; due: string; type: string; est: string }>) {
-    setRows(r => r.map((row, idx) => idx === i ? { ...row, ...patch } : row));
-  }
-  async function submit() {
-    const items = rows.filter(r => r.title && r.due).map(r => {
-      const [y, m, d] = r.due.split('-').map(n => parseInt(n, 10));
-      const due = new Date(y, (m as number) - 1, d, 23, 59, 59, 999).toISOString();
-      const tags = r.type ? [r.type.toLowerCase()] : undefined;
-      return { title: r.title, course: r.course || null, dueDate: due, status: 'todo', estimatedMinutes: r.est ? parseInt(r.est, 10) : null, tags };
-    });
-    if (!items.length) return;
-    await apiFetch('/api/tasks/bulk', { method: 'POST', body: { tasks: items } });
-    setRows([]); setOpen(false); onDone(); try { notifyTasksChanged(); } catch {}
-    try { notifyToast({ kind: 'success', message: `Created ${items.length} task${items.length>1?'s':''}.` }); } catch {}
-  }
-  return (
-    <div>
-      <div className="flex items-center justify-between mb-2">
-        <div className="text-sm font-medium">Bulk add events</div>
-        <button onClick={() => setOpen(o => !o)} className="text-xs underline">{open ? 'Hide' : 'Show'}</button>
-      </div>
-      {open && (
-        <div className="space-y-2">
-          <div className="grid grid-cols-1 md:grid-cols-12 text-[11px] text-slate-300/70">
-            <div className="md:col-span-5">Title</div>
-            <div className="md:col-span-3">Course</div>
-            <div className="md:col-span-2">Date</div>
-            <div className="md:col-span-1">Type</div>
-            <div className="md:col-span-1">Est</div>
-          </div>
-          {rows.map((r, i) => (
-            <div key={i} className="grid grid-cols-1 md:grid-cols-12 gap-2 items-center">
-              <input value={r.title} onChange={e => updateRow(i, { title: e.target.value })} placeholder="e.g., Dentist appointment" className="md:col-span-5 bg-[#0b1020] border border-[#1b2344] rounded px-2 py-1 text-sm" />
-              <select value={r.course} onChange={e => updateRow(i, { course: e.target.value })} className="md:col-span-3 bg-[#0b1020] border border-[#1b2344] rounded px-2 py-1 text-sm">
-                <option value="">-- none --</option>
-                {(courses || []).map((c: any) => (
-                  <option key={c.id} value={c.title || c.code || ''}>{c.title || c.code}</option>
-                ))}
-              </select>
-              <input type="date" value={r.due} onChange={e => updateRow(i, { due: e.target.value })} className="md:col-span-2 bg-[#0b1020] border border-[#1b2344] rounded px-2 py-1 text-sm" />
-              <select value={r.type} onChange={e => updateRow(i, { type: e.target.value })} className="md:col-span-1 bg-[#0b1020] border border-[#1b2344] rounded px-2 py-1 text-sm">
-                <option value="other">Other</option>
-                <option value="reading">Reading</option>
-                <option value="review">Review</option>
-                <option value="outline">Outline</option>
-                <option value="practice">Practice</option>
-              </select>
-              <div className="md:col-span-1 flex items-center gap-2">
-                <input type="number" min={0} step={5} value={r.est} onChange={e => updateRow(i, { est: e.target.value })} className="w-full bg-[#0b1020] border border-[#1b2344] rounded px-2 py-1 text-sm" />
-                <button onClick={() => removeRow(i)} className="text-xs px-2 py-1 rounded border border-[#1b2344]">X</button>
-              </div>
-            </div>
-          ))}
-          <div className="flex items-center gap-2">
-            <button onClick={addRow} className="px-3 py-1.5 rounded border border-[#1b2344]">Add row</button>
-            <button onClick={submit} className="px-3 py-1.5 rounded bg-blue-600 hover:bg-blue-500 disabled:opacity-50" disabled={rows.length === 0}>Create events</button>
-          </div>
-        </div>
-      )}
-    </div>
-  );
+function formatTime(value?: string | null) {
+  if (!value || !/^\d{2}:\d{2}$/.test(value)) return '';
+  const [hour, minute] = value.split(':').map(Number);
+  const date = new Date();
+  date.setHours(hour, minute, 0, 0);
+  return new Intl.DateTimeFormat('en-US', { hour: 'numeric', minute: '2-digit' }).format(date);
 }
-function keyOf(d: Date) { const x = startOfDay(d); return `${x.getFullYear()}-${String(x.getMonth()+1).padStart(2,'0')}-${String(x.getDate()).padStart(2,'0')}`; }
+
+function courseOccurs(course: Course, date: Date) {
+  const dayKey = ymd(date);
+  if (course.startDate && dayKey < course.startDate.slice(0, 10)) return false;
+  if (course.endDate && dayKey > course.endDate.slice(0, 10)) return false;
+  return courseBlocks(course).some((block) => block.days.includes(date.getDay()));
+}
 
 export default function CalendarPage() {
-  const { tasks, refresh: refreshTasks } = useTasks();
-  const { courses, refresh: refreshCourses } = useCourses();
-  const { blocks } = useSchedule();
-  const { availability } = useAvailability();
-  const [loading, setLoading] = useState(false);
-  const [year, setYear] = useState<number>(() => new Date().getFullYear());
-  const [month, setMonth] = useState<number>(() => new Date().getMonth());
-  const [courseFilter, setCourseFilter] = useState('');
-  const [statusFilter, setStatusFilter] = useState<'all' | 'todo' | 'done'>('all');
-  const [selectedDayKey, setSelectedDayKey] = useState<string | null>(null);
-  // courses provided by useCourses
-  const [monthOpen, setMonthOpen] = useState(false);
-  const [addOpen, setAddOpen] = useState(false);
-  const [addTitle, setAddTitle] = useState('');
-  const [addCourse, setAddCourse] = useState('');
-  const [addDate, setAddDate] = useState(''); // yyyy-mm-dd
-  const [addEst, setAddEst] = useState('');
-  const [addType, setAddType] = useState<string>('');
-  const [addStartTime, setAddStartTime] = useState<string>('');
-  const [addEndTime, setAddEndTime] = useState<string>('');
-  const [showClasses, setShowClasses] = useState<boolean>(true);
-  const [timedIcs, setTimedIcs] = useState<boolean>(false);
-  const [icsToken, setIcsToken] = useState<string>('');
-  const [density, setDensity] = useState<'comfortable'|'compact'>('comfortable');
-  const [expandedDays, setExpandedDays] = useState<Set<string>>(new Set());
-
-  // Personal events state
+  const { tasks } = useTasks();
+  const { courses } = useCourses();
+  const { activeSemester, currentTerm } = useSemester();
+  const [weekStart, setWeekStart] = useState(() => mondayOf(new Date()));
   const [events, setEvents] = useState<CalendarEvent[]>([]);
-  const [showEvents, setShowEvents] = useState<boolean>(true);
-  const [eventModalOpen, setEventModalOpen] = useState(false);
-  const [eventForm, setEventForm] = useState<{
-    title: string;
-    category: EventCategory;
-    date: string;
-    startTime: string;
-    endTime: string;
-    description: string;
-    location: string;
-    allDay: boolean;
-  }>({ title: '', category: 'personal', date: '', startTime: '', endTime: '', description: '', location: '', allDay: true });
+  const [showAddEvent, setShowAddEvent] = useState(false);
+  const [eventTitle, setEventTitle] = useState('');
+  const [eventDate, setEventDate] = useState(ymd(new Date()));
+  const [eventStart, setEventStart] = useState('');
+  const [eventEnd, setEventEnd] = useState('');
+  const [eventLocation, setEventLocation] = useState('');
+  const [saving, setSaving] = useState(false);
 
-  // Edit modal state
-  const [editOpen, setEditOpen] = useState(false);
-  const [editTask, setEditTask] = useState<Task | null>(null);
-  const [editTitle, setEditTitle] = useState('');
-  const [editCourse, setEditCourse] = useState('');
-  const [editDate, setEditDate] = useState('');
-  const [editEst, setEditEst] = useState('');
-  const [editType, setEditType] = useState('');
-  const [editStartTime, setEditStartTime] = useState('');
-  const [editEndTime, setEditEndTime] = useState('');
-  const { currentTerm, showAllTerms, toggleShowAll } = useSemester();
-
-  async function refresh() {
-    setLoading(true);
-    try { await refreshCourses(); } catch {}
-    // Load personal events
+  async function refreshEvents() {
     try {
-      const ed = await apiFetch<{ events: CalendarEvent[] }>('/api/events');
-      setEvents((ed as any)?.events || []);
+      const data = await apiFetch<{ events: CalendarEvent[] }>('/api/events');
+      setEvents(data.events || []);
     } catch {}
-    setLoading(false);
   }
-  useEffect(() => { refreshTasks(); refresh(); }, []);
-  useEffect(() => {
-    const off = onTasksChanged(() => { refreshTasks(); refresh(); });
-    return off;
-  }, []);
-  useEffect(() => {
-    if (typeof window !== 'undefined') {
-      const v = window.localStorage.getItem('calendarShowClasses');
-      setShowClasses(v === null ? true : v === 'true');
-      setIcsToken(window.localStorage.getItem('icsToken') || '');
-      const d = window.localStorage.getItem('calendarDensity');
-      if (d === 'comfortable' || d === 'compact') setDensity(d);
-    }
-  }, []);
-  // Server-backed density setting
-  useEffect(() => { (async () => { try { const j = await apiFetch<{ settings: Record<string, any> }>('/api/settings?keys=calendarDensity'); const s = (j?.settings||{}) as Record<string,any>; const d = s.calendarDensity; if (d === 'comfortable' || d === 'compact') setDensity(d); } catch {} })(); }, []);
-  useEffect(() => {
-    if (typeof window !== 'undefined') window.localStorage.setItem('calendarShowClasses', String(showClasses));
-  }, [showClasses]);
-  useEffect(() => {
-    if (typeof window !== 'undefined') window.localStorage.setItem('calendarDensity', density);
-    try { void apiFetch('/api/settings', { method: 'PATCH', body: { calendarDensity: density } }); } catch {}
-  }, [density]);
 
-  const first = new Date(year, month, 1);
-  const firstDow = first.getDay(); // 0 Sun
-  const gridStart = new Date(first); gridStart.setDate(first.getDate() - ((firstDow + 6) % 7)); // back to Monday start
-  const weeks = useMemo(() => {
-    const rows: Date[][] = [];
-    let cursor = new Date(gridStart);
-    for (let r = 0; r < 6; r++) {
-      const row: Date[] = [];
-      for (let c = 0; c < 7; c++) { row.push(new Date(cursor)); cursor.setDate(cursor.getDate() + 1); }
-      rows.push(row);
-    }
-    return rows;
-  }, [year, month]);
+  useEffect(() => { void refreshEvents(); }, []);
 
-  const byDay = useMemo(() => {
-    const m: Record<string, Task[]> = {};
-    const filtered = tasks
-      .filter(t => (showAllTerms || !currentTerm || (t.term || '') === currentTerm))
-      .filter(t => (statusFilter === 'all' || t.status === statusFilter))
-      .filter(t => (!courseFilter || (t.course || '').toLowerCase().includes(courseFilter.toLowerCase())));
-    for (const t of filtered) {
-      const k = keyOf(new Date(t.dueDate));
-      (m[k] ||= []).push(t);
-    }
-    const toMin = (hhmm?: string | null) => {
-      if (!hhmm || !/^[0-2]\d:[0-5]\d$/.test(hhmm)) return null;
-      const [h, mi] = hhmm.split(':').map(Number);
-      return h*60 + mi;
-    };
-    for (const k of Object.keys(m)) m[k].sort((a,b) => {
-      const am = toMin((a as any).startTime);
-      const bm = toMin((b as any).startTime);
-      if (am !== null && bm !== null && am !== bm) return am - bm;
-      if (am !== null && bm === null) return -1;
-      if (am === null && bm !== null) return 1;
-      return (a.title || '').localeCompare(b.title || '');
-    });
-    return m;
-  }, [tasks, courseFilter, statusFilter, currentTerm, showAllTerms]);
+  const activeCourses = useMemo(() => activeSemester ? courses.filter((course) => course.semester === activeSemester.season && course.year === activeSemester.year) : courses, [courses, activeSemester]);
+  const weekDays = useMemo(() => Array.from({ length: 7 }, (_, index) => addDays(weekStart, index)), [weekStart]);
+  const visibleTasks = useMemo(() => tasks.filter((task) => task.status !== 'done' && (!currentTerm || task.term === currentTerm)), [tasks, currentTerm]);
 
-  const classesByDay = useMemo(() => {
-    type ClassItem = { title: string; code?: string | null; time?: string | null; room?: string | null; colorKey: string; color?: string | null; startMin?: number; endMin?: number; conflict?: boolean };
-    const m: Record<string, ClassItem[]> = {};
-    const toMin = (hhmm: string | null | undefined) => {
-      if (!hhmm) return undefined;
-      const [h, mi] = hhmm.split(':').map((x: string) => parseInt(x, 10));
-      if (isNaN(h) || isNaN(mi)) return undefined;
-      return h * 60 + mi;
-    };
-    for (const c of courses) {
-      if (courseFilter) {
-        const hay = `${c.title || ''} ${c.code || ''}`.toLowerCase();
-        if (!hay.includes(courseFilter.toLowerCase())) continue;
-      }
-      const start = c.startDate ? new Date(c.startDate) : null;
-      const end = c.endDate ? new Date(c.endDate) : null;
-      const blocks = (Array.isArray(c.meetingBlocks) && c.meetingBlocks.length)
-        ? c.meetingBlocks
-        : ((Array.isArray(c.meetingDays) && c.meetingStart && c.meetingEnd) ? [{ days: c.meetingDays, start: c.meetingStart, end: c.meetingEnd, location: c.room || c.location || null }] : []);
-      if (!Array.isArray(blocks) || !blocks.length) continue;
-      for (const row of weeks) {
-        for (const d of row) {
-          const within = (!start || d >= start) && (!end || d <= end);
-          if (!within) continue;
-          for (const b of blocks) {
-            if (!Array.isArray(b.days)) continue;
-            if (b.days.includes(d.getDay())) {
-              const sMin = toMin((b as any).start);
-              const eMin = toMin((b as any).end);
-              const key = keyOf(d);
-              (m[key] ||= []).push({
-                title: c.title,
-                code: c.code,
-                time: (b as any).start && (b as any).end ? `${fmt12((b as any).start)}–${fmt12((b as any).end)}` : null,
-                room: (b as any).location || c.room || c.location || null,
-                colorKey: c.title || c.code || 'course',
-                color: (c as any).color || null,
-                startMin: sMin,
-                endMin: eMin,
-              });
-            }
-          }
-        }
-      }
-    }
-    // Mark conflicts within each day by time overlap
-    for (const k of Object.keys(m)) {
-      const list = m[k];
-      const withTimes = list.filter(x => typeof x.startMin === 'number' && typeof x.endMin === 'number');
-      withTimes.sort((a, b) => (a.startMin! - b.startMin!));
-      for (let i = 1; i < withTimes.length; i++) {
-        const prev = withTimes[i - 1];
-        const cur = withTimes[i];
-        if (cur.startMin! < prev.endMin!) { prev.conflict = true; cur.conflict = true; }
-      }
-    }
-    return m;
-  }, [courses, weeks, year, month, courseFilter]);
+  const days = useMemo(() => weekDays.map((date) => {
+    const key = ymd(date);
+    const classes = activeCourses.flatMap((course) => courseBlocks(course)
+      .filter((block) => block.days.includes(date.getDay()) && courseOccurs(course, date))
+      .map((block) => ({ course, start: block.start, end: block.end, location: block.location || course.room || course.location || null })));
+    const deadlines = visibleTasks.filter((task) => task.dueDate.slice(0, 10) === key);
+    const dayEvents = events.filter((event) => event.date === key);
+    return { date, key, classes: classes.sort((a, b) => a.start.localeCompare(b.start)), deadlines, events: dayEvents.sort((a, b) => (a.startTime || '99:99').localeCompare(b.startTime || '99:99')) };
+  }), [weekDays, activeCourses, visibleTasks, events]);
 
-  // Planned study minutes by day (from Schedule)
-  const plannedByDay = useMemo(() => {
-    const m: Record<string, number> = {};
-    for (const row of weeks) for (const d of row) m[keyOf(d)] = 0;
-    for (const b of (blocks || [])) { if (m[b.day] !== undefined) m[b.day] += b.plannedMinutes || 0; }
-    return m;
-  }, [blocks, weeks]);
+  const classCount = days.reduce((sum, day) => sum + day.classes.length, 0);
+  const deadlineCount = days.reduce((sum, day) => sum + day.deadlines.length, 0);
+  const busyDays = days.filter((day) => day.classes.length + day.deadlines.length + day.events.length >= 4).length;
 
-  // Capacity (availability) minutes by day
-  const capacityByDay = useMemo(() => {
-    const m: Record<string, number> = {};
-    for (const row of weeks) for (const d of row) { const dow = d.getDay(); m[keyOf(d)] = (availability as any)?.[dow] ?? 240; }
-    return m;
-  }, [availability, weeks]);
-
-  // Finals as calendar-only events (not tasks)
-  const finalsByDay = useMemo(() => {
-    type FinalItem = { title: string; time: string };
-    const m: Record<string, FinalItem[]> = {};
-    const finals: Array<{ iso: string; title: string }> = [
-      { iso: '2025-12-12T09:00:00-06:00', title: 'Final — Amateur Sports Law' },
-      { iso: '2025-12-17T09:00:00-06:00', title: 'Final — Intellectual Property' },
-    ];
-    for (const f of finals) {
-      const dayKey = f.iso.slice(0, 10); // YYYY-MM-DD Chicago date
-      (m[dayKey] ||= []).push({ title: f.title, time: fmt12('09:00') });
-    }
-    return m;
-  }, []);
-
-  const courseColors = useMemo(() => {
-    const map: Record<string, string | null> = {};
-    for (const c of courses as any[]) {
-      const key = ((c.title || c.code || '') as string).toLowerCase();
-      map[key] = (c as any).color || null;
-    }
-    return map;
-  }, [courses]);
-
-  // Personal events by day
-  const eventsByDay = useMemo(() => {
-    const m: Record<string, CalendarEvent[]> = {};
-    for (const ev of events) {
-      const k = ev.date; // already YYYY-MM-DD
-      (m[k] ||= []).push(ev);
-    }
-    // Sort by time
-    for (const k of Object.keys(m)) {
-      m[k].sort((a, b) => {
-        if (a.startTime && b.startTime) return a.startTime.localeCompare(b.startTime);
-        if (a.startTime) return -1;
-        if (b.startTime) return 1;
-        return 0;
+  async function addEvent(event: FormEvent) {
+    event.preventDefault();
+    if (!eventTitle.trim() || !eventDate) return;
+    setSaving(true);
+    try {
+      await apiFetch('/api/events', {
+        method: 'POST',
+        body: {
+          title: eventTitle.trim(),
+          category: 'school',
+          date: eventDate,
+          startTime: eventStart || null,
+          endTime: eventEnd || null,
+          allDay: !eventStart,
+          location: eventLocation.trim() || null,
+        },
       });
+      setEventTitle('');
+      setEventStart('');
+      setEventEnd('');
+      setEventLocation('');
+      setShowAddEvent(false);
+      await refreshEvents();
+    } finally {
+      setSaving(false);
     }
-    return m;
-  }, [events]);
-
-  const monthLabel = useMemo(() => new Date(year, month, 1).toLocaleString(undefined, { month: 'long', year: 'numeric' }), [year, month]);
-  const monthNames = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
-
-  const icsHref = useMemo(() => {
-    const params: string[] = [];
-    if (courseFilter) params.push(`course=${encodeURIComponent(courseFilter)}`);
-    if (statusFilter !== 'all') params.push(`status=${encodeURIComponent(statusFilter)}`);
-    if (timedIcs) params.push('timed=1');
-    if (showClasses) params.push('classes=1');
-    if (icsToken) params.push(`token=${encodeURIComponent(icsToken)}`);
-    return `/api/export/ics${params.length ? `?${params.join('&')}` : ''}`;
-  }, [courseFilter, statusFilter, timedIcs, showClasses, icsToken]);
-
-  function openAdd() {
-    const today = new Date();
-    let d: Date;
-    if (selectedDayKey) {
-      const [y, m, da] = selectedDayKey.split('-').map(n => parseInt(n, 10));
-      d = new Date(y, (m as number) - 1, da);
-    } else if (today.getFullYear() === year && today.getMonth() === month) {
-      d = today;
-    } else {
-      d = new Date(year, month, 1);
-    }
-    const yyyy = d.getFullYear();
-    const mm = String(d.getMonth()+1).padStart(2,'0');
-    const dd = String(d.getDate()).padStart(2,'0');
-    setAddDate(`${yyyy}-${mm}-${dd}`);
-    setAddCourse(''); setAddTitle(''); setAddEst('');
-    setAddOpen(true); setMonthOpen(false);
-  }
-
-  async function createEvent(stay?: boolean) {
-    if (!addTitle || !addDate) return;
-    const parts = addDate.split('-').map(n => parseInt(n, 10));
-    if (parts.length !== 3) return;
-    const d = new Date(parts[0], parts[1]-1, parts[2], 23,59,59,999);
-    // If user set only start time, default end time to +60 minutes
-    const toEnd = (start?: string) => {
-      if (!start || !/^\d{2}:\d{2}$/.test(start)) return '';
-      const [h, m] = start.split(':').map(Number);
-      const total = h * 60 + m + 60; // +1h
-      const hh = Math.floor((total % (24*60)) / 60);
-      const mm = total % 60;
-      return `${String(hh).padStart(2,'0')}:${String(mm).padStart(2,'0')}`;
-    };
-
-    const body: any = {
-      title: addTitle,
-      course: addCourse ? addCourse : null,
-      dueDate: d.toISOString(),
-      status: 'todo',
-      estimatedMinutes: addEst ? parseInt(addEst, 10) : null,
-      tags: addType ? [addType] : undefined,
-    };
-    if (addStartTime) body.startTime = addStartTime;
-    const effectiveEnd = addEndTime || (addStartTime ? toEnd(addStartTime) : '');
-    if (effectiveEnd) body.endTime = effectiveEnd;
-    try {
-      await tasksClient.create(body as any);
-      if (stay) {
-        setAddTitle(''); setAddEst('');
-      } else {
-        setAddOpen(false); setAddTitle(''); setAddCourse(''); setAddEst(''); setAddType(''); setAddStartTime(''); setAddEndTime('');
-      }
-      await refresh();
-    } catch {}
-  }
-
-  function onDragStart(e: React.DragEvent, t: Task) {
-    e.dataTransfer.setData('text/plain', t.id);
-  }
-
-  async function moveTaskToDay(taskId: string, day: Date) {
-    const next = new Date(day);
-    next.setHours(23, 59, 59, 999);
-    await tasksClient.update(taskId, { dueDate: next.toISOString() } as any);
-    await refresh();
-  }
-
-  function onDropDay(e: React.DragEvent, day: Date) {
-    e.preventDefault();
-    const id = e.dataTransfer.getData('text/plain');
-    if (id) moveTaskToDay(id, day);
-  }
-
-  async function toggleDone(t: Task) {
-    await tasksClient.update(t.id, { status: t.status === 'done' ? 'todo' : 'done' } as any);
-    await refresh();
-  }
-
-  async function movePlusOne(t: Task) {
-    const d = new Date(t.dueDate);
-    d.setDate(d.getDate() + 1);
-    d.setHours(23,59,59,999);
-    await tasksClient.update(t.id, { dueDate: d.toISOString() } as any);
-    await refresh();
-  }
-
-  // Personal event functions
-  function openEventModal(dateKey?: string) {
-    const today = new Date();
-    let d: Date;
-    if (dateKey) {
-      const [y, m, da] = dateKey.split('-').map(n => parseInt(n, 10));
-      d = new Date(y, (m as number) - 1, da);
-    } else if (selectedDayKey) {
-      const [y, m, da] = selectedDayKey.split('-').map(n => parseInt(n, 10));
-      d = new Date(y, (m as number) - 1, da);
-    } else {
-      d = today;
-    }
-    setEventForm({
-      title: '',
-      category: 'personal',
-      date: fmtYmd(d),
-      startTime: '',
-      endTime: '',
-      description: '',
-      location: '',
-      allDay: true,
-    });
-    setEventModalOpen(true);
-  }
-
-  async function createPersonalEvent() {
-    if (!eventForm.title || !eventForm.date) return;
-    const body = {
-      title: eventForm.title,
-      category: eventForm.category,
-      date: eventForm.date,
-      startTime: eventForm.allDay ? null : (eventForm.startTime || null),
-      endTime: eventForm.allDay ? null : (eventForm.endTime || null),
-      allDay: eventForm.allDay,
-      description: eventForm.description || null,
-      location: eventForm.location || null,
-    };
-    await apiFetch('/api/events', { method: 'POST', body });
-    setEventModalOpen(false);
-    try { notifyToast({ kind: 'success', message: 'Event created.' }); } catch {}
-    await refresh();
-  }
-
-  async function deleteEvent(id: string) {
-    await apiFetch(`/api/events/${id}`, { method: 'DELETE' });
-    try { notifyToast({ kind: 'success', message: 'Event deleted.' }); } catch {}
-    await refresh();
-  }
-
-  function openEdit(t: Task) {
-    setEditTask(t);
-    setEditTitle(t.title || '');
-    setEditCourse(t.course || '');
-    const d = new Date(t.dueDate);
-    setEditDate(fmtYmd(d));
-    setEditEst(typeof t.estimatedMinutes === 'number' ? String(t.estimatedMinutes) : '');
-    setEditType((t.tags && t.tags.length) ? (t.tags[0] as any) : '');
-    setEditStartTime((t as any).startTime || '');
-    setEditEndTime((t as any).endTime || '');
-    setEditOpen(true);
-  }
-
-  async function saveEdit() {
-    if (!editTask) return;
-    const body: any = {
-      title: editTitle,
-      course: editCourse || null,
-      estimatedMinutes: editEst ? parseInt(editEst, 10) : null,
-      tags: editType ? [editType] : null,
-      startTime: editStartTime || null,
-      endTime: editEndTime || null,
-    };
-    if (editDate) {
-      const parts = editDate.split('-').map(n => parseInt(n, 10));
-      if (parts.length === 3) {
-        const nd = new Date(parts[0], parts[1]-1, parts[2], 23,59,59,999);
-        body.dueDate = nd.toISOString();
-      }
-    }
-    await tasksClient.update(editTask.id, body as any);
-    setEditOpen(false); setEditTask(null);
-    await refresh();
-  }
-
-  async function deleteEdit() {
-    if (!editTask) return;
-    await tasksClient.remove(editTask.id);
-    setEditOpen(false); setEditTask(null);
-    await refresh();
   }
 
   return (
-    <main className="space-y-4">
-      <div className="flex items-center justify-between">
-        <h2 className="text-lg font-medium">Calendar</h2>
-        <div className="flex items-center gap-2 relative">
-          <button onClick={() => { const d = new Date(year, month - 1, 1); setYear(d.getFullYear()); setMonth(d.getMonth()); setMonthOpen(false); }} className="px-2 py-1 rounded border border-[#1b2344]">Prev</button>
-          <button onClick={() => setMonthOpen(o => !o)} className="text-sm text-slate-300/90 min-w-[160px] text-center px-3 py-1 rounded border border-[#1b2344] bg-[#0b1020] hover:bg-[#0f1530]">
-            {monthLabel}
-          </button>
-          <button onClick={() => { const d = new Date(year, month + 1, 1); setYear(d.getFullYear()); setMonth(d.getMonth()); setMonthOpen(false); }} className="px-2 py-1 rounded border border-[#1b2344]">Next</button>
-          <button onClick={openAdd} className="px-2 py-1 rounded bg-emerald-600 hover:bg-emerald-500">Add task</button>
-          <button onClick={() => openEventModal()} className="px-2 py-1 rounded bg-purple-600 hover:bg-purple-500">Add event</button>
-          <a href={icsHref} className="px-2 py-1 rounded bg-indigo-600 hover:bg-indigo-500">Download .ics</a>
+    <main className="space-y-6">
+      <section className="rounded-2xl border border-slate-700/70 bg-gradient-to-br from-slate-900 to-slate-950 p-6">
+        <div className="flex flex-col gap-4 md:flex-row md:items-end md:justify-between">
+          <div><p className="text-sm font-medium text-sky-300">Weekly agenda</p><h2 className="mt-1 text-2xl font-semibold text-slate-100">Classes, deadlines, and commitments in one week</h2><p className="mt-2 max-w-3xl text-sm text-slate-400">The calendar now answers what is happening this week. Planning controls, display density, bulk entry, and export settings are no longer mixed into the main view.</p></div>
+          <button onClick={() => setShowAddEvent((value) => !value)} className="rounded-lg bg-sky-500 px-4 py-2.5 font-semibold text-slate-950">{showAddEvent ? 'Close' : 'Add commitment'}</button>
+        </div>
+      </section>
 
-          {monthOpen && (
-            <div className="absolute z-10 top-[120%] left-1/2 -translate-x-1/2 bg-[#0b1020] border border-[#1b2344] rounded shadow-xl p-3 w-72">
-              <div className="flex items-center justify-between mb-2">
-                <button onClick={() => setYear(y => y - 1)} className="px-2 py-1 rounded border border-[#1b2344]">◀</button>
-                <div className="text-sm">{year}</div>
-                <button onClick={() => setYear(y => y + 1)} className="px-2 py-1 rounded border border-[#1b2344]">▶</button>
-              </div>
-              <div className="grid grid-cols-3 gap-2">
-                {monthNames.map((name, idx) => (
-                  <button key={idx} onClick={() => { setMonth(idx); setMonthOpen(false); }} className={`px-2 py-1 rounded border border-[#1b2344] text-sm ${idx===month ? 'bg-blue-600 hover:bg-blue-500' : 'hover:bg-[#0f1530]'}`}>{name}</button>
-                ))}
-              </div>
-              <div className="mt-3 flex items-center justify-between">
-                <button onClick={() => { const d = new Date(); setYear(d.getFullYear()); setMonth(d.getMonth()); setMonthOpen(false); }} className="px-2 py-1 rounded border border-[#1b2344]">Today</button>
-                <button onClick={() => setMonthOpen(false)} className="px-2 py-1 rounded border border-[#1b2344]">Close</button>
-              </div>
+      {showAddEvent ? <form onSubmit={addEvent} className="rounded-xl border border-sky-500/30 bg-sky-500/5 p-4"><div className="grid gap-3 lg:grid-cols-[minmax(0,1fr)_160px_130px_130px_minmax(180px,0.7fr)_auto]"><input value={eventTitle} onChange={(event) => setEventTitle(event.target.value)} placeholder="Meeting, office hours, appointment" className="rounded-lg border border-slate-600 bg-slate-950 px-3 py-2 text-slate-100 placeholder:text-slate-500" /><input type="date" value={eventDate} onChange={(event) => setEventDate(event.target.value)} className="rounded-lg border border-slate-600 bg-slate-950 px-3 py-2 text-slate-100" /><input type="time" value={eventStart} onChange={(event) => setEventStart(event.target.value)} className="rounded-lg border border-slate-600 bg-slate-950 px-3 py-2 text-slate-100" /><input type="time" value={eventEnd} onChange={(event) => setEventEnd(event.target.value)} className="rounded-lg border border-slate-600 bg-slate-950 px-3 py-2 text-slate-100" /><input value={eventLocation} onChange={(event) => setEventLocation(event.target.value)} placeholder="Location" className="rounded-lg border border-slate-600 bg-slate-950 px-3 py-2 text-slate-100 placeholder:text-slate-500" /><button disabled={saving || !eventTitle.trim()} className="rounded-lg bg-sky-500 px-4 py-2 font-semibold text-slate-950 disabled:opacity-50">Save</button></div></form> : null}
+
+      <section className="flex flex-col gap-3 rounded-xl border border-slate-700/70 bg-slate-900/45 p-4 sm:flex-row sm:items-center sm:justify-between">
+        <div className="flex items-center gap-2"><button onClick={() => setWeekStart((date) => addDays(date, -7))} className="rounded-lg border border-slate-600 px-3 py-2 text-sm text-slate-200 hover:bg-slate-800">Previous</button><button onClick={() => setWeekStart(mondayOf(new Date()))} className="rounded-lg border border-slate-600 px-3 py-2 text-sm text-slate-200 hover:bg-slate-800">This week</button><button onClick={() => setWeekStart((date) => addDays(date, 7))} className="rounded-lg border border-slate-600 px-3 py-2 text-sm text-slate-200 hover:bg-slate-800">Next</button></div>
+        <h2 className="font-semibold text-slate-100">{formatWeekRange(weekStart)}</h2>
+        <div className="flex gap-2 text-xs"><span className="rounded-full bg-emerald-500/10 px-2.5 py-1 text-emerald-300">{classCount} classes</span><span className="rounded-full bg-amber-500/10 px-2.5 py-1 text-amber-300">{deadlineCount} deadlines</span>{busyDays ? <span className="rounded-full bg-rose-500/10 px-2.5 py-1 text-rose-300">{busyDays} heavy days</span> : null}</div>
+      </section>
+
+      <section className="grid gap-4 xl:grid-cols-7">
+        {days.map((day) => {
+          const isToday = day.key === ymd(new Date());
+          const empty = !day.classes.length && !day.deadlines.length && !day.events.length;
+          return <article key={day.key} className={`min-h-56 rounded-xl border p-3 ${isToday ? 'border-emerald-500/50 bg-emerald-500/5' : 'border-slate-700 bg-slate-900/45'}`}>
+            <div className="flex items-center justify-between"><div><p className="text-xs uppercase tracking-wide text-slate-500">{new Intl.DateTimeFormat('en-US', { weekday: 'short' }).format(day.date)}</p><p className={`text-lg font-semibold ${isToday ? 'text-emerald-300' : 'text-slate-100'}`}>{new Intl.DateTimeFormat('en-US', { month: 'short', day: 'numeric' }).format(day.date)}</p></div>{isToday ? <span className="rounded-full bg-emerald-500/15 px-2 py-1 text-[10px] text-emerald-300">Today</span> : null}</div>
+            <div className="mt-3 space-y-2">
+              {day.classes.map((item, index) => <Link key={`${item.course.id}:${item.start}:${index}`} href={`/courses/${item.course.id}`} className="block rounded-lg border-l-4 bg-slate-950/45 p-2 hover:bg-slate-800" style={{ borderLeftColor: item.course.color || '#10b981' }}><p className="text-xs font-medium text-slate-200">{item.course.title}</p><p className="mt-1 text-[11px] text-slate-500">{formatTime(item.start)} to {formatTime(item.end)}</p>{item.location ? <p className="text-[11px] text-slate-600">{item.location}</p> : null}</Link>)}
+              {day.deadlines.map((task) => <Link key={task.id} href={`/tasks?text=${encodeURIComponent(task.title)}`} className="block rounded-lg bg-amber-500/10 p-2 hover:bg-amber-500/15"><p className="text-xs font-medium text-amber-200">{task.title}</p><p className="mt-1 text-[11px] text-amber-300/70">{task.course || 'Deadline'}{task.startTime ? ` · ${formatTime(task.startTime)}` : ''}</p></Link>)}
+              {day.events.map((event) => <div key={event.id} className="rounded-lg bg-sky-500/10 p-2"><p className="text-xs font-medium text-sky-200">{event.title}</p><p className="mt-1 text-[11px] text-sky-300/70">{event.startTime ? formatTime(event.startTime) : 'All day'}{event.location ? ` · ${event.location}` : ''}</p></div>)}
+              {empty ? <p className="py-6 text-center text-xs text-slate-600">Open</p> : null}
             </div>
-          )}
-        </div>
-      </div>
-      {/* Add Event Modal */}
-      {addOpen && (
-        <div className="fixed inset-0 z-50 bg-black/50 flex items-center justify-center p-4">
-          <div className="w-full max-w-lg rounded border border-[#1b2344] bg-[#0b1020] p-4">
-            <div className="flex items-center justify-between mb-3">
-              <div className="text-sm font-medium">Add event</div>
-              <button onClick={() => setAddOpen(false)} className="text-xs underline">Close</button>
-            </div>
-            <div className="space-y-3">
-              <div>
-                <label className="block text-xs mb-1">Title</label>
-                <input value={addTitle} onChange={e => setAddTitle(e.target.value)} onKeyDown={e => { if (e.key==='Enter' && addTitle && addDate) createEvent(); }} className="w-full bg-[#0b1020] border border-[#1b2344] rounded px-3 py-2" placeholder="e.g., Dentist appointment" autoFocus />
-              </div>
-              <div>
-                <label className="block text-xs mb-1">Date</label>
-                <div className="flex items-center gap-2 flex-wrap">
-                  <input type="date" value={addDate} onChange={e => setAddDate(e.target.value)} className="bg-[#0b1020] border border-[#1b2344] rounded px-3 py-2" />
-                  <div className="flex items-center gap-1 text-[11px]">
-                    <button onClick={() => setAddDate(fmtYmd(new Date()))} className="px-2 py-1 rounded border border-[#1b2344]">Today</button>
-                    <button onClick={() => { const d=new Date(); d.setDate(d.getDate()+1); setAddDate(fmtYmd(d)); }} className="px-2 py-1 rounded border border-[#1b2344]">Tomorrow</button>
-                    <button onClick={() => { const d=new Date(); const delta=(8-d.getDay())%7||7; d.setDate(d.getDate()+delta); setAddDate(fmtYmd(d)); }} className="px-2 py-1 rounded border border-[#1b2344]">Next Mon</button>
-                    <button onClick={() => { const d=new Date(); const delta=(12-d.getDay())%7||7; d.setDate(d.getDate()+delta); setAddDate(fmtYmd(d)); }} className="px-2 py-1 rounded border border-[#1b2344]">Next Fri</button>
-                  </div>
-                </div>
-              </div>
-              <div>
-                <label className="block text-xs mb-1">Course (optional)</label>
-                <div className="flex items-center gap-2 overflow-x-auto pb-1">
-                  {(courses || []).map((c: any) => {
-                    const label = c.title || c.code || '';
-                    const selected = addCourse === label;
-                    return (
-                      <button key={c.id} onClick={() => setAddCourse(selected ? '' : label)} className={`px-2 py-1 rounded border text-xs whitespace-nowrap ${selected ? 'border-blue-500 bg-[#1a2243]' : 'border-[#1b2344]'}`}>
-                        <span className={`inline-block w-2 h-2 rounded-full mr-1 ${c.color ? '' : courseColorClass(label, 'bg')}`} style={c.color ? { backgroundColor: (c.color as any) } : undefined}></span>
-                        {label || '—'}
-                      </button>
-                    );
-                  })}
-                </div>
-              </div>
-              <div>
-                <label className="block text-xs mb-1">Type</label>
-                <div className="flex items-center gap-2 flex-wrap text-[11px]">
-                  {['reading','review','outline','practice','assignment','other'].map(t => (
-                    <button key={t} onClick={() => setAddType(addType===t ? '' : t)} className={`px-2 py-1 rounded border ${addType===t ? 'border-blue-500 bg-[#1a2243]' : 'border-[#1b2344]'}`}>{t}</button>
-                  ))}
-                </div>
-              </div>
-              <div>
-                <label className="block text-xs mb-1">Time (optional)</label>
-                <div className="flex items-center gap-2 flex-wrap">
-                  <TimePickerField value={addStartTime} onChange={setAddStartTime} />
-                  <span className="text-xs">–</span>
-                  <TimePickerField value={addEndTime} onChange={setAddEndTime} />
-                  <button onClick={() => { setAddStartTime(''); setAddEndTime(''); }} className="text-xs underline">No time</button>
-                </div>
-                <div className="mt-2 flex items-center gap-1 flex-wrap text-[11px]">
-                  {[13,14,15,16,17,18,19,20].map(h => (
-                    <button key={h} onClick={() => { const s=`${String(h).padStart(2,'0')}:00`; const e=`${String((h+1)%24).padStart(2,'0')}:00`; setAddStartTime(s); setAddEndTime(e); }} className="px-2 py-1 rounded border border-[#1b2344]">{fmt12(`${String(h).padStart(2,'0')}:00`)}–{fmt12(`${String((h+1)%24).padStart(2,'0')}:00`)}</button>
-                  ))}
-                </div>
-              </div>
-              <div>
-                <label className="block text-xs mb-1">Est. minutes (optional)</label>
-                <div className="flex items-center gap-2 flex-wrap">
-                  <input type="number" min={0} step={5} value={addEst} onChange={e => setAddEst(e.target.value)} className="w-28 bg-[#0b1020] border border-[#1b2344] rounded px-3 py-2" />
-                  {[15,30,45,60].map(n => (
-                    <button key={n} onClick={() => setAddEst(String(n))} className="px-2 py-1 rounded border border-[#1b2344] text-xs">{n}m</button>
-                  ))}
-                </div>
-              </div>
-              <div className="flex items-center gap-2">
-                <button onClick={() => createEvent(false)} className="px-3 py-2 rounded bg-blue-600 hover:bg-blue-500 disabled:opacity-50" disabled={!addTitle || !addDate}>Create</button>
-                <button onClick={() => createEvent(true)} className="px-3 py-2 rounded border border-[#1b2344] disabled:opacity-50" disabled={!addTitle || !addDate}>Create & Add Another</button>
-                <button onClick={() => setAddOpen(false)} className="px-3 py-2 rounded border border-[#1b2344]">Cancel</button>
-              </div>
-            </div>
-          </div>
-        </div>
-      )}
-      {/* Personal Event Modal */}
-      {eventModalOpen && (
-        <div className="fixed inset-0 z-50 bg-black/50 flex items-center justify-center p-4" onClick={() => setEventModalOpen(false)}>
-          <div className="w-full max-w-lg rounded border border-[#1b2344] bg-[#0b1020] p-4" onClick={e => e.stopPropagation()}>
-            <div className="flex items-center justify-between mb-3">
-              <div className="text-sm font-medium">Add personal event</div>
-              <button onClick={() => setEventModalOpen(false)} className="text-xs underline">Close</button>
-            </div>
-            <div className="space-y-3">
-              <div>
-                <label className="block text-xs mb-1">Title</label>
-                <input value={eventForm.title} onChange={e => setEventForm(f => ({ ...f, title: e.target.value }))} className="w-full bg-[#0b1020] border border-[#1b2344] rounded px-3 py-2" placeholder="e.g., Dentist appointment" autoFocus />
-              </div>
-              <div>
-                <label className="block text-xs mb-1">Category</label>
-                <div className="flex flex-wrap gap-2">
-                  {(['personal', 'work', 'health', 'social', 'other'] as EventCategory[]).map(cat => (
-                    <button key={cat} onClick={() => setEventForm(f => ({ ...f, category: cat }))} className={`px-3 py-1.5 rounded border text-xs capitalize ${eventForm.category === cat ? 'border-purple-500 bg-purple-900/30' : 'border-[#1b2344]'}`} style={{ borderLeftColor: EVENT_CATEGORY_COLORS[cat], borderLeftWidth: 3 }}>
-                      {cat}
-                    </button>
-                  ))}
-                </div>
-              </div>
-              <div>
-                <label className="block text-xs mb-1">Date</label>
-                <div className="flex items-center gap-2 flex-wrap">
-                  <input type="date" value={eventForm.date} onChange={e => setEventForm(f => ({ ...f, date: e.target.value }))} className="bg-[#0b1020] border border-[#1b2344] rounded px-3 py-2" />
-                  <div className="flex items-center gap-1 text-[11px]">
-                    <button onClick={() => setEventForm(f => ({ ...f, date: fmtYmd(new Date()) }))} className="px-2 py-1 rounded border border-[#1b2344]">Today</button>
-                    <button onClick={() => { const d=new Date(); d.setDate(d.getDate()+1); setEventForm(f => ({ ...f, date: fmtYmd(d) })); }} className="px-2 py-1 rounded border border-[#1b2344]">Tomorrow</button>
-                  </div>
-                </div>
-              </div>
-              <div>
-                <label className="inline-flex items-center gap-2 text-xs">
-                  <input type="checkbox" checked={eventForm.allDay} onChange={e => setEventForm(f => ({ ...f, allDay: e.target.checked }))} />
-                  All day
-                </label>
-              </div>
-              {!eventForm.allDay && (
-                <div>
-                  <label className="block text-xs mb-1">Time</label>
-                  <div className="flex items-center gap-2">
-                    <TimePickerField value={eventForm.startTime} onChange={v => setEventForm(f => ({ ...f, startTime: v }))} />
-                    <span className="text-xs">–</span>
-                    <TimePickerField value={eventForm.endTime} onChange={v => setEventForm(f => ({ ...f, endTime: v }))} />
-                  </div>
-                </div>
-              )}
-              <div>
-                <label className="block text-xs mb-1">Location (optional)</label>
-                <input value={eventForm.location} onChange={e => setEventForm(f => ({ ...f, location: e.target.value }))} className="w-full bg-[#0b1020] border border-[#1b2344] rounded px-3 py-2" placeholder="e.g., 123 Main St" />
-              </div>
-              <div>
-                <label className="block text-xs mb-1">Notes (optional)</label>
-                <textarea value={eventForm.description} onChange={e => setEventForm(f => ({ ...f, description: e.target.value }))} className="w-full bg-[#0b1020] border border-[#1b2344] rounded px-3 py-2 h-20" />
-              </div>
-              <div className="flex items-center gap-2">
-                <button onClick={createPersonalEvent} className="px-3 py-2 rounded bg-purple-600 hover:bg-purple-500 disabled:opacity-50" disabled={!eventForm.title || !eventForm.date}>Create</button>
-                <button onClick={() => setEventModalOpen(false)} className="px-3 py-2 rounded border border-[#1b2344]">Cancel</button>
-              </div>
-            </div>
-          </div>
-        </div>
-      )}
-      {/* Bulk add events */}
-      <div className="card p-4">
-        <BulkAddEvents courses={courses} onDone={refresh} />
-      </div>
-      <div className="grid grid-cols-1 md:grid-cols-4 gap-2">
-        <div>
-          <label className="block text-xs text-slate-300/70 mb-1">Course contains</label>
-          <input value={courseFilter} onChange={e => setCourseFilter(e.target.value)} placeholder="e.g., Torts" className="w-full bg-[#0b1020] border border-[#1b2344] rounded px-3 py-2" />
-        </div>
-        <div>
-          <label className="block text-xs text-slate-300/70 mb-1">Status</label>
-          <select value={statusFilter} onChange={e => setStatusFilter(e.target.value as any)} className="w-full bg-[#0b1020] border border-[#1b2344] rounded px-3 py-2">
-            <option value="all">All</option>
-            <option value="todo">Todo</option>
-            <option value="done">Done</option>
-          </select>
-        </div>
-        <div>
-          <label className="block text-xs text-slate-300/70 mb-1">Display</label>
-          <div className="flex items-center gap-4">
-            <label className="inline-flex items-center gap-2 text-sm"><input type="checkbox" checked={showClasses} onChange={e => setShowClasses(e.target.checked)} /> Classes</label>
-            <label className="inline-flex items-center gap-2 text-sm"><input type="checkbox" checked={showEvents} onChange={e => setShowEvents(e.target.checked)} /> Events</label>
-            <label className="inline-flex items-center gap-2 text-sm"><input type="checkbox" checked={timedIcs} onChange={e => setTimedIcs(e.target.checked)} /> Timed .ics</label>
-            <label className="inline-flex items-center gap-2 text-sm">
-              Density
-              <select value={density} onChange={e=>setDensity(e.target.value as any)} className="bg-[#0b1020] border border-[#1b2344] rounded px-2 py-1">
-                <option value="comfortable">Comfortable</option>
-                <option value="compact">Compact</option>
-              </select>
-            </label>
-          </div>
-        </div>
-        <div>
-          <label className="block text-xs text-slate-300/70 mb-1">Semester</label>
-          <label className="inline-flex items-center gap-2 text-sm"><input type="checkbox" checked={showAllTerms} onChange={() => toggleShowAll()} /> All semesters</label>
-        </div>
-      </div>
-      {loading && <div className="text-xs text-slate-300/70">Loading…</div>}
-      <div className="grid grid-cols-7 gap-2">
-        {['Mon','Tue','Wed','Thu','Fri','Sat','Sun'].map(d => (
-          <div key={d} className="text-center text-xs text-slate-300/70">{d}</div>
-        ))}
-        {weeks.flat().map((d, idx) => {
-          const k = keyOf(d);
-          const monthClass = d.getMonth() === month ? '' : 'opacity-50';
-          const list = byDay[k] || [];
-          return (
-            <div key={idx} className={`relative overflow-hidden border border-[#1b2344] rounded p-3 min-h-[160px] sm:min-h-[180px] md:min-h-[220px] ${monthClass}`} onClick={() => setSelectedDayKey(k)} onDragOver={(e) => e.preventDefault()} onDrop={(e) => onDropDay(e, d)}>
-              <div className="text-xs text-slate-300/70 mb-1 flex items-center justify-between">
-                <span className={`${fmtYmd(new Date())===k ? 'text-slate-200 font-semibold' : ''}`}>{d.getDate()}</span>
-                {selectedDayKey === k && <span className="text-[10px] text-slate-300/60">Agenda</span>}
-              </div>
-              {plannedByDay[k] > 0 && (
-                <div className="text-[10px] text-emerald-400 mb-1">Planned {Math.round(plannedByDay[k])}m</div>
-              )}
-              {(() => { 
-                const cap = capacityByDay[k] || 0; 
-                const planned = plannedByDay[k] || 0; 
-                const baseRatio = cap > 0 ? planned / cap : 0; 
-                const ratio = Math.max(0, Math.min(baseRatio, 1));
-                const color = baseRatio > 1 ? 'rose' : baseRatio >= 0.8 ? 'amber' : 'emerald';
-                const track = color === 'rose' ? 'bg-rose-500/10' : (color === 'amber' ? 'bg-amber-500/10' : 'bg-emerald-500/10');
-                const bar = color === 'rose' ? 'bg-rose-500/70' : (color === 'amber' ? 'bg-amber-500/70' : 'bg-emerald-500/60');
-                return (
-                  <div className={`absolute left-0 right-0 bottom-0 h-1 ${track}`}>
-                    <div className={`h-full ${bar}`} style={{ width: `${Math.round(ratio*100)}%` }} />
-                  </div>
-                ); 
-              })()}
-              {/* Class meetings */}
-              {showClasses && (classesByDay[k] && classesByDay[k].length > 0) && (
-                <ul className="space-y-0.5 mb-1">
-                  {classesByDay[k].map((c, idx) => (
-                    <li key={idx} className={`text-[10px] flex flex-wrap items-center gap-1 break-words ${c.conflict ? 'text-rose-400' : 'text-slate-300/80'}`} title={c.conflict ? 'Time conflict' : ''}>
-                      <span className={`inline-block w-2 h-2 rounded-full ${c.color ? '' : courseColorClass(c.title, 'bg')}`} style={c.color ? { backgroundColor: c.color as any } : undefined}></span>
-                      <span className="text-slate-200">{c.code || c.title}</span>
-                      {c.time ? <span className="text-slate-300/60"> · {c.time}</span> : null}
-                      {c.conflict ? <span className="ml-1 text-[9px] px-1 rounded border border-rose-500 text-rose-400">conflict</span> : null}
-                    </li>
-                  ))}
-                </ul>
-              )}
-              {/* Finals (calendar-only) */}
-              {(finalsByDay[k] && finalsByDay[k].length > 0) && (
-                <ul className="space-y-1 mb-1">
-                  {finalsByDay[k].map((ev, idx) => (
-                    <li key={idx} className="text-[11px] rounded border border-amber-600/60 bg-[#0b1020] px-2 py-1.5" style={{ borderLeft: '3px solid #f59e0b' }}>
-                      <div className="min-w-0 flex flex-wrap items-center gap-2">
-                        <span className="text-slate-200">{ev.title}</span>
-                        <span className="text-slate-300/70">· {ev.time} CT</span>
-                      </div>
-                    </li>
-                  ))}
-                </ul>
-              )}
-              {/* Personal events */}
-              {showEvents && (eventsByDay[k] && eventsByDay[k].length > 0) && (
-                <ul className="space-y-1 mb-1">
-                  {eventsByDay[k].map((ev) => (
-                    <li key={ev.id} className="text-[11px] rounded border border-[#2a3b6e] bg-[#0b1020] px-2 py-1.5 group relative" style={{ borderLeft: `3px solid ${EVENT_CATEGORY_COLORS[ev.category] || '#6b7280'}` }}>
-                      <div className="min-w-0 flex flex-wrap items-center gap-2 break-words leading-tight">
-                        <span className="text-slate-200">{ev.title}</span>
-                        {ev.startTime && <span className="text-slate-300/70">{fmt12(ev.startTime)}{ev.endTime ? `–${fmt12(ev.endTime)}` : ''}</span>}
-                        {ev.location && <span className="text-slate-300/60 text-[10px]">@ {ev.location}</span>}
-                        <span className="text-[9px] px-1 rounded bg-white/5 capitalize">{ev.category}</span>
-                      </div>
-                      <button onClick={(e) => { e.stopPropagation(); deleteEvent(ev.id); }} className="absolute top-1 right-1 opacity-0 group-hover:opacity-100 text-[10px] text-rose-400 hover:text-rose-300">×</button>
-                    </li>
-                  ))}
-                </ul>
-              )}
-              {/* Tasks */}
-              {list.length === 0 ? (
-                <div className="text-[11px] text-slate-300/50">—</div>
-              ) : (
-                <ul className="space-y-1">
-                  {(() => {
-                    const maxVisible = density === 'compact' ? 6 : 4;
-                    const isExpanded = expandedDays.has(k);
-                    const visible = isExpanded ? list : list.slice(0, maxVisible);
-                    const hidden = list.length - visible.length;
-                    return (
-                      <>
-                        {visible.map(t => {
-                          const key = (t.course || '').toLowerCase();
-                          const stripe = courseColors[key] || fallbackCourseHsl(t.course || '');
-                          return (
-                            <li key={t.id} className="text-[11px] cursor-pointer rounded border border-[#2a3b6e] bg-[#0b1020] px-2 py-1.5" style={{ borderLeft: `3px solid ${stripe}` }} draggable onDragStart={(e) => onDragStart(e, t)} onClick={(e) => { e.stopPropagation(); openEdit(t); }}>
-                              <div className="min-w-0">
-                                <div className="flex flex-wrap items-center gap-2 break-words leading-tight">
-                                  <span className="text-slate-200">{t.title}</span>
-                                  {((t as any).startTime || (t as any).endTime) ? (
-                                    <span className="text-slate-300/70">
-                                      {((t as any).startTime ? fmt12((t as any).startTime as any) : '')}{((t as any).startTime && (t as any).endTime) ? '–' : ''}{((t as any).endTime ? fmt12((t as any).endTime as any) : '')}
-                                    </span>
-                                  ) : null}
-                                  {t.course ? <span className="text-slate-300/70">· {t.course}</span> : null}
-                                  {typeof t.estimatedMinutes === 'number' ? <span className="text-slate-300/70">· {minutesToHM(t.estimatedMinutes)}</span> : null}
-                                </div>
-                                {(t.tags && t.tags.length > 0) && (
-                                  <div className="flex flex-wrap gap-1 mt-0.5">
-                                    {t.tags.map((tg, i) => (
-                                      <span key={i} className="text-[10px] px-1 py-0.5 rounded border border-[#2a3b6e]">{tg}</span>
-                                    ))}
-                                  </div>
-                                )}
-                              </div>
-                            </li>
-                          );
-                        })}
-                        {hidden > 0 && (
-                          <li>
-                            <button className="text-[11px] underline" onClick={(e) => { e.stopPropagation(); setExpandedDays(prev => { const n = new Set(prev); if (n.has(k)) n.delete(k); else n.add(k); return n; }); }}>
-                              {isExpanded ? 'Show less' : `+${hidden} more`}
-                            </button>
-                          </li>
-                        )}
-                      </>
-                    );
-                  })()}
-                </ul>
-              )}
-            </div>
-          );
+          </article>;
         })}
-      </div>
-      {editOpen && (
-        <div className="fixed inset-0 z-50 bg-black/50 flex items-center justify-center p-4" onClick={() => setEditOpen(false)}>
-          <div className="w-full max-w-lg rounded border border-[#1b2344] bg-[#0b1020] p-4" onClick={e => e.stopPropagation()}>
-            <div className="flex items-center justify-between mb-3">
-              <div className="text-sm font-medium">Edit event</div>
-              <button onClick={() => setEditOpen(false)} className="text-xs underline">Close</button>
-            </div>
-            <div className="space-y-3">
-              <div>
-                <label className="block text-xs mb-1">Title</label>
-                <input value={editTitle} onChange={e => setEditTitle(e.target.value)} className="w-full bg-[#0b1020] border border-[#1b2344] rounded px-3 py-2" />
-              </div>
-              <div>
-                <label className="block text-xs mb-1">Date</label>
-                <input type="date" value={editDate} onChange={e => setEditDate(e.target.value)} className="bg-[#0b1020] border border-[#1b2344] rounded px-3 py-2" />
-              </div>
-              <div>
-                <label className="block text-xs mb-1">Course (optional)</label>
-                <div className="flex items-center gap-2 overflow-x-auto pb-1">
-                  {(courses || []).map((c: any) => {
-                    const label = c.title || c.code || '';
-                    const selected = editCourse === label;
-                    return (
-                      <button key={c.id} onClick={() => setEditCourse(selected ? '' : label)} className={`px-2 py-1 rounded border text-xs whitespace-nowrap ${selected ? 'border-blue-500 bg-[#1a2243]' : 'border-[#1b2344]'}`}>
-                        <span className={`inline-block w-2 h-2 rounded-full mr-1 ${c.color ? '' : courseColorClass(label, 'bg')}`} style={c.color ? { backgroundColor: (c.color as any) } : undefined}></span>
-                        {label || '—'}
-                      </button>
-                    );
-                  })}
-                </div>
-              </div>
-              <div>
-                <label className="block text-xs mb-1">Type</label>
-                <div className="flex items-center gap-2 flex-wrap text-[11px]">
-                  {['reading','review','outline','practice','assignment','other'].map(t => (
-                    <button key={t} onClick={() => setEditType(editType===t ? '' : t)} className={`px-2 py-1 rounded border ${editType===t ? 'border-blue-500 bg-[#1a2243]' : 'border-[#1b2344]'}`}>{t}</button>
-                  ))}
-                </div>
-              </div>
-              <div>
-                <label className="block text-xs mb-1">Time (optional)</label>
-                <div className="flex items-center gap-2 flex-wrap">
-                  <TimePickerField value={editStartTime} onChange={setEditStartTime} />
-                  <span className="text-xs">–</span>
-                  <TimePickerField value={editEndTime} onChange={setEditEndTime} />
-                  <button onClick={() => { setEditStartTime(''); setEditEndTime(''); }} className="text-xs underline">No time</button>
-                </div>
-              </div>
-              {(() => { const ranges = extractPageRanges(editTitle || ''); return ranges.length ? (
-                <div className="text-xs text-slate-300/70">Pages: <span className="text-slate-100">{ranges.join(', ')}</span></div>
-              ) : null; })()}
-              <div>
-                <label className="block text-xs mb-1">Est. minutes (optional)</label>
-                <input type="number" min={0} step={5} value={editEst} onChange={e => setEditEst(e.target.value)} className="w-28 bg-[#0b1020] border border-[#1b2344] rounded px-3 py-2" />
-              </div>
-              <div className="flex items-center gap-2">
-                <button onClick={saveEdit} className="px-3 py-2 rounded bg-blue-600 hover:bg-blue-500">Save</button>
-                <button onClick={deleteEdit} className="px-3 py-2 rounded border border-rose-600 text-rose-400">Delete</button>
-              </div>
-            </div>
-          </div>
-        </div>
-      )}
+      </section>
+
+      <section className="grid gap-4 md:grid-cols-3">
+        <Link href="/tasks" className="rounded-xl border border-slate-700 bg-slate-900/45 p-4 hover:bg-slate-800"><h3 className="font-semibold text-slate-100">Manage deadlines</h3><p className="mt-1 text-sm text-slate-500">Edit, complete, or move assignments in Tasks.</p></Link>
+        <Link href="/courses" className="rounded-xl border border-slate-700 bg-slate-900/45 p-4 hover:bg-slate-800"><h3 className="font-semibold text-slate-100">Update class schedule</h3><p className="mt-1 text-sm text-slate-500">Class times come from each course workspace.</p></Link>
+        <Link href="/week-plan" className="rounded-xl border border-slate-700 bg-slate-900/45 p-4 hover:bg-slate-800"><h3 className="font-semibold text-slate-100">Build study blocks</h3><p className="mt-1 text-sm text-slate-500">Use the separate planning tool only when a detailed schedule is needed.</p></Link>
+      </section>
     </main>
   );
 }
