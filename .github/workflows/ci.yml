@@ -23,7 +23,7 @@ jobs:
       - name: Build application
         shell: bash
         run: npm run build > build.log 2>&1
-      - name: Run hardening audit
+      - name: Run hardening audit and route smoke tests
         shell: bash
         run: |
           npm run start -- -p 3000 > server.log 2>&1 &
@@ -38,6 +38,12 @@ jobs:
           test -s audit.json
           cat audit.json
           node -e "const fs=require('fs'); const result=JSON.parse(fs.readFileSync('audit.json','utf8')); if(!result.passed){ console.error(result.checks.filter(x=>!x.passed)); process.exit(1); }"
+          : > smoke.log
+          for route in / /tasks /courses /calendar /review /questions /outline-updates /exam /week-plan /wizard /settings /class-capture /work; do
+            status=$(curl --silent --output /dev/null --write-out '%{http_code}' "http://127.0.0.1:3000$route")
+            echo "$status $route" | tee -a smoke.log
+            test "$status" = "200"
+          done
       - name: Upload verification logs
         if: always()
         uses: actions/upload-artifact@v4
@@ -47,5 +53,6 @@ jobs:
             build.log
             server.log
             audit.json
+            smoke.log
           if-no-files-found: warn
           retention-days: 3
