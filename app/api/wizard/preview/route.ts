@@ -4,6 +4,8 @@ import { buildWizardPreview } from '@/lib/wizard_parser';
 export const dynamic = 'force-dynamic';
 export const runtime = 'nodejs';
 
+const MAX_FILE_BYTES = 20 * 1024 * 1024;
+
 export async function POST(req: Request) {
   await ensureSchema();
   const [{ default: pdfParse }, { default: mammoth }] = await Promise.all([
@@ -12,73 +14,68 @@ export async function POST(req: Request) {
   ]);
   const form = await req.formData();
   const file = form.get('file');
-  const ics = form.get('ics'); // optional
   const course = (form.get('course') as string) || null;
-  const tz = (form.get('timezone') as string) || 'America/Chicago';
+  const timezone = (form.get('timezone') as string) || 'America/Chicago';
+  const referenceDate = (form.get('referenceDate') as string) || undefined;
+  const minutesPerPage = Number(form.get('minutesPerPage') || 3);
 
   if (!(file instanceof File)) return new Response('file is required', { status: 400 });
+  if (file.size > MAX_FILE_BYTES) return new Response('File is too large. Maximum size is 20 MB.', { status: 413 });
 
-  async function readAsText(f: File): Promise<string> {
-    const buf = Buffer.from(await f.arrayBuffer());
-    const contentType = f.type || '';
-    if (contentType.includes('pdf') || f.name.toLowerCase().endsWith('.pdf')) {
-      const res = await pdfParse(buf);
-      return res.text || '';
-    }
-    if (contentType.includes('word') || f.name.toLowerCase().endsWith('.docx')) {
-      const res = await mammoth.extractRawText({ buffer: buf });
-      return res.value || '';
-    }
-    if (contentType.includes('text') || f.name.toLowerCase().endsWith('.txt')) {
-      return buf.toString('utf8');
-    }
-    return '';
-  }
+  const buffer = Buffer.from(await file.arrayBuffer());
+  const lowerName = file.name.toLowerCase();
+  let text = '';
+  let pageCount: number | null = null;
 
-  let text = await readAsText(file as File);
-  // TODO: optional: parse ICS to anchor dates (future work). Currently unused.
-  if (!text || text.trim().length === 0) return new Response('Unable to extract text from file', { status: 400 });
-
-  const preview = buildWizardPreview(text, course, { timezone: tz });
-  // Provide raw lines and best-effort table-like rows for Mapping
-  const rawLines = text.split(/\r?\n/);
-  const tables: Array<{ rows: string[][] } > = [];
-  for (const ln of rawLines) {
-    const line = ln; // keep spacing for 3+ space splits
-    const trimmed = line.trim();
-    if (!trimmed) continue;
-    let cells: string[] | null = null;
-    if (line.includes('|')) {
-      cells = line.split('|').map(c => c.trim());
-    } else if (/\t/.test(line)) {
-      cells = line.split(/\t+/).map(c => c.trim());
-    } else if (/\s{3,}/.test(line)) {
-      // columns separated by 3+ spaces (common in PDF text)
-      const parts = line.split(/\s{3,}/).map(c => c.trim()).filter(Boolean);
-      if (parts.length >= 2) cells = parts;
+  try {
+    if ((file.type || '').includes('pdf') || lowerName.endsWith('.pdf')) {
+      const result = await pdfParse(buffer);
+      text = result.text || '';
+      pageCount = result.numpages || null;
+    } else if ((file.type || '').includes('word') || lowerName.endsWith('.docx')) {
+      const result = await mammoth.extractRawText({ buffer });
+      text = result.value || '';
+    } else if ((file.type || '').includes('text') || lowerName.endsWith('.txt') || lowerName.endsWith('.md') || lowerName.endsWith('.csv')) {
+      text = buffer.toString('utf8');
     } else {
-      // Line starting with a date → [date, rest]
-      const p = (await import('chrono-node')).parse(line, new Date(), { forwardDate: true });
-      if (p.length) {
-        const r = p[0];
-        const idx = (r as any).index ?? line.toLowerCase().indexOf(r.text.toLowerCase());
-        if (idx !== undefined && idx <= 5) {
-          const dateText = r.text;
-          const after = line.slice(idx + dateText.length).trim();
-          const before = line.slice(0, idx).trim();
-          const arr = [dateText, after].filter(Boolean);
-          if (arr.length >= 1) cells = arr.length === 1 ? [arr[0], ''] : arr;
-        }
-      }
-      // Reading / assignment only line → ['', content]
-      if (!cells) {
-        const hasReading = /(read|reading|casebook|article|pp?\.|chapter|ch\.|§|chs?\.)/i.test(trimmed);
-        const hasAssign = /(due|submit|turn in|upload|brief|memo|quiz|exam|final|midterm)/i.test(trimmed);
-        if (hasReading || hasAssign) cells = ['', trimmed];
-      }
+      return new Response('Unsupported file type. Upload PDF, DOCX, TXT, Markdown, or CSV.', { status: 415 });
     }
-    if (cells && cells.filter(Boolean).length >= 1) tables.push({ rows: [cells] });
-    if (tables.length >= 300) break;
+  } catch (error: any) {
+    return new Response(`Unable to read document: ${error?.message || 'unknown extraction error'}`, { status: 422 });
   }
-  return Response.json({ preview, lines: rawLines.slice(0, 300), tables });
+
+  if (!text.trim()) return new Response('No selectable text was found. The document may be scanned or image-only and needs OCR before import.', { status: 422 });
+
+  const preview = buildWizardPreview(text, course, {
+    timezone,
+    referenceDate,
+    minutesPerPage: Number.isFinite(minutesPerPage) && minutesPerPage > 0 ? minutesPerPage : 3,
+  });
+
+  const sessionRows = preview.sessions.map(session => [
+    session.date,
+    session.topic || (session.canceled ? 'No class' : ''),
+    session.readings.map(reading => [reading.short_title, reading.pages].filter(Boolean).join(' ')).join('; '),
+    session.assignments_due.map(task => task.title).join('; '),
+  ]);
+
+  const rawLines = text.split(/\r?\n/);
+  const rawRows: string[][] = [];
+  for (const original of rawLines) {
+    const line = original.trim();
+    if (!line) continue;
+    let cells: string[] = [];
+    if (original.includes('|')) cells = original.split('|').map(cell => cell.trim());
+    else if (/\t/.test(original)) cells = original.split(/\t+/).map(cell => cell.trim());
+    else if (/\s{3,}/.test(original)) cells = original.split(/\s{3,}/).map(cell => cell.trim()).filter(Boolean);
+    if (cells.length >= 2) rawRows.push(cells);
+    if (rawRows.length >= 250) break;
+  }
+
+  return Response.json({
+    preview,
+    file: { name: file.name, size: file.size, type: file.type || null, pageCount },
+    lines: rawLines.slice(0, 500),
+    tables: [{ rows: sessionRows }, ...(rawRows.length ? [{ rows: rawRows }] : [])],
+  });
 }
