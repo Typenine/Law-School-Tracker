@@ -9,12 +9,22 @@ function mondayKey(value = new Date()) {
   return date.toISOString().slice(0, 10);
 }
 
-export function buildOutlineProposal(courseTitle: string, captures: ClassCapture[], questions: CourseQuestion[], completedTasks: Task[], syllabus?: StoredSyllabusAnalysis, now = new Date()): OutlineProposal | null {
-  const weekStart = mondayKey(now);
-  const weekEnd = new Date(now.getTime() + 6 * 86400000).toISOString().slice(0, 10);
+export function buildOutlineProposal(
+  courseTitle: string,
+  captures: ClassCapture[],
+  questions: CourseQuestion[],
+  completedTasks: Task[],
+  syllabus?: StoredSyllabusAnalysis,
+  now = new Date(),
+  weekStartOverride?: string,
+): OutlineProposal | null {
+  const weekStart = weekStartOverride || mondayKey(now);
+  const weekEndDate = new Date(`${weekStart}T12:00:00`);
+  weekEndDate.setDate(weekEndDate.getDate() + 6);
+  const weekEnd = weekEndDate.toISOString().slice(0, 10);
   const recentCaptures = captures.filter(item => item.classDate >= weekStart && item.classDate <= weekEnd);
-  const recentQuestions = questions.filter(item => item.status === 'open' && item.createdAt.slice(0, 10) >= weekStart);
-  const recentTasks = completedTasks.filter(item => item.completedAt && item.completedAt.slice(0, 10) >= weekStart);
+  const recentQuestions = questions.filter(item => item.status === 'open' && item.createdAt.slice(0, 10) >= weekStart && item.createdAt.slice(0, 10) <= weekEnd);
+  const recentTasks = completedTasks.filter(item => item.completedAt && item.completedAt.slice(0, 10) >= weekStart && item.completedAt.slice(0, 10) <= weekEnd);
   const syllabusTopics = (syllabus?.sessionSummary || []).filter(item => item.date >= weekStart && item.date <= weekEnd).map(item => item.topic).filter(Boolean) as string[];
   if (!recentCaptures.length && !recentQuestions.length && !recentTasks.length && !syllabusTopics.length) return null;
 
