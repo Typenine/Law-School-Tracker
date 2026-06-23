@@ -56,7 +56,7 @@ export function addDays(date: Date, days: number): Date {
 }
 
 export function estimateTaskMinutes(task: Task): number {
-  const alreadyLogged = Math.max(0, task.loggedMinutes || 0);
+  const alreadyLogged = Math.max(0, task.loggedMinutes || task.actualMinutes || 0);
   const base = task.estimatedMinutes && task.estimatedMinutes > 0
     ? task.estimatedMinutes
     : (task.activity || '').toLowerCase() === 'reading'
@@ -78,9 +78,7 @@ export function buildWeeklyPlanDetailed(tasks: Task[], weekStart: Date, availabi
   const unusedByDay = { ...availableByDay };
   const blocks: WeeklyPlanBlock[] = [];
   const remainders: WeeklyPlanRemainder[] = [];
-  const open = tasks
-    .filter(task => isActiveTask(task) && task.status !== 'done')
-    .sort((a, b) => new Date(a.dueDate).getTime() - new Date(b.dueDate).getTime());
+  const open = tasks.filter(task => isActiveTask(task) && task.status !== 'done').sort((a, b) => new Date(a.dueDate).getTime() - new Date(b.dueDate).getTime());
 
   for (const task of open) {
     const estimatedMinutes = estimateTaskMinutes(task);
@@ -89,7 +87,6 @@ export function buildWeeklyPlanDetailed(tasks: Task[], weekStart: Date, availabi
     due.setHours(23, 59, 59, 999);
     const eligible = days.filter(day => day <= due);
     if (!eligible.length) eligible.push(days[0]);
-
     for (const day of eligible) {
       if (minutesLeft <= 0) break;
       const key = dateKey(day);
@@ -100,11 +97,9 @@ export function buildWeeklyPlanDetailed(tasks: Task[], weekStart: Date, availabi
       unusedByDay[key] -= planned;
       minutesLeft -= planned;
     }
-
     const plannedMinutes = estimatedMinutes - minutesLeft;
     remainders.push({ taskId: task.id, title: task.title, course: task.course || null, estimatedMinutes, plannedMinutes, remainingMinutes: minutesLeft });
   }
-
   return { blocks, remainders, availableByDay, unusedByDay };
 }
 
