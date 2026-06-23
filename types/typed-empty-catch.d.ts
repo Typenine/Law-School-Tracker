@@ -1,7 +1,5 @@
-export {};
-
-declare global {
-  interface Promise<T> {
-    catch(onrejected: () => Record<string, never>): Promise<T>;
+declare module '@/lib/apiClient' {
+  export interface OptionalApiFallbackMarker {
+    readonly optionalApiFallback: true;
   }
 }
