@@ -1,5 +1,6 @@
 import { COURSE_WORKSPACES_KEY, type CourseWorkspace, type CourseWorkspaceMap } from './courseWorkspace';
-import { getSettings, patchSettings } from './storage';
+import { compareAndSwapCourseWorkspace } from './courseWorkspaceCas';
+import { getSettings } from './storage';
 
 export type VersionedWorkspace = CourseWorkspace & { _revision?: number; _updatedAt?: string };
 
@@ -22,10 +23,7 @@ function cleanWorkspace(workspace: VersionedWorkspace) {
 }
 
 export async function writeCourseWorkspace(courseId: string, incoming: VersionedWorkspace, expectedRevision: number) {
-  const current = await readCourseWorkspace(courseId);
-  if (expectedRevision !== current.revision) return { conflict: true as const, workspace: current.workspace, revision: current.revision };
-  const revision = current.revision + 1;
+  const revision = expectedRevision + 1;
   const workspace = cleanWorkspace({ ...incoming, _revision: revision, _updatedAt: new Date().toISOString() });
-  await patchSettings({ [COURSE_WORKSPACES_KEY]: { ...current.map, [courseId]: workspace } });
-  return { conflict: false as const, workspace, revision };
+  return compareAndSwapCourseWorkspace(courseId, expectedRevision, workspace);
 }
