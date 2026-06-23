@@ -4,9 +4,17 @@ import { apiFetch } from '@/lib/apiClient';
 import { notifyToast } from '@/lib/toastBus';
 
 type ClientOpts = { silent?: boolean };
+type CreateTaskInput = Omit<NewTaskInput, 'dependsOn'> & { dependsOn?: string | string[] | null };
 
-async function create(input: NewTaskInput, opts?: ClientOpts): Promise<Task> {
-  const data = await apiFetch<{ task: Task }>('/api/tasks', { method: 'POST', body: input });
+function normalizeCreateInput(input: CreateTaskInput): NewTaskInput {
+  return {
+    ...input,
+    dependsOn: typeof input.dependsOn === 'string' ? [input.dependsOn] : input.dependsOn,
+  };
+}
+
+async function create(input: CreateTaskInput, opts?: ClientOpts): Promise<Task> {
+  const data = await apiFetch<{ task: Task }>('/api/tasks', { method: 'POST', body: normalizeCreateInput(input) });
   try { notifyTasksChanged(); if (!opts?.silent) notifyToast({ kind: 'success', message: 'Task created.' }); } catch {}
   return (data as any).task as Task;
 }
