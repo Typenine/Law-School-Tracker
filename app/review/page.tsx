@@ -101,8 +101,7 @@ export default function ReviewPage() {
       .filter((task) => (task.course || '').toLowerCase() === course.title.toLowerCase())
       .filter((task) => taskKind(task) === 'reading' || taskKind(task) === 'assignment' || task.activity === 'review')
       .slice(0, 3)
-      .map((task) => ({ course, source: task, suggestion: task.title.replace(/^read\s*:?
-?/i, '').trim() })));
+      .map((task) => ({ course, source: task, suggestion: task.title.replace(/^read\s*:?/i, '').trim() })));
   }, [activeCourses, completedThisWeek]);
 
   const totalMinutes = useMemo(() => sessions.filter((session) => new Date(session.when) >= weekStart).reduce((sum, session) => sum + (session.minutes || 0), 0), [sessions]);
