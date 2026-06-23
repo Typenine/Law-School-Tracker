@@ -23,27 +23,19 @@ jobs:
       - name: Build application
         shell: bash
         run: npm run build > build.log 2>&1
-      - name: Run hardening audit and route smoke tests
+      - name: Run parser, workflow, route, and mutation audits
         shell: bash
         run: |
           npm run start -- -p 3000 > server.log 2>&1 &
           SERVER_PID=$!
           trap 'kill $SERVER_PID 2>/dev/null || true' EXIT
           for attempt in {1..30}; do
-            if curl --fail --silent http://127.0.0.1:3000/api/hardening-audit > audit.json; then
+            if curl --fail --silent http://127.0.0.1:3000/api/hardening-audit > /dev/null; then
               break
             fi
             sleep 1
           done
-          test -s audit.json
-          cat audit.json
-          node -e "const fs=require('fs'); const result=JSON.parse(fs.readFileSync('audit.json','utf8')); if(!result.passed){ console.error(result.checks.filter(x=>!x.passed)); process.exit(1); }"
-          : > smoke.log
-          for route in / /tasks /courses /courses/test-course /calendar /review /questions /outline-updates /exam /week-plan /wizard /settings /class-capture /work /api/events; do
-            status=$(curl --silent --output /dev/null --write-out '%{http_code}' "http://127.0.0.1:3000$route")
-            echo "$status $route" | tee -a smoke.log
-            test "$status" = "200"
-          done
+          node scripts/ci-runtime-audit.mjs | tee audit.log
       - name: Upload verification logs
         if: always()
         uses: actions/upload-artifact@v4
@@ -52,7 +44,6 @@ jobs:
           path: |
             build.log
             server.log
-            audit.json
-            smoke.log
+            audit.log
           if-no-files-found: warn
           retention-days: 3
