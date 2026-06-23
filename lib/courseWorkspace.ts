@@ -2,7 +2,19 @@ import type { Course, CourseMeetingBlock, Task } from './types';
 
 export const COURSE_WORKSPACES_KEY = 'courseWorkspacesV1';
 
+export interface StoredSyllabusItem {
+  sourceKey: string;
+  kind: 'task' | 'event';
+  title: string;
+  dueDate: string;
+  activity: string;
+  selected: boolean;
+  notes?: string;
+  tags?: string[];
+}
+
 export interface StoredSyllabusAnalysis {
+  id?: string;
   importedAt: string;
   fileName?: string | null;
   pageCount?: number | null;
@@ -26,6 +38,69 @@ export interface StoredSyllabusAnalysis {
     assignmentCount: number;
     sourceText?: string;
   }>;
+  importItems?: StoredSyllabusItem[];
+}
+
+export interface SyllabusChangeSummary {
+  comparedAt: string;
+  previousVersionId?: string;
+  currentVersionId?: string;
+  added: StoredSyllabusItem[];
+  removed: StoredSyllabusItem[];
+  changed: Array<{ before: StoredSyllabusItem; after: StoredSyllabusItem }>;
+  unchanged: number;
+}
+
+export interface ClassCapture {
+  id: string;
+  classDate: string;
+  topic?: string;
+  cases?: string;
+  professorEmphasis?: string;
+  question?: string;
+  outlineFlag: boolean;
+  createdAt: string;
+}
+
+export interface CourseQuestion {
+  id: string;
+  text: string;
+  source: 'reading' | 'class' | 'assignment' | 'exam' | 'other';
+  status: 'open' | 'answered';
+  officeHours: boolean;
+  answer?: string;
+  createdAt: string;
+  answeredAt?: string;
+}
+
+export interface OutlineProposal {
+  id: string;
+  weekStart: string;
+  createdAt: string;
+  title: string;
+  content: string;
+  sourceCaptureIds: string[];
+  sourceQuestionIds: string[];
+  status: 'draft' | 'approved' | 'dismissed';
+  approvedAt?: string;
+}
+
+export interface PracticeResult {
+  id: string;
+  date: string;
+  type: 'essay' | 'multiple-choice' | 'issue-spotter' | 'other';
+  score?: number;
+  notes?: string;
+}
+
+export interface ExamPrepState {
+  weakAreas?: string[];
+  ruleStatements?: string[];
+  caseAnalogies?: string[];
+  flowchartCandidates?: string[];
+  printedOutlineAdditions?: string[];
+  practiceResults?: PracticeResult[];
+  generatedPlanAt?: string;
 }
 
 export interface CourseWorkspace {
@@ -42,6 +117,12 @@ export interface CourseWorkspace {
   lastClassQuestion?: string;
   preparedDates?: string[];
   syllabusAnalysis?: StoredSyllabusAnalysis;
+  syllabusVersions?: StoredSyllabusAnalysis[];
+  latestSyllabusDiff?: SyllabusChangeSummary;
+  classCaptures?: ClassCapture[];
+  questions?: CourseQuestion[];
+  outlineProposals?: OutlineProposal[];
+  examPrep?: ExamPrepState;
 }
 
 export type CourseWorkspaceMap = Record<string, CourseWorkspace>;
@@ -65,12 +146,7 @@ export function courseTermMatches(course: Course, season?: string | null, year?:
 export function courseBlocks(course: Course): CourseMeetingBlock[] {
   if (Array.isArray(course.meetingBlocks) && course.meetingBlocks.length) return course.meetingBlocks;
   if (Array.isArray(course.meetingDays) && course.meetingDays.length && course.meetingStart && course.meetingEnd) {
-    return [{
-      days: course.meetingDays,
-      start: course.meetingStart,
-      end: course.meetingEnd,
-      location: course.room || course.location || null,
-    }];
+    return [{ days: course.meetingDays, start: course.meetingStart, end: course.meetingEnd, location: course.room || course.location || null }];
   }
   return [];
 }
@@ -78,7 +154,6 @@ export function courseBlocks(course: Course): CourseMeetingBlock[] {
 export function nextClassOccurrence(course: Course, from = new Date()): { start: Date; end: Date; location?: string | null } | null {
   const blocks = courseBlocks(course);
   if (!blocks.length) return null;
-
   const startBoundary = course.startDate ? new Date(course.startDate) : null;
   const endBoundary = course.endDate ? new Date(course.endDate) : null;
   const cursor = new Date(from);
@@ -92,12 +167,10 @@ export function nextClassOccurrence(course: Course, from = new Date()): { start:
       const [startHour, startMinute] = String(block.start || '').split(':').map(Number);
       const [endHour, endMinute] = String(block.end || '').split(':').map(Number);
       if (![startHour, startMinute, endHour, endMinute].every(Number.isFinite)) continue;
-
       const start = new Date(day);
       start.setHours(startHour, startMinute, 0, 0);
       const end = new Date(day);
       end.setHours(endHour, endMinute, 0, 0);
-
       if (startBoundary && start < startBoundary) continue;
       if (endBoundary && start > endBoundary) continue;
       if (end < from) continue;
@@ -137,7 +210,7 @@ export function taskKind(task: Task): 'reading' | 'outline' | 'practice' | 'assi
   if (activity === 'reading' || /\b(read|pages?|pp\.|chapter|casebook)\b/.test(title)) return 'reading';
   if (activity === 'outline' || /outline/.test(title)) return 'outline';
   if (activity === 'practice' || /(practice|hypo|essay|multiple choice|quiz)/.test(title)) return 'practice';
-  if (/(memo|brief|paper|draft|submit|assignment|exam)/.test(title)) return 'assignment';
+  if (/(memo|brief|paper|draft|submit|assignment|exam|presentation|project)/.test(title)) return 'assignment';
   return 'other';
 }
 
