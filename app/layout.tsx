@@ -1,10 +1,11 @@
 import './globals.css'
 import type { Metadata } from 'next'
-import Link from 'next/link'
 import ReminderManager from '@/components/ReminderManager'
 import PWARegister from '@/components/PWARegister'
 import CommandPalette from '@/components/CommandPalette'
 import ThemeToggleButton from '@/components/ThemeToggleButton'
+import AppNav from '@/components/AppNav'
+import SetupChecklist from '@/components/SetupChecklist'
 import Providers from '@/app/providers'
 
 export const metadata: Metadata = {
@@ -34,6 +35,7 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
       </head>
       <body>
         <Providers>
+          <a href="#main-content" className="sr-only focus:not-sr-only focus:fixed focus:left-4 focus:top-4 focus:z-50 focus:rounded-lg focus:bg-emerald-500 focus:px-4 focus:py-2 focus:text-slate-950">Skip to content</a>
           <div className="app-container">
             <header className="mb-6 space-y-4">
               <div className="flex items-center justify-between gap-4">
@@ -43,30 +45,10 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
                 </div>
                 <ThemeToggleButton />
               </div>
-              <div className="flex flex-wrap items-center justify-between gap-3 border-b border-slate-700/70 pb-3">
-                <nav className="flex flex-wrap gap-2 text-sm">
-                  <Link href="/" className="nav-link">Today</Link>
-                  <Link href="/tasks" className="nav-link">Tasks</Link>
-                  <Link href="/courses" className="nav-link">Courses</Link>
-                  <Link href="/calendar" className="nav-link">Calendar</Link>
-                  <Link href="/review" className="nav-link">Weekly Review</Link>
-                  <Link href="/exam" className="nav-link">Exam Prep</Link>
-                  <Link href="/semester" className="nav-link">Term Setup</Link>
-                </nav>
-                <details className="relative text-sm">
-                  <summary className="cursor-pointer list-none rounded-lg border border-slate-600 px-3 py-2 text-slate-300 hover:bg-slate-800">More</summary>
-                  <div className="absolute right-0 z-20 mt-2 w-48 rounded-xl border border-slate-700 bg-slate-950 p-2 shadow-xl">
-                    <Link href="/recovery" className="block rounded-lg px-3 py-2 text-rose-300 hover:bg-slate-800">I’m Behind</Link>
-                    <Link href="/wizard" className="block rounded-lg px-3 py-2 text-slate-300 hover:bg-slate-800">Import Syllabus</Link>
-                    <Link href="/settings" className="block rounded-lg px-3 py-2 text-slate-300 hover:bg-slate-800">Settings</Link>
-                    <Link href="/week-plan" className="block rounded-lg px-3 py-2 text-slate-300 hover:bg-slate-800">Week Plan</Link>
-                    <Link href="/log" className="block rounded-lg px-3 py-2 text-slate-300 hover:bg-slate-800">Study Log</Link>
-                    <Link href="/help" className="block rounded-lg px-3 py-2 text-slate-300 hover:bg-slate-800">Help</Link>
-                  </div>
-                </details>
-              </div>
+              <AppNav />
             </header>
-            {children}
+            <SetupChecklist />
+            <div id="main-content">{children}</div>
           </div>
           <ReminderManager />
           <PWARegister />
