@@ -1,5 +1,2 @@
-declare module '@/lib/apiClient' {
-  export interface OptionalApiFallbackMarker {
-    readonly optionalApiFallback: true;
-  }
-}
+// Legacy compatibility file intentionally contains no global or module augmentation.
+export {};
