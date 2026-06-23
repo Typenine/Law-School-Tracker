@@ -1,136 +1,203 @@
-﻿"use client";
-import { useMemo, useState } from "react";
-import { getSessionCourse, buildTasksById } from "@/lib/courseMatching";
-import { useTasks } from "@/lib/useTasks";
-import { useSessions } from "@/lib/useSessions";
-import { useCourses } from "@/lib/useCourses";
+"use client";
 
-type Task = { id: string; title: string; course?: string | null };
-type Session = { id: string; taskId?: string | null; when: string; minutes: number; focus?: number | null; notes?: string | null; activity?: string | null; pagesRead?: number | null };
-type Course = { id: string; title: string; semester?: string | null; year?: number | null; startDate?: string | null; endDate?: string | null };
+import Link from 'next/link';
+import { useEffect, useMemo, useState } from 'react';
+import { apiFetch } from '@/lib/apiClient';
+import { tasksClient } from '@/lib/tasksClient';
+import { useCourses } from '@/lib/useCourses';
+import { useSessions } from '@/lib/useSessions';
+import { useTasks } from '@/lib/useTasks';
+import { useSemester } from '@/lib/useSemester';
+import type { Course, Task } from '@/lib/types';
+import {
+  COURSE_WORKSPACES_KEY,
+  CourseWorkspaceMap,
+  courseTermMatches,
+  courseTasks,
+  safeUrl,
+  taskKind,
+} from '@/lib/courseWorkspace';
 
-function chicagoYmd(d: Date): string {
-  const f = new Intl.DateTimeFormat("en-US", { timeZone: "America/Chicago", year: "numeric", month: "2-digit", day: "2-digit" });
-  const p = f.formatToParts(d);
-  return (p.find(x => x.type === "year")?.value || "") + "-" + (p.find(x => x.type === "month")?.value || "") + "-" + (p.find(x => x.type === "day")?.value || "");
+function startOfWeek() {
+  const now = new Date();
+  const day = now.getDay();
+  const diff = day === 0 ? 6 : day - 1;
+  now.setDate(now.getDate() - diff);
+  now.setHours(0, 0, 0, 0);
+  return now;
 }
 
-function fmtHM(min: number): string {
-  const n = Math.max(0, Math.round(min || 0));
-  const h = Math.floor(n / 60), m = n % 60;
-  if (h > 0 && m > 0) return h + "h " + m + "m";
-  if (h > 0) return h + "h";
-  return m + "m";
+function endOfNextWeek() {
+  const end = startOfWeek();
+  end.setDate(end.getDate() + 13);
+  end.setHours(23, 59, 59, 999);
+  return end;
 }
 
-function focusColor(f: number): string {
-  if (f >= 8) return "text-emerald-400";
-  if (f >= 6) return "text-blue-400";
-  if (f >= 4) return "text-amber-400";
-  return "text-rose-400";
+function formatDue(value: string) {
+  return new Intl.DateTimeFormat('en-US', { weekday: 'short', month: 'short', day: 'numeric' }).format(new Date(value));
+}
+
+function completionDate(task: Task): Date | null {
+  const raw = task.completedAt || (task.status === 'done' ? task.dueDate : null);
+  if (!raw) return null;
+  const date = new Date(raw);
+  return Number.isNaN(date.getTime()) ? null : date;
 }
 
 export default function ReviewPage() {
-  const { tasks, loading: tasksLoading } = useTasks();
+  const { tasks, loading: tasksLoading, refresh } = useTasks();
   const { sessions, loading: sessionsLoading } = useSessions();
   const { courses, loading: coursesLoading } = useCourses();
-  const [period, setPeriod] = useState<string>("7d");
+  const { currentTerm, activeSemester } = useSemester();
+  const [workspaceMap, setWorkspaceMap] = useState<CourseWorkspaceMap>({});
+  const [workingId, setWorkingId] = useState<string | null>(null);
+  const [message, setMessage] = useState('');
   const loading = tasksLoading || sessionsLoading || coursesLoading;
 
-  const semesters = useMemo(() => {
-    const set = new Set<string>();
-    for (const c of courses) if (c.semester && c.year) set.add(c.semester + " " + c.year);
-    return Array.from(set).sort((a, b) => b.localeCompare(a));
-  }, [courses]);
+  useEffect(() => {
+    (async () => {
+      try {
+        const data = await apiFetch<{ settings: Record<string, any> }>(`/api/settings?keys=${COURSE_WORKSPACES_KEY}`);
+        setWorkspaceMap((data.settings?.[COURSE_WORKSPACES_KEY] || {}) as CourseWorkspaceMap);
+      } catch {}
+    })();
+  }, []);
 
-  const tasksById = useMemo(() => buildTasksById(tasks), [tasks]);
+  const activeCourses = useMemo(() => courses.filter((course) => courseTermMatches(course, activeSemester?.season, activeSemester?.year)), [courses, activeSemester]);
+  const activeTasks = useMemo(() => tasks.filter((task) => !currentTerm || task.term === currentTerm), [tasks, currentTerm]);
+  const now = new Date();
+  const weekStart = startOfWeek();
+  const nextWeekEnd = endOfNextWeek();
 
-  const filteredSessions = useMemo(() => {
-    if (period === "all") return sessions;
-    if (period.includes(" ")) {
-      const semCourses = courses.filter(c => (c.semester + " " + c.year) === period);
-      if (semCourses.length > 0) {
-        let minD = "9999-12-31", maxD = "0000-01-01";
-        for (const c of semCourses) { if (c.startDate && c.startDate < minD) minD = c.startDate; if (c.endDate && c.endDate > maxD) maxD = c.endDate; }
-        return sessions.filter(s => { const ymd = chicagoYmd(new Date(s.when)); return ymd >= minD && ymd <= maxD; });
-      }
+  const overdue = useMemo(() => activeTasks.filter((task) => task.status !== 'done' && new Date(task.dueDate) < now).sort((a, b) => new Date(a.dueDate).getTime() - new Date(b.dueDate).getTime()), [activeTasks]);
+  const nextWeek = useMemo(() => activeTasks.filter((task) => task.status !== 'done' && new Date(task.dueDate) >= now && new Date(task.dueDate) <= nextWeekEnd).sort((a, b) => new Date(a.dueDate).getTime() - new Date(b.dueDate).getTime()), [activeTasks]);
+  const completedThisWeek = useMemo(() => activeTasks.filter((task) => {
+    const date = completionDate(task);
+    return date && date >= weekStart;
+  }), [activeTasks]);
+
+  const courseChecks = useMemo(() => activeCourses.map((course) => {
+    const workspace = workspaceMap[course.id] || {};
+    const matching = courseTasks(activeTasks, course.title, currentTerm);
+    const open = matching.filter((task) => task.status !== 'done');
+    const outlineOpen = open.filter((task) => taskKind(task) === 'outline');
+    const completed = completedThisWeek.filter((task) => (task.course || '').toLowerCase() === course.title.toLowerCase());
+    const lastCapture = workspace.lastClassCaptureAt ? new Date(workspace.lastClassCaptureAt) : null;
+    const captureCurrent = Boolean(lastCapture && lastCapture >= weekStart);
+    const linksReady = Boolean(safeUrl(workspace.notesUrl) && safeUrl(workspace.outlineUrl));
+    const status = overdue.some((task) => (task.course || '').toLowerCase() === course.title.toLowerCase())
+      ? 'Behind'
+      : !captureCurrent
+        ? 'Class capture missing'
+        : !outlineOpen.length && completed.length
+          ? 'Outline update needed'
+          : 'On track';
+    return { course, workspace, open, outlineOpen, completed, captureCurrent, linksReady, status };
+  }), [activeCourses, workspaceMap, activeTasks, currentTerm, completedThisWeek, overdue]);
+
+  const outlineSuggestions = useMemo(() => {
+    return activeCourses.flatMap((course) => completedThisWeek
+      .filter((task) => (task.course || '').toLowerCase() === course.title.toLowerCase())
+      .filter((task) => taskKind(task) === 'reading' || taskKind(task) === 'assignment' || task.activity === 'review')
+      .slice(0, 3)
+      .map((task) => ({ course, source: task, suggestion: task.title.replace(/^read\s*:?
+?/i, '').trim() })));
+  }, [activeCourses, completedThisWeek]);
+
+  const totalMinutes = useMemo(() => sessions.filter((session) => new Date(session.when) >= weekStart).reduce((sum, session) => sum + (session.minutes || 0), 0), [sessions]);
+  const pages = useMemo(() => sessions.filter((session) => new Date(session.when) >= weekStart).reduce((sum, session) => sum + (session.pagesRead || 0), 0), [sessions]);
+
+  async function addOutlineTask(course: Course, topic: string) {
+    setWorkingId(course.id + topic);
+    try {
+      const due = new Date();
+      due.setDate(due.getDate() + 2);
+      due.setHours(20, 0, 0, 0);
+      await tasksClient.create({
+        title: `Add to ${course.title} outline: ${topic}`,
+        course: course.title,
+        dueDate: due.toISOString(),
+        status: 'todo',
+        term: currentTerm || null,
+        activity: 'outline',
+      }, { silent: true });
+      setMessage('Outline follow-up added.');
+      await refresh();
+    } finally {
+      setWorkingId(null);
     }
-    const days = period === "7d" ? 7 : period === "14d" ? 14 : period === "30d" ? 30 : period === "90d" ? 90 : 365;
-    const cutoff = new Date(); cutoff.setDate(cutoff.getDate() - days);
-    return sessions.filter(s => chicagoYmd(new Date(s.when)) >= chicagoYmd(cutoff));
-  }, [sessions, period, courses]);
+  }
 
-  const summaryStats = useMemo(() => {
-    let totalMinutes = 0, totalSessions = 0, totalPages = 0, focusSum = 0, focusCount = 0;
-    for (const s of filteredSessions) {
-      totalMinutes += s.minutes || 0; totalSessions++; totalPages += s.pagesRead || 0;
-      if (typeof s.focus === "number" && s.focus > 0) { focusSum += s.focus; focusCount++; }
+  async function moveToNextWeek(task: Task) {
+    setWorkingId(task.id);
+    try {
+      const due = new Date(task.dueDate);
+      due.setDate(due.getDate() + 7);
+      await tasksClient.update(task.id, { dueDate: due.toISOString() }, { silent: true });
+      await refresh();
+    } finally {
+      setWorkingId(null);
     }
-    return { totalMinutes, totalSessions, totalPages, avgFocus: focusCount > 0 ? focusSum / focusCount : 0 };
-  }, [filteredSessions]);
+  }
 
-  const byCourse = useMemo(() => {
-    const map = new Map<string, { minutes: number; sessions: number; pages: number; focusSum: number; focusCount: number }>();
-    for (const s of filteredSessions) {
-      const c = getSessionCourse(s, tasksById);
-      const e = map.get(c) || { minutes: 0, sessions: 0, pages: 0, focusSum: 0, focusCount: 0 };
-      e.minutes += s.minutes || 0; e.sessions++; e.pages += s.pagesRead || 0;
-      if (typeof s.focus === "number" && s.focus > 0) { e.focusSum += s.focus; e.focusCount++; }
-      map.set(c, e);
-    }
-    return Array.from(map.entries()).map(([course, v]) => ({
-      course, minutes: v.minutes, sessions: v.sessions, pages: v.pages,
-      avgFocus: v.focusCount > 0 ? v.focusSum / v.focusCount : 0,
-      minutesPerPage: v.pages > 0 ? v.minutes / v.pages : 0,
-    })).sort((a, b) => b.minutes - a.minutes);
-  }, [filteredSessions, tasksById]);
-
-  if (loading) return <main className="p-6"><div className="text-slate-400">Loading...</div></main>;
+  if (loading) return <main className="rounded-xl border border-slate-700 p-6 text-slate-400">Preparing weekly review…</main>;
 
   return (
     <main className="space-y-6">
-      <div className="flex items-center justify-between flex-wrap gap-2">
-        <h1 className="text-2xl font-bold">Review</h1>
-        <div className="flex flex-wrap gap-2 items-center">
-          {["7d", "14d", "30d", "90d", "all"].map(p => (
-            <button key={p} onClick={() => setPeriod(p)} className={"px-3 py-1.5 rounded-lg text-sm font-medium transition " + (period === p ? "bg-blue-600 text-white" : "bg-[#1b2344] text-slate-300 hover:bg-[#252d4a]")}>{p === "all" ? "All" : p}</button>
-          ))}
-          {semesters.length > 0 && (
-            <select value={period.includes(" ") ? period : ""} onChange={e => { if (e.target.value) setPeriod(e.target.value); }} className="px-3 py-1.5 rounded-lg text-sm bg-[#1b2344] text-slate-300 border-0 cursor-pointer">
-              <option value="">Semester</option>
-              {semesters.map(s => <option key={s} value={s}>{s}</option>)}
-            </select>
-          )}
+      <section className="rounded-2xl border border-sky-500/30 bg-gradient-to-br from-sky-950/30 to-slate-950 p-6">
+        <p className="text-sm font-medium text-sky-300">Weekly review</p>
+        <h2 className="mt-1 text-2xl font-semibold text-slate-100">Close the week and prepare the next one</h2>
+        <p className="mt-2 max-w-3xl text-sm text-slate-400">This review focuses on unfinished work, missing class follow-up, outline maintenance, and the deadlines coming next.</p>
+      </section>
+
+      {message ? <div className="rounded-xl border border-emerald-500/30 bg-emerald-500/10 p-4 text-sm text-emerald-200">{message}</div> : null}
+
+      <section className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
+        <div className="rounded-xl border border-slate-700 bg-slate-900/45 p-4"><p className="text-xs uppercase text-slate-500">Unfinished</p><p className="mt-2 text-2xl font-semibold text-rose-300">{overdue.length}</p><p className="text-xs text-slate-500">overdue tasks</p></div>
+        <div className="rounded-xl border border-slate-700 bg-slate-900/45 p-4"><p className="text-xs uppercase text-slate-500">Coming next</p><p className="mt-2 text-2xl font-semibold text-amber-300">{nextWeek.length}</p><p className="text-xs text-slate-500">tasks through next Sunday</p></div>
+        <div className="rounded-xl border border-slate-700 bg-slate-900/45 p-4"><p className="text-xs uppercase text-slate-500">Course follow-up</p><p className="mt-2 text-2xl font-semibold text-sky-300">{courseChecks.filter((item) => item.status !== 'On track').length}</p><p className="text-xs text-slate-500">courses need attention</p></div>
+        <div className="rounded-xl border border-slate-700 bg-slate-900/45 p-4"><p className="text-xs uppercase text-slate-500">Completed</p><p className="mt-2 text-2xl font-semibold text-emerald-300">{completedThisWeek.length}</p><p className="text-xs text-slate-500">tasks this week</p></div>
+      </section>
+
+      <div className="grid gap-6 xl:grid-cols-2">
+        <section className="space-y-3">
+          <div className="flex items-end justify-between"><div><h2 className="font-semibold text-slate-100">Unfinished work</h2><p className="text-sm text-slate-400">Decide now whether to complete, move, or use Recovery Mode.</p></div><Link href="/recovery" className="text-sm text-rose-300">Open Recovery Mode</Link></div>
+          {overdue.slice(0, 8).map((task) => <article key={task.id} className="rounded-xl border border-slate-700 bg-slate-900/45 p-4"><div className="flex items-start justify-between gap-3"><div><p className="text-sm font-medium text-slate-200">{task.title}</p><p className="mt-1 text-xs text-slate-500">{task.course || 'General'} · due {formatDue(task.dueDate)}</p></div><button disabled={workingId === task.id} onClick={() => moveToNextWeek(task)} className="rounded-lg border border-slate-600 px-2.5 py-1.5 text-xs text-slate-200 hover:bg-slate-800 disabled:opacity-50">Move 1 week</button></div></article>)}
+          {!overdue.length ? <div className="rounded-xl border border-dashed border-slate-700 p-5 text-sm text-slate-500">No overdue work in the active semester.</div> : null}
+        </section>
+
+        <section className="space-y-3">
+          <div><h2 className="font-semibold text-slate-100">Next week</h2><p className="text-sm text-slate-400">The deadlines that should shape the weekend.</p></div>
+          {nextWeek.slice(0, 10).map((task) => <article key={task.id} className="rounded-xl border border-slate-700 bg-slate-900/45 p-4"><div className="flex items-start justify-between gap-3"><div><p className="text-sm font-medium text-slate-200">{task.title}</p><p className="mt-1 text-xs text-slate-500">{task.course || 'General'}</p></div><span className="shrink-0 text-xs text-slate-400">{formatDue(task.dueDate)}</span></div></article>)}
+          {!nextWeek.length ? <div className="rounded-xl border border-dashed border-slate-700 p-5 text-sm text-slate-500">No tasks are currently due during the next two weeks.</div> : null}
+        </section>
+      </div>
+
+      <section className="rounded-xl border border-slate-700/70 bg-slate-900/45 p-5">
+        <div><h2 className="font-semibold text-slate-100">Course maintenance</h2><p className="mt-1 text-sm text-slate-400">A course is not considered current until its class follow-up and outline workflow are maintained.</p></div>
+        <div className="mt-4 grid gap-3 lg:grid-cols-2">
+          {courseChecks.map(({ course, workspace, open, status, captureCurrent, linksReady }) => {
+            const tone = status === 'Behind' ? 'text-rose-300 bg-rose-500/10' : status === 'On track' ? 'text-emerald-300 bg-emerald-500/10' : 'text-amber-300 bg-amber-500/10';
+            return <article key={course.id} className="rounded-xl border border-slate-700 bg-slate-950/40 p-4"><div className="flex items-start justify-between gap-3"><div><h3 className="font-medium text-slate-100">{course.title}</h3><p className="mt-1 text-xs text-slate-500">{open.length} open task{open.length === 1 ? '' : 's'} · outline {workspace.outlineProgress || 0}%</p></div><span className={`rounded-full px-2 py-1 text-xs font-medium ${tone}`}>{status}</span></div><div className="mt-3 grid grid-cols-2 gap-2 text-xs"><div className={`rounded-lg p-2 ${captureCurrent ? 'bg-emerald-500/10 text-emerald-300' : 'bg-amber-500/10 text-amber-300'}`}>{captureCurrent ? 'Class captured' : 'Capture missing'}</div><div className={`rounded-lg p-2 ${linksReady ? 'bg-emerald-500/10 text-emerald-300' : 'bg-slate-700/40 text-slate-400'}`}>{linksReady ? 'Drive linked' : 'Links incomplete'}</div></div><div className="mt-3 flex gap-2"><Link href={`/courses/${course.id}`} className="rounded-lg border border-slate-600 px-3 py-2 text-xs text-slate-200 hover:bg-slate-800">Open course</Link>{safeUrl(workspace.outlineUrl) ? <a href={safeUrl(workspace.outlineUrl)} target="_blank" rel="noreferrer" className="rounded-lg border border-slate-600 px-3 py-2 text-xs text-slate-200 hover:bg-slate-800">Open outline</a> : null}</div></article>;
+          })}
+          {!courseChecks.length ? <div className="lg:col-span-2 rounded-xl border border-dashed border-slate-700 p-5 text-sm text-slate-500">Add active-semester courses to receive course maintenance checks.</div> : null}
         </div>
-      </div>
-      <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
-        <div className="card p-4"><div className="text-slate-400 text-xs uppercase mb-1">Total Time</div><div className="text-2xl font-bold">{fmtHM(summaryStats.totalMinutes)}</div></div>
-        <div className="card p-4"><div className="text-slate-400 text-xs uppercase mb-1">Sessions</div><div className="text-2xl font-bold">{summaryStats.totalSessions}</div></div>
-        <div className="card p-4"><div className="text-slate-400 text-xs uppercase mb-1">Pages Read</div><div className="text-2xl font-bold">{summaryStats.totalPages}</div></div>
-        <div className="card p-4"><div className="text-slate-400 text-xs uppercase mb-1">Avg Focus</div><div className={"text-2xl font-bold " + (summaryStats.avgFocus > 0 ? focusColor(summaryStats.avgFocus) : "")}>{summaryStats.avgFocus > 0 ? summaryStats.avgFocus.toFixed(1) + "/10" : "-"}</div></div>
-      </div>
-      <div className="card p-4">
-        <h2 className="text-lg font-semibold mb-3">By Course</h2>
-        {byCourse.length === 0 ? <div className="text-slate-400 text-sm">No sessions</div> : (
-          <div className="space-y-3">
-            {byCourse.slice(0, 8).map(c => (
-              <div key={c.course} className="space-y-1">
-                <div className="flex justify-between"><span className="font-medium truncate max-w-[60%]">{c.course}</span><span className="text-slate-300">{fmtHM(c.minutes)}</span></div>
-                <div className="flex gap-4 text-xs text-slate-400"><span>{c.sessions} sessions</span>{c.pages > 0 && <span>{c.pages} pages</span>}{c.avgFocus > 0 && <span className={focusColor(c.avgFocus)}>Focus: {c.avgFocus.toFixed(1)}</span>}</div>
-                <div className="h-1.5 bg-slate-700 rounded-full overflow-hidden"><div className="h-full bg-blue-500 rounded-full" style={{ width: Math.min(100, (c.minutes / (summaryStats.totalMinutes || 1)) * 100) + "%" }} /></div>
-              </div>
-            ))}
-          </div>
-        )}
-      </div>
-      {byCourse.some(c => c.pages > 0) && (
-        <div className="card p-4">
-          <h2 className="text-lg font-semibold mb-3">Reading Pace</h2>
-          <table className="w-full text-sm"><thead className="text-left text-slate-400"><tr><th className="py-2 pr-4">Course</th><th className="py-2 pr-4">Time</th><th className="py-2 pr-4">Pages</th><th className="py-2 pr-4">Min/Page</th></tr></thead>
-            <tbody>{byCourse.filter(c => c.pages > 0).map(c => (<tr key={c.course} className="border-t border-[#1b2344]"><td className="py-2 pr-4">{c.course}</td><td className="py-2 pr-4">{fmtHM(c.minutes)}</td><td className="py-2 pr-4">{c.pages}</td><td className="py-2 pr-4 font-medium">{c.minutesPerPage.toFixed(1)}</td></tr>))}</tbody>
-          </table>
+      </section>
+
+      <section className="rounded-xl border border-slate-700/70 bg-slate-900/45 p-5">
+        <div><h2 className="font-semibold text-slate-100">Proposed outline follow-ups</h2><p className="mt-1 text-sm text-slate-400">These suggestions come from work completed this week. They create reviewable tasks rather than silently editing your outline.</p></div>
+        <div className="mt-4 space-y-2">
+          {outlineSuggestions.map(({ course, source, suggestion }) => <div key={`${course.id}:${source.id}`} className="flex flex-col gap-3 rounded-lg bg-slate-950/45 p-3 sm:flex-row sm:items-center sm:justify-between"><div><p className="text-sm font-medium text-slate-200">{suggestion}</p><p className="mt-1 text-xs text-slate-500">{course.title}</p></div><button disabled={workingId === course.id + suggestion} onClick={() => addOutlineTask(course, suggestion)} className="rounded-lg border border-slate-600 px-3 py-2 text-xs text-slate-200 hover:bg-slate-800 disabled:opacity-50">Add outline task</button></div>)}
+          {!outlineSuggestions.length ? <p className="py-4 text-sm text-slate-500">Complete readings or assignments during the week to generate outline follow-up suggestions.</p> : null}
         </div>
-      )}
+      </section>
+
+      <details className="rounded-xl border border-slate-700/70 bg-slate-900/45 p-5">
+        <summary className="cursor-pointer font-semibold text-slate-200">Study analytics</summary>
+        <p className="mt-2 text-sm text-slate-400">Kept as secondary context, not the main purpose of the review.</p>
+        <div className="mt-4 grid grid-cols-2 gap-3 sm:grid-cols-4"><div className="rounded-lg bg-slate-950/45 p-3"><p className="text-xl font-semibold text-slate-100">{Math.round(totalMinutes / 60 * 10) / 10}h</p><p className="text-xs text-slate-500">Logged this week</p></div><div className="rounded-lg bg-slate-950/45 p-3"><p className="text-xl font-semibold text-slate-100">{pages}</p><p className="text-xs text-slate-500">Pages logged</p></div><div className="rounded-lg bg-slate-950/45 p-3"><p className="text-xl font-semibold text-slate-100">{sessions.filter((session) => new Date(session.when) >= weekStart).length}</p><p className="text-xs text-slate-500">Sessions</p></div><div className="rounded-lg bg-slate-950/45 p-3"><p className="text-xl font-semibold text-slate-100">{completedThisWeek.length}</p><p className="text-xs text-slate-500">Tasks completed</p></div></div>
+      </details>
     </main>
   );
 }
