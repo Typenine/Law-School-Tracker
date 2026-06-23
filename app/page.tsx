@@ -2,6 +2,7 @@
 
 import Link from "next/link";
 import { FormEvent, useMemo, useState } from "react";
+import ClassWorkflow from "@/components/ClassWorkflow";
 import { useCourses } from "@/lib/useCourses";
 import { useSemester } from "@/lib/useSemester";
 import { useTasks } from "@/lib/useTasks";
@@ -189,7 +190,12 @@ export default function TodayPage() {
               {activeSemester ? <Link href="/semester" className="rounded-full bg-slate-800 px-2.5 py-1 text-xs text-slate-300 hover:text-white">{activeSemester.name}</Link> : null}
             </div>
             <h2 className="mt-1 text-2xl font-semibold text-slate-100">What needs your attention today</h2>
-            <p className="mt-2 max-w-2xl text-sm text-slate-400">The list is ranked by urgency. Complete the work, move it once, or open the full task list when you need more control.</p>
+            <p className="mt-2 max-w-2xl text-sm text-slate-400">Prepare for class, open the right document, or start the highest-value task without rebuilding a schedule.</p>
+            <div className="mt-4 flex flex-wrap gap-2">
+              <Link href="/recovery" className="rounded-lg border border-rose-500/50 px-3 py-2 text-sm font-medium text-rose-300 hover:bg-rose-500/10">I’m behind</Link>
+              <Link href="/wizard" className="rounded-lg border border-slate-600 px-3 py-2 text-sm text-slate-200 hover:bg-slate-800">Import syllabus</Link>
+              <Link href="/review" className="rounded-lg border border-slate-600 px-3 py-2 text-sm text-slate-200 hover:bg-slate-800">Weekly review</Link>
+            </div>
           </div>
           <div className="grid grid-cols-3 gap-2 text-center">
             <div className="rounded-xl bg-slate-800/70 px-4 py-3"><div className="text-xl font-semibold text-rose-300">{overdueCount}</div><div className="text-xs text-slate-400">Overdue</div></div>
@@ -206,6 +212,8 @@ export default function TodayPage() {
           <Link href="/semester" className="mt-3 inline-flex rounded-lg bg-amber-300 px-3 py-2 text-sm font-semibold text-slate-950">Open Term Setup</Link>
         </section>
       ) : null}
+
+      <ClassWorkflow courses={activeCourses} tasks={tasks} currentTerm={currentTerm} activeSemester={activeSemester} />
 
       <form onSubmit={addTask} className="rounded-xl border border-slate-700/70 bg-slate-900/45 p-4">
         <div className="mb-3 flex items-center justify-between">
@@ -241,8 +249,8 @@ export default function TodayPage() {
           {!loading && !error && recommended.length === 0 ? (
             <div className="rounded-xl border border-dashed border-slate-600 p-8 text-center">
               <p className="font-medium text-slate-200">Nothing currently needs attention.</p>
-              <p className="mt-1 text-sm text-slate-400">Add your Fall 2026 courses, then add or import the first readings and assignments.</p>
-              <Link href="/courses" className="mt-3 inline-flex rounded-lg border border-slate-600 px-3 py-2 text-sm text-slate-200 hover:bg-slate-800">Set up courses</Link>
+              <p className="mt-1 text-sm text-slate-400">Add your Fall 2026 courses, then import the first readings and assignments.</p>
+              <div className="mt-3 flex justify-center gap-2"><Link href="/courses" className="rounded-lg border border-slate-600 px-3 py-2 text-sm text-slate-200 hover:bg-slate-800">Set up courses</Link><Link href="/wizard" className="rounded-lg bg-emerald-500 px-3 py-2 text-sm font-semibold text-slate-950">Import syllabus</Link></div>
             </div>
           ) : null}
           {recommended.map((task) => <TaskRow key={task.id} task={task} onRefresh={refresh} />)}
