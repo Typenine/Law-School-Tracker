@@ -1,5 +1,6 @@
 import { NextRequest } from 'next/server';
 import { deleteTask, ensureSchema, updateTask } from '@/lib/storage';
+import { lifecycleFromTags } from '@/lib/taskMetadata';
 import { UpdateTaskInput } from '@/lib/types';
 import { z } from 'zod';
 
@@ -13,8 +14,8 @@ export async function PATCH(req: NextRequest, { params }: { params: { id: string
     course: z.string().trim().min(1).nullable().optional(),
     dueDate: z.string().optional(),
     status: z.enum(['todo', 'done']).optional(),
-    startTime: z.string().trim().nullable().optional().or(z.literal('')).transform(v => v === '' ? null : v),
-    endTime: z.string().trim().nullable().optional().or(z.literal('')).transform(v => v === '' ? null : v),
+    startTime: z.string().trim().nullable().optional().or(z.literal('')).transform(value => value === '' ? null : value),
+    endTime: z.string().trim().nullable().optional().or(z.literal('')).transform(value => value === '' ? null : value),
     estimatedMinutes: z.number().int().min(0).nullable().optional(),
     actualMinutes: z.number().int().min(0).nullable().optional(),
     priority: z.number().int().min(1).max(5).nullable().optional(),
@@ -31,20 +32,22 @@ export async function PATCH(req: NextRequest, { params }: { params: { id: string
   const parsed = schema.safeParse(await req.json());
   if (!parsed.success) return new Response('Invalid patch body', { status: 400 });
   const body = parsed.data as UpdateTaskInput;
-  
-  // Auto-set completedAt when marking as done
-  if (body.status === 'done' && !body.completedAt) {
+  const lifecycle = lifecycleFromTags(body.tags);
+
+  if (lifecycle === 'archived' || lifecycle === 'canceled') {
+    body.completedAt = null;
+  } else if (body.status === 'done' && body.completedAt === undefined) {
     body.completedAt = new Date().toISOString();
   }
-  
-  const t = await updateTask(params.id, body);
-  if (!t) return new Response('Not found', { status: 404 });
-  return Response.json({ task: t });
+
+  const task = await updateTask(params.id, body);
+  if (!task) return new Response('Not found', { status: 404 });
+  return Response.json({ task });
 }
 
 export async function DELETE(_req: NextRequest, { params }: { params: { id: string } }) {
   await ensureSchema();
-  const ok = await deleteTask(params.id);
-  if (!ok) return new Response('Not found', { status: 404 });
+  const removed = await deleteTask(params.id);
+  if (!removed) return new Response('Not found', { status: 404 });
   return new Response(null, { status: 204 });
 }
