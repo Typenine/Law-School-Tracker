@@ -6,6 +6,7 @@ export interface PersistedWorkSession {
   sessionStartedAt: string;
   notes: string;
   pages: string;
+  updatedAt: string;
 }
 
 const PREFIX = 'activeWorkSessionV1:';
@@ -34,6 +35,7 @@ export function loadWorkSession(taskId: string): PersistedWorkSession | null {
       sessionStartedAt: parsed.sessionStartedAt || new Date().toISOString(),
       notes: parsed.notes || '',
       pages: parsed.pages || '',
+      updatedAt: parsed.updatedAt || parsed.sessionStartedAt || new Date().toISOString(),
     };
   } catch {
     return null;
@@ -51,13 +53,21 @@ export function clearWorkSession(taskId: string) {
 }
 
 export function newWorkSession(taskId: string): PersistedWorkSession {
+  const now = new Date().toISOString();
   return {
     taskId,
     running: false,
     accumulatedSeconds: 0,
     startedAt: null,
-    sessionStartedAt: new Date().toISOString(),
+    sessionStartedAt: now,
     notes: '',
     pages: '',
+    updatedAt: now,
   };
+}
+
+export function newestWorkSession(local: PersistedWorkSession | null, remote: PersistedWorkSession | null) {
+  if (!local) return remote;
+  if (!remote) return local;
+  return local.updatedAt >= remote.updatedAt ? local : remote;
 }
