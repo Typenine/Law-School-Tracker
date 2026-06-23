@@ -97,7 +97,7 @@ export async function GET() {
     { name: 'Compressed exam plan stays between now and exam', passed: examPlan.every(item => new Date(item.dueDate) > now && new Date(item.dueDate) <= new Date(`${examDate}T20:00:00.000Z`)) },
     { name: 'Weekly plan subtracts fixed commitments', passed: weeklyPlan.availableByDay['2026-09-21'] === 30 },
     { name: 'Weekly plan retains unplanned remainder for partial scheduling', passed: weeklyPlan.remainders[0]?.plannedMinutes === 30 && weeklyPlan.remainders[0]?.remainingMinutes === 150 },
-    { name: 'Timestamp timer restores accumulated and running time', passed: elapsedSeconds({ taskId: 'timer', running: true, accumulatedSeconds: 30, startedAt: 1_000, sessionStartedAt: now.toISOString(), notes: '', pages: '' }, 66_000) === 95 },
+    { name: 'Timestamp timer restores accumulated and running time', passed: elapsedSeconds({ taskId: 'timer', running: true, accumulatedSeconds: 30, startedAt: 1_000, sessionStartedAt: now.toISOString(), notes: '', pages: '', updatedAt: now.toISOString() }, 66_000) === 95 },
     { name: 'Outline draft includes only current-week open questions', passed: Boolean(outline) && outline?.sourceQuestionIds.length === 1 && outline.sourceQuestionIds[0] === 'question-new' },
   ];
 
