@@ -1,13 +1,10 @@
 "use client";
 
 import { useEffect } from 'react';
-import { useSearchParams } from 'next/navigation';
 
 export default function SyllabusCoursePreselect() {
-  const searchParams = useSearchParams();
-  const requestedCourseId = searchParams.get('course');
-
   useEffect(() => {
+    const requestedCourseId = new URLSearchParams(window.location.search).get('course');
     if (!requestedCourseId) return;
     let attempts = 0;
     const timer = window.setInterval(() => {
@@ -24,7 +21,7 @@ export default function SyllabusCoursePreselect() {
       }
     }, 50);
     return () => window.clearInterval(timer);
-  }, [requestedCourseId]);
+  }, []);
 
   return null;
 }
