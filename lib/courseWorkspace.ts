@@ -2,6 +2,32 @@ import type { Course, CourseMeetingBlock, Task } from './types';
 
 export const COURSE_WORKSPACES_KEY = 'courseWorkspacesV1';
 
+export interface StoredSyllabusAnalysis {
+  importedAt: string;
+  fileName?: string | null;
+  pageCount?: number | null;
+  diagnostics?: Record<string, number | boolean | null>;
+  course?: Record<string, unknown> | null;
+  sections?: {
+    required_materials?: string[];
+    grading_components?: string[];
+    office_hours?: string[];
+    major_assessments?: string[];
+    policies?: string[];
+    holidays_and_breaks?: string[];
+  };
+  unassignedImportantLines?: Array<{ text: string; source_ref: string; reason: string }>;
+  lowConfidence?: Array<{ kind: string; ref?: string; confidence: number; reason?: string }>;
+  sessionSummary?: Array<{
+    date: string;
+    topic?: string | null;
+    canceled?: boolean;
+    readingCount: number;
+    assignmentCount: number;
+    sourceText?: string;
+  }>;
+}
+
 export interface CourseWorkspace {
   courseFolderUrl?: string;
   syllabusUrl?: string;
@@ -15,6 +41,7 @@ export interface CourseWorkspace {
   lastClassTopic?: string;
   lastClassQuestion?: string;
   preparedDates?: string[];
+  syllabusAnalysis?: StoredSyllabusAnalysis;
 }
 
 export type CourseWorkspaceMap = Record<string, CourseWorkspace>;
