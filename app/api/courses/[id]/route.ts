@@ -1,5 +1,6 @@
 import { NextRequest } from 'next/server';
-import { ensureSchema, updateCourse, deleteCourse } from '@/lib/storage';
+import { ensureSchema, updateCourse, deleteCourse, listCourses } from '@/lib/storage';
+import { cascadeCourseRename } from '@/lib/taskCourseMigration';
 import { UpdateCourseInput } from '@/lib/types';
 import { z } from 'zod';
 
@@ -30,10 +31,12 @@ export async function PATCH(req: NextRequest, { params }: { params: { id: string
   });
   const parsed = schema.safeParse(await req.json());
   if (!parsed.success) return new Response('Invalid course patch', { status: 400 });
-  const body = parsed.data as UpdateCourseInput;
-  const updated = await updateCourse(params.id, body);
+  const before = (await listCourses()).find(course => course.id === params.id);
+  if (!before) return new Response('Not found', { status: 404 });
+  const updated = await updateCourse(params.id, parsed.data as UpdateCourseInput);
   if (!updated) return new Response('Not found', { status: 404 });
-  const res = Response.json({ course: updated });
+  const renamedTasks = parsed.data.title && parsed.data.title !== before.title ? await cascadeCourseRename(updated, before.title) : 0;
+  const res = Response.json({ course: updated, renamedTasks });
   res.headers.set('Cache-Control', 'no-store, no-cache, must-revalidate, max-age=0');
   return res;
 }

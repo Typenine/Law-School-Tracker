@@ -1,533 +1,111 @@
 "use client";
-import { useEffect, useMemo, useState, useCallback } from "react";
-import { useTasks } from '@/lib/useTasks';
+
+import Link from 'next/link';
+import { useMemo, useState } from 'react';
+import { apiFetch } from '@/lib/apiClient';
 import { useCourses } from '@/lib/useCourses';
 import { useSessions } from '@/lib/useSessions';
-import { notifySessionsChanged } from '@/lib/sessionsBus';
-import { apiFetch } from '@/lib/apiClient';
-import { notifyToast } from '@/lib/toastBus';
+import { useTasks } from '@/lib/useTasks';
 
-// Simple helpers
-function chicagoYmd(d: Date): string {
-  const f = new Intl.DateTimeFormat("en-US", { timeZone: "America/Chicago", year: "numeric", month: "2-digit", day: "2-digit" });
-  const parts = f.formatToParts(d);
-  const y = parts.find(p=>p.type==='year')?.value || '0000';
-  const m = parts.find(p=>p.type==='month')?.value || '01';
-  const da = parts.find(p=>p.type==='day')?.value || '01';
-  return `${y}-${m}-${da}`;
-}
-function fmtHM(min: number): string {
-  const n = Math.max(0, Math.round(Number(min) || 0));
-  const h = Math.floor(n / 60);
-  const m = n % 60;
-  if (h > 0 && m > 0) return `${h}h ${m}m`;
-  if (h > 0) return `${h}h`;
-  return `${m}m`;
-}
-function extractCourseFromNotes(notes?: string | null): string {
-  if (!notes) return '';
-  const m = notes.match(/^\s*\[([^\]]+)\]/);
-  return m ? m[1].trim() : '';
-}
-function normCourseKey(name?: string | null): string {
-  let x = (name || '').toString().toLowerCase().trim();
-  if (!x) return '';
-  x = x.replace(/&/g, 'and');
-  x = x.replace(/[^a-z0-9]+/g, ' ').trim().replace(/\s+/g, ' ');
-  if (/\blaw$/.test(x)) x = x.replace(/\s*law$/, '');
-  x = x.replace(/\badvanced\b/g, 'advance');
-  return x;
-}
-function activityLabel(a?: string | null): string {
-  const x = (a || '').toLowerCase();
-  if (x === 'reading') return 'Reading';
-  if (x === 'review') return 'Review';
-  if (x === 'outline') return 'Outline';
-  if (x === 'practice') return 'Practice';
-  if (x === 'internship') return 'Other';
-  if (!x) return 'Other';
-  return x[0].toUpperCase() + x.slice(1);
+function formatMinutes(minutes: number) {
+  const total = Math.max(0, Math.round(minutes || 0));
+  if (total < 60) return `${total} min`;
+  const hours = Math.floor(total / 60);
+  const remainder = total % 60;
+  return remainder ? `${hours}h ${remainder}m` : `${hours}h`;
 }
 
-// Focus color helper
-function focusColor(f: number | null): string {
-  if (f == null) return 'bg-slate-600';
-  if (f >= 8) return 'bg-emerald-500';
-  if (f >= 6) return 'bg-green-500';
-  if (f >= 4) return 'bg-yellow-500';
-  if (f >= 2) return 'bg-orange-500';
-  return 'bg-red-500';
+function dateKey(value: string) {
+  const date = new Date(value);
+  return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')}`;
 }
 
-// Course color helpers
-function hueFromString(s: string): number { let h = 0; for (let i=0;i<s.length;i++) { h = (h * 31 + s.charCodeAt(i)) >>> 0; } return h % 360; }
-function fallbackCourseHsl(name?: string | null): string { const key=(name||'').toString().trim().toLowerCase(); if (!key) return 'hsl(215 16% 47%)'; const h=hueFromString(key); return `hsl(${h} 70% 55%)`; }
+function formatDate(value: string) {
+  return new Intl.DateTimeFormat('en-US', { weekday: 'short', month: 'short', day: 'numeric', year: 'numeric' }).format(new Date(value));
+}
 
-export default function LogPage() {
-  const { tasks, loading: tasksLoading } = useTasks();
-  const { courses, loading: coursesLoading } = useCourses();
-  const { sessions, refresh: refreshSessions, loading: sessionsLoading } = useSessions();
-  const loading = tasksLoading || coursesLoading || sessionsLoading;
-  const [editId, setEditId] = useState<string | null>(null);
-  const [editMinutes, setEditMinutes] = useState<string>('');
-  const [editFocus, setEditFocus] = useState<string>('');
-  const [editNotes, setEditNotes] = useState<string>('');
-  const [editActivity, setEditActivity] = useState<string>('');
-  const [editPagesRead, setEditPagesRead] = useState<string>('');
-  
-  // Undo state
-  const [undoStack, setUndoStack] = useState<Array<{ type: 'delete'; session: any }>>([]);
-  const [undoMessage, setUndoMessage] = useState<string | null>(null);
+export default function StudyHistoryPage() {
+  const { sessions, loading, refresh } = useSessions();
+  const { tasks } = useTasks();
+  const { courses } = useCourses();
+  const [courseFilter, setCourseFilter] = useState('');
+  const [days, setDays] = useState(30);
+  const [deleting, setDeleting] = useState<string | null>(null);
 
-  // Filters
-  const [from, setFrom] = useState<string>(""); // YYYY-MM-DD
-  const [to, setTo] = useState<string>("");
-  const [courseContains, setCourseContains] = useState<string>("");
-  const [activity, setActivity] = useState<string>("all");
-  const [minFocus, setMinFocus] = useState<string>("");
-  const [maxFocus, setMaxFocus] = useState<string>("");
-  const [sortBy, setSortBy] = useState<string>("date_desc");
-  const [viewMode, setViewMode] = useState<'table' | 'cards'>('table');
+  const tasksById = useMemo(() => new Map(tasks.map((task) => [task.id, task])), [tasks]);
+  const cutoff = useMemo(() => {
+    const date = new Date();
+    date.setDate(date.getDate() - days);
+    return date;
+  }, [days]);
 
-  async function refresh() { await refreshSessions(); }
-  function uid() { return Math.random().toString(36).slice(2) + Date.now().toString(36); }
+  const rows = useMemo(() => sessions
+    .filter((session) => new Date(session.when) >= cutoff)
+    .map((session) => {
+      const task = session.taskId ? tasksById.get(session.taskId) : null;
+      const course = task?.course || '';
+      return { ...session, task, course };
+    })
+    .filter((session) => !courseFilter || session.course === courseFilter)
+    .sort((a, b) => b.when.localeCompare(a.when)), [sessions, cutoff, tasksById, courseFilter]);
 
-  async function openEditSession(id: string) {
-    const s = (sessions||[]).find((x:any) => x.id === id); if (!s) return;
-    setEditId(id);
-    setEditMinutes(String(s.minutes || ''));
-    setEditFocus(s.focus == null ? '' : String(s.focus));
-    setEditNotes(s.notes || '');
-    setEditActivity(s.activity || '');
-    setEditPagesRead(s.pagesRead != null ? String(s.pagesRead) : '');
-  }
-  
-  async function saveEditSession() {
-    if (!editId) return;
-    const patch: any = {};
-    const m = parseInt(editMinutes || '0', 10); if (!isNaN(m) && m > 0) patch.minutes = m;
-    const f = parseFloat(editFocus || ''); if (!isNaN(f)) patch.focus = Math.max(1, Math.min(10, f));
-    patch.notes = editNotes || null;
-    patch.activity = editActivity || null;
-    const pr = parseInt(editPagesRead || '', 10);
-    if (!isNaN(pr) && pr >= 0) patch.pagesRead = pr;
-    try { await apiFetch(`/api/sessions/${editId}`, { method:'PATCH', body: patch }); try { notifySessionsChanged(); } catch {} try { notifyToast({ kind: 'success', message: 'Session updated.' }); } catch {} } catch {}
-    setEditId(null); setEditMinutes(''); setEditFocus(''); setEditNotes(''); setEditActivity(''); setEditPagesRead('');
-    await refresh();
-  }
+  const totalMinutes = rows.reduce((sum, session) => sum + (session.minutes || 0), 0);
+  const totalPages = rows.reduce((sum, session) => sum + (session.pagesRead || 0), 0);
+  const completedTasks = new Set(rows.map((session) => session.taskId).filter(Boolean)).size;
 
-  async function deleteSession(id: string) {
-    const s = (sessions||[]).find((x:any) => x.id === id); if (!s) return;
-    // Save to undo stack
-    setUndoStack(prev => [...prev.slice(-9), { type: 'delete', session: s }]);
-    setUndoMessage(`Deleted session (${fmtHM(s.minutes || 0)}). Click Undo to restore.`);
-    setTimeout(() => setUndoMessage(null), 8000);
-    try { await apiFetch(`/api/sessions/${id}`, { method:'DELETE' }); try { notifySessionsChanged(); } catch {} try { notifyToast({ kind: 'success', message: 'Session deleted.' }); } catch {} } catch {}
-    await refresh();
-  }
+  const coursePace = useMemo(() => courses.map((course) => {
+    const matching = rows.filter((session) => session.course === course.title && (session.pagesRead || 0) > 0);
+    const minutes = matching.reduce((sum, session) => sum + (session.minutes || 0), 0);
+    const pages = matching.reduce((sum, session) => sum + (session.pagesRead || 0), 0);
+    return { course, sessions: matching.length, minutesPerPage: pages ? minutes / pages : null };
+  }).filter((item) => item.sessions > 0), [courses, rows]);
 
-  async function undoLastDelete() {
-    const last = undoStack[undoStack.length - 1];
-    if (!last || last.type !== 'delete') return;
-    const s = last.session;
-    try {
-      await apiFetch('/api/sessions', { method: 'POST', body: {
-        taskId: s.taskId || null,
-        when: s.when,
-        minutes: s.minutes,
-        focus: s.focus,
-        notes: s.notes,
-        activity: s.activity,
-        pagesRead: s.pagesRead,
-      } });
-      try { notifySessionsChanged(); } catch {}
-      try { notifyToast({ kind: 'success', message: 'Session restored.' }); } catch {}
-    } catch {}
-    setUndoStack(prev => prev.slice(0, -1));
-    setUndoMessage('Session restored!');
-    setTimeout(() => setUndoMessage(null), 3000);
-    await refresh();
-  }
-
-  async function restoreToSchedule(id: string) {
-    const s = (sessions||[]).find((x:any) => x.id === id); if (!s) return;
-    try {
-      const j = await apiFetch<{ blocks: any[] }>('/api/schedule'); const blocks = Array.isArray((j as any).blocks) ? (j as any).blocks : [];
-      const whenKey = chicagoYmd(new Date(s.when));
-      const task = s.taskId ? tasks.find((t:any)=>t.id===s.taskId) : null;
-      const title = task?.title || 'Restored from log';
-      const course = task?.course || extractCourseFromNotes(s.notes) || '';
-      blocks.push({ id: uid(), taskId: s.taskId || uid(), day: whenKey, plannedMinutes: Math.max(1, Number(s.minutes)||0), guessed: true, title, course, pages: null, priority: null, catchup: false });
-      await apiFetch('/api/schedule', { method:'PUT', body: { blocks } });
-      setUndoMessage('Added back to schedule!');
-      setTimeout(() => setUndoMessage(null), 3000);
-      try { notifyToast({ kind: 'success', message: 'Added back to schedule.' }); } catch {}
-    } catch {}
-  }
-
-  useEffect(() => {
-    refresh();
-    // Default range: last 30 days
-    const today = new Date();
-    const start = new Date();
-    start.setDate(today.getDate() - 30);
-    setFrom(chicagoYmd(start));
-    setTo(chicagoYmd(today));
-  }, []);
-
-  const tasksById = useMemo(() => {
-    const m = new Map<string, any>();
-    for (const t of tasks) if (t && t.id) m.set(t.id, t);
-    return m;
-  }, [tasks]);
-
-  const colorForCourse = useMemo(() => {
-    const map: Record<string, string> = {};
-    for (const c of (courses||[])) {
-      const key = normCourseKey(c?.title || '');
-      const col = (c?.color || '').toString().trim();
-      if (key && col) map[key] = col;
+  const grouped = useMemo(() => {
+    const map: Record<string, typeof rows> = {};
+    for (const row of rows) {
+      const key = dateKey(row.when);
+      (map[key] ||= []).push(row);
     }
-    return (name?: string | null) => {
-      const raw = (name || '').toString();
-      const k = normCourseKey(raw);
-      try { if (typeof window !== 'undefined' && k === 'internship') { const ls = window.localStorage.getItem('internshipColor'); if (ls) return ls; } } catch {}
-      try { if (typeof window !== 'undefined' && k === 'sports law review') { const ls = window.localStorage.getItem('sportsLawReviewColor'); if (ls) return ls; } } catch {}
-      return map[k] || fallbackCourseHsl(raw || '');
-    };
-  }, [courses]);
+    return Object.entries(map).sort(([a], [b]) => b.localeCompare(a));
+  }, [rows]);
 
-  type Row = { id: string; when: string; ymd: string; minutes: number; course: string; activity: string; focus: number | null; notes: string | null };
-  const rows: Row[] = useMemo(() => {
-    const out: Row[] = [];
-    for (const s of (sessions||[])) {
-      const when = String(s.when);
-      const ymd = chicagoYmd(new Date(when));
-      let course = '';
-      if (s.taskId && tasksById.has(s.taskId)) course = tasksById.get(s.taskId)?.course || '';
-      if (!course) {
-        const act = (s.activity||'').toLowerCase();
-        if (act === 'internship') course = 'Internship'; else course = extractCourseFromNotes(s.notes);
-      }
-      const notesL = (s.notes || '').toLowerCase();
-      const courseL = (course || '').toLowerCase();
-      if (courseL.includes('sports law review') || /\bslr\b/i.test(s.notes || '')) course = 'Sports Law Review';
-      out.push({ id: s.id, when, ymd, minutes: Number(s.minutes)||0, course: course||'', activity: activityLabel(s.activity), focus: (typeof s.focus==='number'? s.focus : null), notes: s.notes ?? null });
-    }
-    out.sort((a,b) => b.when.localeCompare(a.when));
-    return out;
-  }, [sessions, tasksById]);
-
-  const filtered = useMemo(() => {
-    const minF = minFocus ? Math.max(1, Math.min(10, parseInt(minFocus, 10)||0)) : null;
-    const maxF = maxFocus ? Math.max(1, Math.min(10, parseInt(maxFocus, 10)||10)) : null;
-    const arr = rows.filter(r => {
-      if (from && r.ymd < from) return false;
-      if (to && r.ymd > to) return false;
-      if (courseContains && !(r.course||'').toLowerCase().includes(courseContains.toLowerCase())) return false;
-      if (activity !== 'all' && r.activity.toLowerCase() !== activity.toLowerCase()) return false;
-      if (minF && (r.focus ?? 0) < minF) return false;
-      if (maxF && (r.focus ?? 10) > maxF) return false;
-      return true;
-    });
-    const s = sortBy;
-    arr.sort((a, b) => {
-      if (s === 'date_asc') return a.when.localeCompare(b.when);
-      if (s === 'course_asc') return (a.course || '').localeCompare(b.course || '') || b.when.localeCompare(a.when);
-      if (s === 'course_desc') return (b.course || '').localeCompare(a.course || '') || b.when.localeCompare(a.when);
-      if (s === 'focus_desc') return ((b.focus ?? 0) - (a.focus ?? 0)) || b.when.localeCompare(a.when);
-      if (s === 'focus_asc') return ((a.focus ?? 0) - (b.focus ?? 0)) || b.when.localeCompare(a.when);
-      if (s === 'duration_desc') return (b.minutes - a.minutes) || b.when.localeCompare(a.when);
-      // default date_desc
-      return b.when.localeCompare(a.when);
-    });
-    return arr;
-  }, [rows, from, to, courseContains, activity, minFocus, maxFocus, sortBy]);
-
-  const totalMinutes = useMemo(() => filtered.reduce((s,r)=>s+(r.minutes||0), 0), [filtered]);
-  
-  // Stats
-  const stats = useMemo(() => {
-    const avgFocus = filtered.length > 0
-      ? filtered.filter(r => r.focus != null).reduce((s,r) => s + (r.focus || 0), 0) / Math.max(1, filtered.filter(r => r.focus != null).length)
-      : 0;
-    const byActivity: Record<string, number> = {};
-    const byCourse: Record<string, number> = {};
-    for (const r of filtered) {
-      byActivity[r.activity] = (byActivity[r.activity] || 0) + r.minutes;
-      if (r.course) byCourse[r.course] = (byCourse[r.course] || 0) + r.minutes;
-    }
-    const topCourses = Object.entries(byCourse).sort((a,b) => b[1] - a[1]).slice(0, 5);
-    const topActivities = Object.entries(byActivity).sort((a,b) => b[1] - a[1]);
-    return { avgFocus, byActivity, byCourse, topCourses, topActivities };
-  }, [filtered]);
-
-  function quickRange(days: number) {
-    const today = new Date();
-    const start = new Date();
-    start.setDate(today.getDate() - (days-1));
-    setFrom(chicagoYmd(start));
-    setTo(chicagoYmd(today));
-  }
-
-  async function exportCsv() {
+  async function removeSession(id: string) {
+    if (!window.confirm('Delete this study record?')) return;
+    setDeleting(id);
     try {
-      const headers = ['Date','Course','Task Type','Hours','Focus','Notes','Pages Read','Outline Pages','Practice Qs','Internship Time'];
-      const lines: string[] = [];
-      lines.push(headers.join(','));
-      for (const s of filtered) {
-        const hours = (Math.max(0, Number(s.minutes)||0) / 60).toFixed(3);
-        const csvEscape = (x: any) => {
-          const str = String(x ?? '');
-          return /[",\n\r]/.test(str) ? '"' + str.replace(/"/g,'""') + '"' : str;
-        };
-        const fields = [
-          new Date(s.when).toLocaleDateString('en-US'),
-          s.course || '',
-          s.activity,
-          hours,
-          (s.focus == null ? '' : String(s.focus)),
-          (s.notes ?? ''),
-          '', '', '', ''
-        ].map(csvEscape);
-        lines.push(fields.join(','));
-      }
-      const csv = lines.join('\r\n');
-      const blob = new Blob([csv], { type: 'text/csv;charset=utf-8' });
-      const url = URL.createObjectURL(blob);
-      const a = document.createElement('a');
-      const today = new Date().toISOString().slice(0,10);
-      a.href = url; a.download = `sessions-${today}.csv`;
-      document.body.appendChild(a); a.click(); document.body.removeChild(a);
-      URL.revokeObjectURL(url);
-    } catch {}
+      await apiFetch(`/api/sessions/${id}`, { method: 'DELETE' });
+      await refresh();
+    } finally {
+      setDeleting(null);
+    }
   }
 
   return (
     <main className="space-y-6">
-      {/* Undo Toast */}
-      {undoMessage && (
-        <div className="fixed top-4 right-4 z-50 bg-[#1b2344] border border-emerald-500/50 rounded-lg px-4 py-3 shadow-xl flex items-center gap-3">
-          <span className="text-sm">{undoMessage}</span>
-          {undoStack.length > 0 && (
-            <button onClick={undoLastDelete} className="px-3 py-1 rounded bg-emerald-600 hover:bg-emerald-500 text-xs font-medium">Undo</button>
-          )}
-          <button onClick={() => setUndoMessage(null)} className="text-slate-400 hover:text-white">×</button>
-        </div>
-      )}
-
-      {/* Stats Cards */}
-      <section className="grid grid-cols-2 md:grid-cols-4 gap-3">
-        <div className="card p-4">
-          <div className="text-xs text-slate-300/70">Total Time</div>
-          <div className="text-2xl font-semibold text-emerald-400">{fmtHM(totalMinutes)}</div>
-          <div className="text-xs text-slate-300/50">{filtered.length} sessions</div>
-        </div>
-        <div className="card p-4">
-          <div className="text-xs text-slate-300/70">Avg Focus</div>
-          <div className="flex items-center gap-2">
-            <div className={`w-3 h-3 rounded-full ${focusColor(stats.avgFocus)}`} />
-            <div className="text-2xl font-semibold">{stats.avgFocus > 0 ? stats.avgFocus.toFixed(1) : '—'}</div>
-          </div>
-          <div className="text-xs text-slate-300/50">/10 scale</div>
-        </div>
-        <div className="card p-4">
-          <div className="text-xs text-slate-300/70 mb-1">By Activity</div>
-          <div className="space-y-1">
-            {stats.topActivities.slice(0, 3).map(([act, mins]) => (
-              <div key={act} className="flex items-center justify-between text-xs">
-                <span className="text-slate-300">{act}</span>
-                <span className="text-slate-400">{fmtHM(mins)}</span>
-              </div>
-            ))}
-          </div>
-        </div>
-        <div className="card p-4">
-          <div className="text-xs text-slate-300/70 mb-1">Top Courses</div>
-          <div className="space-y-1">
-            {stats.topCourses.slice(0, 3).map(([course, mins]) => (
-              <div key={course} className="flex items-center justify-between text-xs">
-                <div className="flex items-center gap-1 min-w-0">
-                  <span className="inline-block w-2 h-2 rounded-full" style={{ backgroundColor: colorForCourse(course) }} />
-                  <span className="truncate text-slate-300">{course}</span>
-                </div>
-                <span className="text-slate-400 ml-2">{fmtHM(mins)}</span>
-              </div>
-            ))}
-          </div>
-        </div>
+      <section className="rounded-2xl border border-slate-700/70 bg-gradient-to-br from-slate-900 to-slate-950 p-6">
+        <p className="text-sm font-medium text-sky-300">Study history</p>
+        <h2 className="mt-1 text-2xl font-semibold text-slate-100">Use past work to improve future estimates</h2>
+        <p className="mt-2 max-w-3xl text-sm text-slate-400">Most records should be created automatically when work is finished. This page shows what happened and what the tracker learned.</p>
       </section>
 
-      <section className="card p-6 space-y-4">
-        {/* Header */}
-        <div className="flex flex-wrap items-center justify-between gap-3">
-          <div>
-            <h2 className="text-lg font-medium">Study Log</h2>
-            <div className="text-xs text-slate-300/70">Track completed study sessions. Central time.</div>
-          </div>
-          <div className="flex flex-wrap items-center gap-2">
-            <button onClick={() => quickRange(7)} className={`px-2 py-1 rounded text-xs ${from && to && chicagoYmd(new Date(to)) === chicagoYmd(new Date()) && (new Date(to).getTime() - new Date(from).getTime()) / 86400000 <= 7 ? 'bg-blue-600' : 'border border-[#1b2344]'}`}>7d</button>
-            <button onClick={() => quickRange(30)} className={`px-2 py-1 rounded text-xs ${from && to && chicagoYmd(new Date(to)) === chicagoYmd(new Date()) && (new Date(to).getTime() - new Date(from).getTime()) / 86400000 > 7 && (new Date(to).getTime() - new Date(from).getTime()) / 86400000 <= 30 ? 'bg-blue-600' : 'border border-[#1b2344]'}`}>30d</button>
-            <button onClick={() => { setFrom(''); setTo(''); }} className="px-2 py-1 rounded border border-[#1b2344] text-xs">All</button>
-            <button onClick={refresh} className="px-2 py-1 rounded border border-[#1b2344] text-xs">↻</button>
-            <button onClick={exportCsv} className="px-2 py-1 rounded bg-teal-600 hover:bg-teal-500 text-xs">Export</button>
-          </div>
-        </div>
-
-        {/* Filters */}
-        <div className="grid grid-cols-2 md:grid-cols-7 gap-2">
-          <div>
-            <label className="block text-xs text-slate-300/70" htmlFor="f-from">From</label>
-            <input id="f-from" type="date" value={from} onChange={e=>setFrom(e.target.value)} className="w-full bg-[#0b1020] border border-[#1b2344] rounded px-2 py-1.5 text-sm" />
-          </div>
-          <div>
-            <label className="block text-xs text-slate-300/70" htmlFor="f-to">To</label>
-            <input id="f-to" type="date" value={to} onChange={e=>setTo(e.target.value)} className="w-full bg-[#0b1020] border border-[#1b2344] rounded px-2 py-1.5 text-sm" />
-          </div>
-          <div>
-            <label className="block text-xs text-slate-300/70" htmlFor="f-course">Course</label>
-            <input id="f-course" placeholder="Filter..." value={courseContains} onChange={e=>setCourseContains(e.target.value)} className="w-full bg-[#0b1020] border border-[#1b2344] rounded px-2 py-1.5 text-sm" />
-          </div>
-          <div>
-            <label className="block text-xs text-slate-300/70" htmlFor="f-activity">Activity</label>
-            <select id="f-activity" value={activity} onChange={e=>setActivity(e.target.value)} className="w-full bg-[#0b1020] border border-[#1b2344] rounded px-2 py-1.5 text-sm">
-              <option value="all">All</option>
-              <option value="reading">Reading</option>
-              <option value="review">Review</option>
-              <option value="outline">Outline</option>
-              <option value="practice">Practice</option>
-              <option value="other">Other</option>
-            </select>
-          </div>
-          <div>
-            <label className="block text-xs text-slate-300/70">Focus Range</label>
-            <div className="flex items-center gap-1">
-              <input type="number" min={1} max={10} placeholder="1" value={minFocus} onChange={e=>setMinFocus(e.target.value)} className="w-full bg-[#0b1020] border border-[#1b2344] rounded px-2 py-1.5 text-sm" />
-              <span className="text-slate-400">–</span>
-              <input type="number" min={1} max={10} placeholder="10" value={maxFocus} onChange={e=>setMaxFocus(e.target.value)} className="w-full bg-[#0b1020] border border-[#1b2344] rounded px-2 py-1.5 text-sm" />
-            </div>
-          </div>
-          <div>
-            <label className="block text-xs text-slate-300/70" htmlFor="f-sort">Sort</label>
-            <select id="f-sort" value={sortBy} onChange={e=>setSortBy(e.target.value)} className="w-full bg-[#0b1020] border border-[#1b2344] rounded px-2 py-1.5 text-sm">
-              <option value="date_desc">Newest</option>
-              <option value="date_asc">Oldest</option>
-              <option value="focus_desc">Focus ↓</option>
-              <option value="focus_asc">Focus ↑</option>
-              <option value="duration_desc">Duration ↓</option>
-              <option value="course_asc">Course A→Z</option>
-            </select>
-          </div>
-          <div className="flex items-end">
-            <button onClick={() => { setCourseContains(''); setActivity('all'); setMinFocus(''); setMaxFocus(''); }} className="px-3 py-1.5 rounded border border-[#1b2344] text-xs w-full">Clear Filters</button>
-          </div>
-        </div>
-
-        {/* Table */}
-        <div className="overflow-x-auto">
-          <table className="w-full text-sm">
-            <thead className="text-left text-slate-300/60 border-b border-[#1b2344]">
-              <tr>
-                <th className="py-2 pr-3 font-medium">When</th>
-                <th className="py-2 pr-3 font-medium">Course</th>
-                <th className="py-2 pr-3 font-medium">Activity</th>
-                <th className="py-2 pr-3 font-medium">Duration</th>
-                <th className="py-2 pr-3 font-medium">Focus</th>
-                <th className="py-2 pr-3 font-medium">Notes</th>
-                <th className="py-2 pr-3 font-medium">Actions</th>
-              </tr>
-            </thead>
-            <tbody>
-              {loading ? (
-                <tr><td className="py-4 text-center text-slate-400" colSpan={7}>Loading…</td></tr>
-              ) : filtered.length === 0 ? (
-                <tr><td className="py-4 text-center text-slate-400" colSpan={7}>No sessions match filters. Try adjusting the date range or filters.</td></tr>
-              ) : (
-                filtered.map((r) => (
-                  <tr key={r.id} className="border-t border-[#1b2344] hover:bg-white/5 transition-colors">
-                    <td className="py-2 pr-3 whitespace-nowrap text-slate-300">
-                      <div className="text-sm">{new Date(r.when).toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric' })}</div>
-                      <div className="text-xs text-slate-400">{new Date(r.when).toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit' })}</div>
-                    </td>
-                    <td className="py-2 pr-3">
-                      <div className="flex items-center gap-2">
-                        {r.course ? <span className="inline-block w-2.5 h-2.5 rounded-full flex-shrink-0" style={{ backgroundColor: colorForCourse(r.course) }} /> : null}
-                        <span className="truncate max-w-[140px]">{r.course || '—'}</span>
-                      </div>
-                    </td>
-                    <td className="py-2 pr-3">
-                      <span className="px-2 py-0.5 rounded bg-white/10 text-xs">{r.activity}</span>
-                    </td>
-                    <td className="py-2 pr-3 font-medium">{fmtHM(r.minutes)}</td>
-                    <td className="py-2 pr-3">
-                      <div className="flex items-center gap-2">
-                        <div className={`w-2.5 h-2.5 rounded-full ${focusColor(r.focus)}`} />
-                        <span className="font-medium">{r.focus ?? '—'}</span>
-                      </div>
-                    </td>
-                    <td className="py-2 pr-3 max-w-[200px]">
-                      <span className="truncate inline-block max-w-[180px] text-slate-400 text-xs">{r.notes || '—'}</span>
-                    </td>
-                    <td className="py-2 pr-3">
-                      <div className="flex items-center gap-1">
-                        <button onClick={()=>openEditSession(r.id)} className="px-2 py-1 rounded border border-[#1b2344] text-xs hover:bg-white/5">Edit</button>
-                        <button onClick={()=>restoreToSchedule(r.id)} className="px-2 py-1 rounded border border-blue-600/50 text-blue-400 text-xs hover:bg-blue-900/20" title="Add back to schedule">+Sched</button>
-                        <button onClick={()=>deleteSession(r.id)} className="px-2 py-1 rounded border border-rose-700/50 text-rose-400 text-xs hover:bg-rose-900/20">Del</button>
-                      </div>
-                    </td>
-                  </tr>
-                ))
-              )}
-            </tbody>
-          </table>
-        </div>
+      <section className="grid gap-3 sm:grid-cols-3">
+        <div className="rounded-xl border border-slate-700 bg-slate-900/45 p-4"><p className="text-xs uppercase text-slate-500">Study time</p><p className="mt-2 text-2xl font-semibold text-slate-100">{formatMinutes(totalMinutes)}</p><p className="text-xs text-slate-500">last {days} days</p></div>
+        <div className="rounded-xl border border-slate-700 bg-slate-900/45 p-4"><p className="text-xs uppercase text-slate-500">Pages recorded</p><p className="mt-2 text-2xl font-semibold text-slate-100">{totalPages}</p><p className="text-xs text-slate-500">used for reading estimates</p></div>
+        <div className="rounded-xl border border-slate-700 bg-slate-900/45 p-4"><p className="text-xs uppercase text-slate-500">Tasks represented</p><p className="mt-2 text-2xl font-semibold text-emerald-300">{completedTasks}</p><p className="text-xs text-slate-500">linked study records</p></div>
       </section>
 
-      {/* Edit Modal */}
-      {editId && (
-        <div role="dialog" aria-modal="true" className="fixed inset-0 z-50 flex items-center justify-center">
-          <div className="absolute inset-0 bg-black/60" onClick={()=>setEditId(null)} />
-          <div className="relative z-10 w-[92vw] max-w-md bg-[#0b1020] border border-[#1b2344] rounded-xl p-5 space-y-4">
-            <div className="flex items-center justify-between">
-              <div className="text-lg font-medium">Edit Session</div>
-              <button onClick={()=>setEditId(null)} className="text-slate-400 hover:text-white">×</button>
-            </div>
-            <div className="grid grid-cols-2 gap-3">
-              <div>
-                <label className="block text-xs text-slate-300/70 mb-1">Minutes</label>
-                <input type="number" min={1} step={1} value={editMinutes} onChange={e=>setEditMinutes(e.target.value)} className="w-full bg-[#0b1020] border border-[#1b2344] rounded px-3 py-2" />
-              </div>
-              <div>
-                <label className="block text-xs text-slate-300/70 mb-1">Focus (1–10)</label>
-                <input type="number" min={1} max={10} step={0.5} value={editFocus} onChange={e=>setEditFocus(e.target.value)} className="w-full bg-[#0b1020] border border-[#1b2344] rounded px-3 py-2" />
-              </div>
-              <div>
-                <label className="block text-xs text-slate-300/70 mb-1">Activity</label>
-                <select value={editActivity} onChange={e=>setEditActivity(e.target.value)} className="w-full bg-[#0b1020] border border-[#1b2344] rounded px-3 py-2">
-                  <option value="">—</option>
-                  <option value="reading">Reading</option>
-                  <option value="review">Review</option>
-                  <option value="outline">Outline</option>
-                  <option value="practice">Practice</option>
-                  <option value="other">Other</option>
-                </select>
-              </div>
-              <div>
-                <label className="block text-xs text-slate-300/70 mb-1">Pages Read</label>
-                <input type="number" min={0} value={editPagesRead} onChange={e=>setEditPagesRead(e.target.value)} className="w-full bg-[#0b1020] border border-[#1b2344] rounded px-3 py-2" />
-              </div>
-            </div>
-            <div>
-              <label className="block text-xs text-slate-300/70 mb-1">Notes</label>
-              <input value={editNotes} onChange={e=>setEditNotes(e.target.value)} className="w-full bg-[#0b1020] border border-[#1b2344] rounded px-3 py-2" placeholder="Optional notes..." />
-            </div>
-            <div className="flex items-center gap-2 pt-2">
-              <button onClick={saveEditSession} className="px-4 py-2 rounded bg-blue-600 hover:bg-blue-500 font-medium">Save Changes</button>
-              <button onClick={()=>setEditId(null)} className="px-4 py-2 rounded border border-[#1b2344]">Cancel</button>
-            </div>
-          </div>
-        </div>
-      )}
+      <section className="rounded-xl border border-slate-700/70 bg-slate-900/45 p-4">
+        <div className="grid gap-3 sm:grid-cols-[220px_220px_auto]"><select value={courseFilter} onChange={(event) => setCourseFilter(event.target.value)} className="rounded-lg border border-slate-600 bg-slate-950 px-3 py-2 text-slate-100"><option value="">All courses</option>{courses.map((course) => <option key={course.id} value={course.title}>{course.title}</option>)}</select><select value={days} onChange={(event) => setDays(Number(event.target.value))} className="rounded-lg border border-slate-600 bg-slate-950 px-3 py-2 text-slate-100"><option value={7}>Last 7 days</option><option value={30}>Last 30 days</option><option value={90}>Last 90 days</option><option value={365}>Last year</option></select><div className="flex items-center justify-end"><Link href="/tasks" className="text-sm text-emerald-300">Start from a task</Link></div></div>
+      </section>
+
+      {coursePace.length ? <section className="rounded-xl border border-slate-700/70 bg-slate-900/45 p-5"><h2 className="font-semibold text-slate-100">Learned reading pace</h2><p className="mt-1 text-sm text-slate-400">The tracker uses these observations when estimating future readings. Small samples remain tentative.</p><div className="mt-4 grid gap-3 md:grid-cols-2 xl:grid-cols-3">{coursePace.map((item) => <div key={item.course.id} className="rounded-lg bg-slate-950/40 p-3"><p className="text-sm font-medium text-slate-200">{item.course.title}</p><p className="mt-2 text-xl font-semibold text-sky-300">{item.minutesPerPage?.toFixed(1)} min/page</p><p className="text-xs text-slate-500">from {item.sessions} session{item.sessions === 1 ? '' : 's'}</p></div>)}</div></section> : null}
+
+      <section className="space-y-5">
+        <div><h2 className="text-lg font-semibold text-slate-100">Recent work</h2><p className="text-sm text-slate-500">Records are grouped by day and linked back to their task when possible.</p></div>
+        {loading ? <div className="rounded-xl border border-slate-700 p-6 text-slate-400">Loading study history…</div> : null}
+        {!loading && grouped.map(([day, dayRows]) => <div key={day} className="space-y-2"><h3 className="text-sm font-semibold text-slate-300">{formatDate(`${day}T12:00:00`)}</h3>{dayRows.map((session) => <article key={session.id} className="rounded-xl border border-slate-700 bg-slate-900/45 p-4"><div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between"><div><div className="flex flex-wrap items-center gap-2 text-xs"><span className="rounded-full bg-sky-500/10 px-2 py-1 capitalize text-sky-300">{session.activity || 'study'}</span>{session.course ? <span className="text-slate-500">{session.course}</span> : null}</div><h4 className="mt-2 font-medium text-slate-100">{session.task?.title || 'Unlinked study session'}</h4><p className="mt-1 text-sm text-slate-400">{formatMinutes(session.minutes || 0)}{session.pagesRead ? ` · ${session.pagesRead} pages` : ''}{session.practiceQs ? ` · ${session.practiceQs} practice questions` : ''}</p>{session.notes ? <p className="mt-2 text-sm text-slate-500">{session.notes}</p> : null}</div><div className="flex gap-2">{session.taskId ? <Link href={`/work/${session.taskId}`} className="rounded-lg border border-slate-600 px-3 py-2 text-xs text-slate-200">Open task</Link> : null}<button disabled={deleting === session.id} onClick={() => removeSession(session.id)} className="rounded-lg border border-rose-500/40 px-3 py-2 text-xs text-rose-300 disabled:opacity-50">Delete</button></div></div></article>)}</div>)}
+        {!loading && !grouped.length ? <div className="rounded-xl border border-dashed border-slate-700 p-8 text-center"><p className="font-medium text-slate-200">No study history in this range.</p><p className="mt-1 text-sm text-slate-500">Open a task and use Start Work to create records automatically.</p></div> : null}
+      </section>
     </main>
   );
 }

@@ -1,94 +1,65 @@
-export const dynamic = 'force-dynamic';
+import Link from 'next/link';
+
+const setup = [
+  ['Choose Fall 2026', '/semester', 'Confirm the active semester and its broad date range.'],
+  ['Add courses', '/courses', 'Enter each course, meeting times, instructor, and room.'],
+  ['Connect Google Drive', '/courses', 'Link the course folder, notes, syllabus, outline, and assignments folder.'],
+  ['Import syllabi', '/wizard', 'Review extracted readings and deadlines before saving them.'],
+  ['Add exam dates', '/exam', 'Record the date and format for every exam.'],
+  ['Build the first week', '/week-plan', 'Enter available time and accept or adjust the proposed plan.'],
+] as const;
 
 export default function HelpPage() {
-  return (
-    <main className="space-y-6">
-      <section className="card p-5">
-        <h2 className="text-xl font-semibold mb-2">Welcome to Law School Tracker</h2>
-        <p className="text-slate-300/80">This guide explains how to manage tasks, plan your week, log study time, and export to your calendar.</p>
+  return <main className="space-y-6">
+    <section className="rounded-2xl border border-slate-700/70 bg-gradient-to-br from-slate-900 to-slate-950 p-6">
+      <p className="text-sm font-medium text-sky-300">Setup and workflow guide</p>
+      <h2 className="mt-1 text-2xl font-semibold text-slate-100">Use the tracker at moments you already have</h2>
+      <p className="mt-2 max-w-3xl text-sm text-slate-400">Google Drive remains the source of truth for course material. The tracker organizes what matters, opens the right document, and keeps the semester from drifting.</p>
+    </section>
+
+    <section className="rounded-xl border border-slate-700/70 bg-slate-900/45 p-5">
+      <h2 className="text-lg font-semibold text-slate-100">Fall 2026 setup</h2>
+      <div className="mt-4 grid gap-3 md:grid-cols-2">{setup.map(([title, href, description], index) => <Link key={title} href={href} className="rounded-xl border border-slate-700 bg-slate-950/35 p-4 hover:bg-slate-800"><div className="flex gap-3"><span className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-sky-500 text-sm font-semibold text-slate-950">{index + 1}</span><div><h3 className="font-medium text-slate-200">{title}</h3><p className="mt-1 text-sm text-slate-500">{description}</p></div></div></Link>)}</div>
+    </section>
+
+    <div className="grid gap-6 lg:grid-cols-2">
+      <section className="rounded-xl border border-slate-700/70 bg-slate-900/45 p-5">
+        <h2 className="font-semibold text-slate-100">Normal day</h2>
+        <div className="mt-4 space-y-4 text-sm text-slate-400">
+          <div><p className="font-medium text-slate-200">Morning</p><p>Open Today. Use the recommended list and upcoming class cards. Do not manually build a daily schedule.</p></div>
+          <div><p className="font-medium text-slate-200">Before class</p><p>Open the course notes, syllabus, or reading from the class card and mark the class prepared.</p></div>
+          <div><p className="font-medium text-slate-200">While working</p><p>Use Start Work from Tasks. Save partial progress or finish the task so Study History updates automatically.</p></div>
+          <div><p className="font-medium text-slate-200">After class</p><p>Use the course workspace to capture one doctrine, case, or question that needs outline follow-up.</p></div>
+        </div>
       </section>
 
-      <section className="card p-5 space-y-3">
-        <h3 className="text-lg font-medium">Inbox (Tasks) & CSV Import</h3>
-        <ul className="list-disc list-inside space-y-1 text-sm">
-          <li><b>Inbox Quick Add</b>: On the <b>Tasks</b> page, use <b>Quick Add (Inbox)</b> to capture items in one line. Example: <i>T&amp;E: Read 599–622 (24p) – due Fri</i>. Estimation uses your historical pace with a fallback minutes/page from Settings.</li>
-          <li><b>Import Backlog</b>: If you used the legacy Backlog intake, click <b>Import Backlog</b> on the Tasks toolbar to migrate local items into Tasks (tagged <code>inbox</code>).</li>
-          <li><b>CSV Import (sessions)</b>: Open <b>Settings → Import Data (CSV)</b> to import study sessions with mapping, preview, deduplication, and replace/append modes.</li>
-        </ul>
-        <p className="text-xs text-slate-300/70">Tip: Minutes/page (fallback) and default focus can be set in Settings.</p>
+      <section className="rounded-xl border border-slate-700/70 bg-slate-900/45 p-5">
+        <h2 className="font-semibold text-slate-100">Sunday review</h2>
+        <div className="mt-4 space-y-4 text-sm text-slate-400">
+          <div><p className="font-medium text-slate-200">1. Close unfinished work</p><p>Complete, move, or send overdue work to Recovery Mode.</p></div>
+          <div><p className="font-medium text-slate-200">2. Maintain courses</p><p>Review missing class captures, Drive links, and outline follow-ups.</p></div>
+          <div><p className="font-medium text-slate-200">3. Look ahead</p><p>Review next week’s deadlines and build a weekly plan only when it adds value.</p></div>
+          <Link href="/review" className="inline-flex rounded-lg bg-sky-500 px-3 py-2 font-semibold text-slate-950">Open Weekly Review</Link>
+        </div>
       </section>
 
-      <section className="card p-5 space-y-3">
-        <h3 className="text-lg font-medium">Manage tasks</h3>
-        <ul className="list-disc list-inside space-y-1 text-sm">
-          <li><b>Quick Add (Inbox)</b>: Type <i>Course: Title (24p) – due Fri</i> and press <b>Add</b>. Due dates are date-only; time is normalized to end-of-day.</li>
-          <li><b>Inline edit</b>: Click <b>Edit</b> to change title/course/due/estimate; <b>Save</b> when done.</li>
-          <li><b>Filters</b>: Filter by status, course substring, and tag. Use the <b>Inbox</b> button to toggle <code>tag=inbox</code>.</li>
-          <li><b>Bulk actions</b>: Select rows to reveal bulk actions (Mark done/todo, Delete, set Due date, set Course, Add/Remove tag, Change Priority, Clear Inbox tag).</li>
-          <li><b>Mark done</b> or <b>Delete</b> from the Actions column.</li>
-        </ul>
+      <section className="rounded-xl border border-rose-500/30 bg-rose-500/5 p-5">
+        <h2 className="font-semibold text-rose-200">When you are behind</h2>
+        <p className="mt-2 text-sm text-slate-400">Do not manually reschedule everything. Recovery Mode classifies work into must complete, skim, defer, and drop, then builds a plan for the time actually available.</p>
+        <Link href="/recovery" className="mt-4 inline-flex rounded-lg bg-rose-500 px-3 py-2 text-sm font-semibold text-white">Open Recovery Mode</Link>
       </section>
 
-      <section className="card p-5 space-y-3">
-        <h3 className="text-lg font-medium">Planner (next 7 days)</h3>
-        <ul className="list-disc list-inside space-y-1 text-sm">
-          <li>Open <b>Planner</b> from the top nav.</li>
-          <li><b>Drag and drop</b> tasks between days to reschedule the due date. Changes save instantly.</li>
-        </ul>
+      <section className="rounded-xl border border-amber-500/30 bg-amber-500/5 p-5">
+        <h2 className="font-semibold text-amber-200">Exam period</h2>
+        <p className="mt-2 text-sm text-slate-400">Exam Prep shifts attention from readings to attack outlines, issue checklists, weak rules, case analogies, and timed essays.</p>
+        <Link href="/exam" className="mt-4 inline-flex rounded-lg bg-amber-400 px-3 py-2 text-sm font-semibold text-slate-950">Open Exam Prep</Link>
       </section>
+    </div>
 
-      <section className="card p-5 space-y-3">
-        <h3 className="text-lg font-medium">Log study time</h3>
-        <ul className="list-disc list-inside space-y-1 text-sm">
-          <li><b>Focus Timer</b>: Start/Pause/Resume a timer; optionally select a task and focus (1–10); <b>Save</b> to create a session.</li>
-          <li>Pomodoro mode offers presets (25/5 and 50/10) with automatic work/break switching.</li>
-          <li><b>Session Logger</b>: Manually log minutes, focus, notes.</li>
-        </ul>
-      </section>
-
-      <section className="card p-5 space-y-3">
-        <h3 className="text-lg font-medium">Stats & goals</h3>
-        <ul className="list-disc list-inside space-y-1 text-sm">
-          <li><b>Weekly goal</b>: Set weekly hours and track progress.</li>
-          <li><b>Burndown</b>: See estimated vs. logged minutes and remaining time for the week.</li>
-          <li><b>Per-course breakdown</b>: Identify which courses need attention.</li>
-        </ul>
-      </section>
-
-      <section className="card p-5 space-y-3">
-        <h3 className="text-lg font-medium">Export to calendar (ICS)</h3>
-        <ul className="list-disc list-inside space-y-1 text-sm">
-          <li>Use the <b>Download .ics</b> button or visit <code>/api/export/ics</code>.</li>
-          <li><b>Filters</b>: <code>?course=Contracts</code>, <code>?status=todo</code>.</li>
-          <li><b>Timed events</b>: <code>?timed=1</code> creates timed blocks starting 09:00 using <code>estimatedMinutes</code> (long items chunked).</li>
-          <li><b>Private token</b> (optional): set <code>ICS_PRIVATE_TOKEN</code> and append <code>?token=YOUR_TOKEN</code>.</li>
-        </ul>
-      </section>
-
-      <section className="card p-5 space-y-3">
-        <h3 className="text-lg font-medium">Settings & reminders</h3>
-        <ul className="list-disc list-inside space-y-1 text-sm">
-          <li>Open <b>Settings</b> to configure minutes/page, default focus, reminders (lead hours), per-course overrides, and ICS token.</li>
-          <li>In-app <b>reminders</b> show upcoming tasks; enable them and set the lead time in Settings.</li>
-        </ul>
-      </section>
-
-      <section className="card p-5 space-y-3">
-        <h3 className="text-lg font-medium">Data & deployment</h3>
-        <ul className="list-disc list-inside space-y-1 text-sm">
-          <li><b>Local</b>: data stored in <code>data/db.json</code>.</li>
-          <li><b>Vercel</b>: set <code>DATABASE_URL</code> (Postgres) for persistence; JSON fallback writes to <code>/tmp</code>.</li>
-        </ul>
-      </section>
-
-      <section className="card p-5">
-        <h3 className="text-lg font-medium mb-2">Troubleshooting</h3>
-        <ul className="list-disc list-inside space-y-1 text-sm">
-          <li>ICS requires <code>?token=...</code> if <code>ICS_PRIVATE_TOKEN</code> is set.</li>
-          <li>On Vercel, ensure <code>DATABASE_URL</code> is configured for durable storage.</li>
-          <li>For parser misses, use Preview to fix before saving; you can edit inline later as well.</li>
-        </ul>
-      </section>
-    </main>
-  );
+    <section className="rounded-xl border border-slate-700/70 bg-slate-900/45 p-5">
+      <h2 className="font-semibold text-slate-100">Spring 2027 rollover</h2>
+      <p className="mt-2 text-sm text-slate-400">Open Term Setup after Fall 2026 ends. Create Spring 2027, carry forward weekly availability, and leave Fall courses, completed work, and study history archived. New course schedules and syllabi should not be copied.</p>
+      <Link href="/semester" className="mt-4 inline-flex rounded-lg border border-slate-600 px-3 py-2 text-sm text-slate-200">Open Term Setup</Link>
+    </section>
+  </main>;
 }

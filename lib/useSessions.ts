@@ -4,7 +4,7 @@ import { useCallback, useEffect, useState } from 'react';
 import { apiFetch } from '@/lib/apiClient';
 import { onSessionsChanged } from '@/lib/sessionsBus';
 
-type Session = {
+export type Session = {
   id: string;
   taskId?: string | null;
   when: string;
@@ -12,7 +12,10 @@ type Session = {
   focus?: number | null;
   notes?: string | null;
   pagesRead?: number | null;
+  outlinePages?: number | null;
+  practiceQs?: number | null;
   activity?: string | null;
+  createdAt?: string | null;
 };
 
 export function useSessions() {
@@ -23,7 +26,7 @@ export function useSessions() {
   const refresh = useCallback(async () => {
     setLoading(true);
     try {
-      const data = await apiFetch<{ sessions: Session[] }>(`/api/sessions`);
+      const data = await apiFetch<{ sessions: Session[] }>('/api/sessions');
       setSessions(Array.isArray(data?.sessions) ? data.sessions : []);
       setError(null);
     } catch (e: any) {

@@ -1,0 +1,8 @@
+{
+  "crons": [
+    {
+      "path": "/api/cron/academic-maintenance",
+      "schedule": "5 23 * * *"
+    }
+  ]
+}

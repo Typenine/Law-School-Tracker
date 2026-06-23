@@ -1,1153 +1,144 @@
 "use client";
-import { useEffect, useMemo, useState, useRef, useCallback } from "react";
-import type { Task } from "@/lib/types";
-import { useTasks } from "@/lib/useTasks";
-import { estimateMinutesForTask } from "@/lib/taskEstimate";
-import { useSessions } from "@/lib/useSessions";
-import { useCourses } from "@/lib/useCourses";
-import { useSchedule, useAvailability } from "@/lib/useSchedule";
-import { apiFetch } from "@/lib/apiClient";
-import { notifyToast } from "@/lib/toastBus";
-type BacklogItem = {
-  id: string;
-  title: string;
-  course: string;
-  dueDate?: string | null; // YYYY-MM-DD
-  pages?: number | null;
-  estimatedMinutes?: number | null;
-  priority?: number | null; // 1-5
-  tags?: string[] | null;
-};
 
-type AvailabilityTemplate = Record<number, number>; // 0..6 => minutes
+import Link from 'next/link';
+import { useEffect, useMemo, useState } from 'react';
+import { apiFetch } from '@/lib/apiClient';
+import { courseBlocks } from '@/lib/courseWorkspace';
+import { isActiveTask } from '@/lib/taskMetadata';
+import type { CalendarEvent } from '@/lib/types';
+import { useCourses } from '@/lib/useCourses';
+import { useSemester } from '@/lib/useSemester';
+import { useTasks } from '@/lib/useTasks';
+import {
+  WEEKLY_AVAILABILITY_KEY,
+  WEEKLY_PLAN_KEY,
+  type WeeklyAvailability,
+  type WeeklyPlanBlock,
+  type WeeklyPlanState,
+  addDays,
+  buildWeeklyPlanDetailed,
+  dateKey,
+  mondayOf,
+} from '@/lib/weekPlan';
 
-type ScheduledBlock = {
-  id: string;
-  taskId: string; // BacklogItem.id or Task.id
-  day: string; // YYYY-MM-DD
-  plannedMinutes: number;
-  guessed?: boolean;
-  title: string;
-  course: string;
-  pages?: number | null;
-  priority?: number | null;
-  catchup?: boolean;
-};
+const DEFAULT_AVAILABILITY: WeeklyAvailability = { 0: 120, 1: 180, 2: 180, 3: 180, 4: 180, 5: 240, 6: 240 };
 
-const LS_BACKLOG = "backlogItemsV1";
-const LS_AVAIL = "availabilityTemplateV1";
-const LS_SCHEDULE = "weekScheduleV1";
-const LS_GOALS = "weeklyGoalsV1";
-const LS_WEEK_START = "weekPlanWeekStartYmd";
-const LS_TWO_WEEKS = "weekPlanTwoWeeksOnly";
-const LS_AVAIL_BREAKS = "availabilityBreaksV1";
-const LS_AVAIL_WINDOWS = "availabilityWindowsV1";
-
-type WeeklyGoal = { id: string; scope: 'global'|'course'; weeklyMinutes: number; course?: string | null };
-
-function uid(): string { return Math.random().toString(36).slice(2) + Date.now().toString(36); }
-function loadGoals(): WeeklyGoal[] { if (typeof window==='undefined') return []; try { const raw=window.localStorage.getItem(LS_GOALS); const arr=raw?JSON.parse(raw):[]; return Array.isArray(arr)?arr:[]; } catch { return []; } }
-function chicagoYmd(d: Date): string { const f = new Intl.DateTimeFormat('en-US', { timeZone: 'America/Chicago', year: 'numeric', month: '2-digit', day: '2-digit' }); const parts = f.formatToParts(d); const y=parts.find(p=>p.type==='year')?.value||'0000'; const m=parts.find(p=>p.type==='month')?.value||'01'; const da=parts.find(p=>p.type==='day')?.value||'01'; return `${y}-${m}-${da}`; }
-function mondayOfChicago(d: Date): Date { const ymd = chicagoYmd(d); const [yy,mm,dd]=ymd.split('-').map(x=>parseInt(x,10)); const local = new Date(yy,(mm as number)-1,dd); const dow = local.getDay(); const delta = (dow + 1) % 7; local.setDate(local.getDate()-delta); return local; }
-function weekKeysChicago(d: Date): string[] { const start = mondayOfChicago(d); return Array.from({length:7},(_,i)=>{const x=new Date(start); x.setDate(x.getDate()+i); return chicagoYmd(x);}); }
-function startOfDay(d: Date) { const x = new Date(d); x.setHours(0,0,0,0); return x; }
-function saturdayOf(d: Date) { const x = startOfDay(d); const dow = x.getDay(); const delta = (dow - 6 + 7) % 7; x.setDate(x.getDate() - delta); return x; }
-function ymd(d: Date) { return chicagoYmd(d); }
-function dayLabel(d: Date) { return d.toLocaleDateString(undefined, { weekday: 'short', month: 'short', day: 'numeric' }); }
-function endOfDayIso(ymdStr: string) { const [y,m,da]=ymdStr.split('-').map(n=>parseInt(n,10)); const x=new Date(y,(m as number)-1,da,23,59,59,999); return x.toISOString(); }
-function minutesPerPage(): number { if (typeof window==='undefined') return 3; const s=window.localStorage.getItem('minutesPerPage'); const n=s?parseFloat(s):NaN; return !isNaN(n)&&n>0?n:3; }
-function normHHMM(s?: string | null): string | null {
-  const raw = (s||'').trim().toLowerCase(); if (!raw) return null;
-  const m = /^(\d{1,2})(?::?(\d{2}))?\s*([ap]m?)?$/.exec(raw);
-  if (!m) return null; let hh = parseInt(m[1],10); const mm = Math.min(59, Math.max(0, parseInt(m[2]||'0',10)));
-  const apRaw = (m[3]||'').toLowerCase(); const ap = apRaw === 'a' ? 'am' : (apRaw === 'p' ? 'pm' : apRaw);
-  if (ap) { if (hh === 12) hh = 0; if (ap==='pm') hh += 12; }
-  if (hh<0||hh>23) return null; return `${String(hh).padStart(2,'0')}:${String(mm).padStart(2,'0')}`;
+function formatDay(date: Date) {
+  return new Intl.DateTimeFormat('en-US', { weekday: 'short', month: 'short', day: 'numeric' }).format(date);
 }
-function fmt12Input(s?: string | null): string {
-  const n = normHHMM(s || '');
-  if (!n) return (s || '');
-  const [hStr, mStr] = n.split(':');
-  let h = parseInt(hStr, 10);
-  const ap = h >= 12 ? 'PM' : 'AM';
-  let h12 = h % 12; if (h12 === 0) h12 = 12;
-  return `${h12}:${mStr} ${ap}`;
+function formatMinutes(minutes: number) {
+  if (minutes < 60) return `${minutes} min`;
+  const hours = Math.floor(minutes / 60);
+  const remainder = minutes % 60;
+  return remainder ? `${hours}h ${remainder}m` : `${hours}h`;
 }
-function minutesToHM(min: number): string { const n = Math.max(0, Math.round(Number(min)||0)); const h = Math.floor(n/60); const m = n % 60; return `${h}:${String(m).padStart(2,'0')}`; }
-
-function hueFromString(s: string): number { let h = 0; for (let i=0;i<s.length;i++) { h = (h * 31 + s.charCodeAt(i)) >>> 0; } return h % 360; }
-function courseColor(c?: string | null): string { const key = (c||'').trim().toLowerCase(); if (!key) return 'hsl(215 16% 47%)'; const h = hueFromString(key); return `hsl(${h} 70% 55%)`; }
-function normCourseKey(name?: string | null): string {
-  let x = (name || '').toString().toLowerCase().trim();
-  if (!x) return '';
-  x = x.replace(/&/g, 'and');
-  x = x.replace(/[^a-z0-9]+/g, ' ').trim().replace(/\s+/g, ' ');
-  if (/\blaw$/.test(x)) x = x.replace(/\s*law$/, '');
-  return x;
+function clockMinutes(value?: string | null) {
+  if (!value) return null;
+  const [hours, minutes] = value.split(':').map(Number);
+  return Number.isFinite(hours) && Number.isFinite(minutes) ? hours * 60 + minutes : null;
 }
-
-function loadBacklog(): BacklogItem[] {
-  if (typeof window === 'undefined') return [];
-  try { const raw = window.localStorage.getItem(LS_BACKLOG); const arr = raw ? JSON.parse(raw) : []; return Array.isArray(arr) ? arr : []; } catch { return []; }
-}
-function loadAvailability(): AvailabilityTemplate {
-  if (typeof window === 'undefined') return { 0:120,1:240,2:240,3:240,4:240,5:240,6:120 } as any;
-  try { const raw = window.localStorage.getItem(LS_AVAIL); if (raw) return JSON.parse(raw); } catch {}
-  return { 0:120,1:240,2:240,3:240,4:240,5:240,6:120 };
-}
-function saveAvailability(t: AvailabilityTemplate) { if (typeof window!=='undefined') window.localStorage.setItem(LS_AVAIL, JSON.stringify(t)); }
-function loadSchedule(): ScheduledBlock[] { if (typeof window==='undefined') return []; try { const raw=window.localStorage.getItem(LS_SCHEDULE); const arr=raw?JSON.parse(raw):[]; return Array.isArray(arr)?arr:[]; } catch { return []; } }
-function saveSchedule(blocks: ScheduledBlock[]) { if (typeof window!=='undefined') window.localStorage.setItem(LS_SCHEDULE, JSON.stringify(blocks)); }
-
-// Use shared helper for estimate calculations
-function estimateMinutesFor(item: BacklogItem): { minutes: number; guessed: boolean } {
-  return estimateMinutesForTask(item);
+function duration(start?: string | null, end?: string | null) {
+  const from = clockMinutes(start); const to = clockMinutes(end);
+  return from === null || to === null ? 0 : Math.max(0, to - from);
 }
 
 export default function WeekPlanPage() {
-  const [sortBy, setSortBy] = useState<'due'|'course'|'priority'|'estimate'>('due');
-  const [sortDir, setSortDir] = useState<'asc'|'desc'>('asc');
-  const [weekStart, setWeekStart] = useState<Date>(() => {
-    if (typeof window === 'undefined') return saturdayOf(new Date());
-    try {
-      const s = window.localStorage.getItem(LS_WEEK_START);
-      if (s) {
-        const [y,m,da] = s.split('-').map(x=>parseInt(x,10));
-        const dt = new Date(y,(m as number)-1,da);
-        return saturdayOf(dt);
-      }
-    } catch {}
-    return saturdayOf(new Date());
-  });
-  const { blocks, setBlocks } = useSchedule();
-  const { availability, setAvailability } = useAvailability();
-  const [backlog, setBacklog] = useState<BacklogItem[]>([]);
-  const { tasks } = useTasks();
-  const { sessions } = useSessions();
-  const [goals, setGoals] = useState<WeeklyGoal[]>([]);
-  const [breaksByDow, setBreaksByDow] = useState<Record<number, Array<{ start?: string; end?: string }>>>({ 0:[],1:[],2:[],3:[],4:[],5:[],6:[] });
-  const [windowsByDow, setWindowsByDow] = useState<Record<number, Array<{ start?: string; end?: string }>>>({ 0:[],1:[],2:[],3:[],4:[],5:[],6:[] });
-  const [rowMenu, setRowMenu] = useState<{ kind: 'win'|'br'; dow: number; index: number } | null>(null);
-  const [toolbarMenu, setToolbarMenu] = useState<{ dow: number } | null>(null);
+  const { tasks, loading } = useTasks();
   const { courses } = useCourses();
-  const [twoWeeksOnly, setTwoWeeksOnly] = useState<boolean>(false);
-  const [undoSnapshot, setUndoSnapshot] = useState<ScheduledBlock[] | null>(null);
-  const [showCatchup, setShowCatchup] = useState(false);
-  const [settingsReady, setSettingsReady] = useState<boolean>(false);
-  const [blocksLoaded, setBlocksLoaded] = useState<boolean>(false);
-  const [catchupPreview, setCatchupPreview] = useState<{
-    days: Array<{ day: string; total: number; usedBefore: number; usedAfter: number; items: Array<{ taskId: string; title: string; course: string; minutes: number; guessed: boolean }> }>;
-    unschedulable: Array<{ taskId: string; title: string; remaining: number; dueYmd: string }>;
-  } | null>(null);
+  const { currentTerm, activeSemester } = useSemester();
+  const [weekStart, setWeekStart] = useState(() => mondayOf(new Date()));
+  const [availability, setAvailability] = useState<WeeklyAvailability>(DEFAULT_AVAILABILITY);
+  const [blocks, setBlocks] = useState<WeeklyPlanBlock[]>([]);
+  const [events, setEvents] = useState<CalendarEvent[]>([]);
+  const [saving, setSaving] = useState(false);
+  const [message, setMessage] = useState('');
 
-  // Initial load: server/setting backups and migration while keeping localStorage as the source of truth
+  const days = useMemo(() => Array.from({ length: 7 }, (_, index) => addDays(weekStart, index)), [weekStart]);
+  const activeCourses = useMemo(() => activeSemester ? courses.filter(course => course.semester === activeSemester.season && course.year === activeSemester.year) : courses, [courses, activeSemester]);
+  const currentTasks = useMemo(() => tasks.filter(task => isActiveTask(task) && task.status !== 'done' && (!currentTerm || task.term === currentTerm)), [tasks, currentTerm]);
+  const relevantTasks = useMemo(() => {
+    const end = addDays(weekStart, 13); end.setHours(23, 59, 59, 999);
+    return currentTasks.filter(task => new Date(task.dueDate) <= end);
+  }, [currentTasks, weekStart]);
+
   useEffect(() => {
-    const localBlocks = loadSchedule(); // for server sync decisions only
-    console.log('[WeekPlan] Initial load from localStorage (hook will hydrate separately):', localBlocks.length, 'blocks');
-    setBacklog(loadBacklog());
-    // Load windows and breaks from localStorage
-    try {
-      if (typeof window!=='undefined') {
-        const winsRaw = window.localStorage.getItem(LS_AVAIL_WINDOWS);
-        const brsRaw = window.localStorage.getItem(LS_AVAIL_BREAKS);
-        if (winsRaw) { try { const w = JSON.parse(winsRaw); if (w && typeof w === 'object') setWindowsByDow(w); } catch {} }
-        if (brsRaw) { try { const b = JSON.parse(brsRaw); if (b && typeof b === 'object') setBreaksByDow(b); } catch {} }
-      }
-    } catch {}
-    let canceled = false;
-    let settingsCache: Record<string, any> = {};
-    (async () => {
+    void (async () => {
       try {
-        const [bj, sj] = await Promise.all([
-          apiFetch<{ blocks: any[] }>("/api/schedule"),
-          apiFetch<{ settings: Record<string, any> }>("/api/settings?keys=availabilityTemplateV1,weeklyGoalsV1,weekPlanShowConflicts,weekPlanWeekStartYmd,weekPlanTwoWeeksOnly,internshipColor,sportsLawReviewColor,availabilityBreaksV1,availabilityWindowsV1,weekScheduleV1")
+        const [settingsData, eventData] = await Promise.all([
+          apiFetch<{ settings: Record<string, any> }>(`/api/settings?keys=${WEEKLY_PLAN_KEY},${WEEKLY_AVAILABILITY_KEY}`),
+          apiFetch<{ events: CalendarEvent[] }>('/api/events'),
         ]);
-        if (canceled) return;
-        {
-          const settings = (sj?.settings || {}) as Record<string, any>;
-          settingsCache = settings;
-          if (settings.availabilityTemplateV1 && typeof settings.availabilityTemplateV1 === 'object') {
-            setAvailability(settings.availabilityTemplateV1 as any);
-          }
-          if (Array.isArray(settings.weeklyGoalsV1)) setGoals(settings.weeklyGoalsV1 as any[]);
-          if (typeof settings.weekPlanTwoWeeksOnly === 'boolean') setTwoWeeksOnly(settings.weekPlanTwoWeeksOnly as boolean);
-          const wk = settings.weekPlanWeekStartYmd;
-          if (typeof wk === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(wk)) {
-            const [y,m,da] = wk.split('-').map(x=>parseInt(x,10));
-            setWeekStart(saturdayOf(new Date(y,(m as number)-1,da)));
-          }
-          // Load windows and breaks from server settings
-          const readLocalJson = (key: string) => { try { if (typeof window!=='undefined') { const raw = window.localStorage.getItem(key); return raw?JSON.parse(raw):null; } } catch {} return null; };
-          const localWins = readLocalJson(LS_AVAIL_WINDOWS);
-          const localBr = readLocalJson(LS_AVAIL_BREAKS);
-          const serverWins = (settings as any).availabilityWindowsV1;
-          const serverBr = (settings as any).availabilityBreaksV1;
-          const ts = (o:any) => { try { return Date.parse(o?.updatedAt||''); } catch { return 0; } };
-          const bestWins = (ts(localWins) > ts(serverWins)) ? localWins : serverWins;
-          const bestBr = (ts(localBr) > ts(serverBr)) ? localBr : serverBr;
-          if (bestWins && typeof bestWins === 'object') setWindowsByDow(bestWins as Record<number, Array<{ start?: string; end?: string }>>);
-          if (bestBr && typeof bestBr === 'object') setBreaksByDow(bestBr as Record<number, Array<{ start?: string; end?: string }>>);
-          setSettingsReady(true);
-        }
-        {
-          const remote = Array.isArray(bj?.blocks) ? bj.blocks : [];
-          // Re-read localStorage in case it was updated since initial load
-          const local = loadSchedule();
-          console.log('[WeekPlan] API:', remote.length, 'blocks | localStorage:', local.length, 'blocks');
-          
-          // CRITICAL: localStorage is ALWAYS the source of truth
-          // The server is just a backup - we NEVER overwrite localStorage with server data
-          // unless localStorage is completely empty
-          if (local.length > 0) {
-            // localStorage has data - this is our truth, sync it to server
-            console.log('[WeekPlan] Keeping localStorage data (source of truth)');
-            // Always sync to server to ensure it matches
-            apiFetch('/api/schedule', { method: 'PUT', body: { blocks: local } }).catch(() => {});
-          } else if (remote.length > 0) {
-            // localStorage is empty, restore from server
-            console.log('[WeekPlan] Restoring from server (localStorage was empty)');
-            setBlocks(remote as any);
-            saveSchedule(remote as any);
-          } else {
-            // Both empty - check settings backup
-            const fromSettings = (settingsCache as any)?.weekScheduleV1;
-            if (Array.isArray(fromSettings) && fromSettings.length > 0) {
-              console.log('[WeekPlan] Restoring from settings backup');
-              setBlocks(fromSettings as any);
-              saveSchedule(fromSettings as any);
-              apiFetch('/api/schedule', { method: 'PUT', body: { blocks: fromSettings } }).catch(() => {});
-            }
-          }
-        }
-        // Mark blocks as loaded AFTER all loading logic is complete
-        setBlocksLoaded(true);
-      } catch {
-        // Even if loading fails, mark as loaded so user changes can still be saved
-        setBlocksLoaded(true);
-      }
+        const savedAvailability = settingsData.settings?.[WEEKLY_AVAILABILITY_KEY];
+        const savedPlan = settingsData.settings?.[WEEKLY_PLAN_KEY] as WeeklyPlanState | undefined;
+        if (savedAvailability && typeof savedAvailability === 'object') setAvailability({ ...DEFAULT_AVAILABILITY, ...savedAvailability });
+        if (savedPlan?.weekStart === dateKey(weekStart) && Array.isArray(savedPlan.blocks)) setBlocks(savedPlan.blocks);
+        setEvents(eventData.events || []);
+      } catch {}
     })();
-    return () => { canceled = true; };
-  }, []);
-  
-  
-  // Debounced server save for blocks
-  // Note: localStorage save happens immediately in setBlocks wrapper
-  useEffect(() => {
-    if (!blocksLoaded) return;
-    const id = setTimeout(() => {
-      console.log('[WeekPlan] Debounced API save:', blocks.length, 'blocks');
-      // Save to schedule API
-      apiFetch('/api/schedule', { method: 'PUT', body: { blocks } })
-        .then(() => { const now = Date.now(); if (now - (lastSavedToastRef.current || 0) > 5000) { try { notifyToast({ kind: 'success', message: 'Schedule saved.' }); } catch {} lastSavedToastRef.current = now; } })
-        .catch(e => console.error('[WeekPlan] API save failed:', e));
-      
-      // Also save to settings as backup (survives database resets)
-      if (blocks.length > 0) {
-        apiFetch('/api/settings', { method: 'POST', body: { key: 'weekScheduleV1', value: blocks } }).catch(() => {});
-      }
-    }, 300);
-    return () => clearTimeout(id);
-  }, [blocks, blocksLoaded]);
-  
-  // Keep a ref to blocks for use in cleanup/unload handlers
-  const blocksRef = useRef(blocks);
-  useEffect(() => { blocksRef.current = blocks; }, [blocks]);
-  // Throttle success toast for debounced saves
-  const lastSavedToastRef = useRef<number>(0);
-  
-  // Immediate save function for page unload/navigation
-  const saveBlocksNow = useCallback(() => {
-    const currentBlocks = blocksRef.current;
-    console.log('[WeekPlan] saveBlocksNow called with', currentBlocks.length, 'blocks');
-    
-    // Always save to localStorage first (most reliable)
-    try { 
-      window.localStorage.setItem(LS_SCHEDULE, JSON.stringify(currentBlocks)); 
-      console.log('[WeekPlan] Saved to localStorage on unload');
-    } catch (e) { 
-      console.error('[WeekPlan] localStorage save failed:', e); 
-    }
-    
-    // Then try to save to API
-    if (currentBlocks.length > 0) {
-      const data = JSON.stringify({ blocks: currentBlocks });
-      // Try sendBeacon first (works on page unload)
-      if (navigator.sendBeacon) {
-        const sent = navigator.sendBeacon('/api/schedule', new Blob([data], { type: 'application/json' }));
-        console.log('[WeekPlan] sendBeacon result:', sent);
-      } else {
-        // Fallback to fetch with keepalive
-        fetch('/api/schedule', { 
-          method: 'POST', // Use POST for keepalive compatibility
-          headers: { 'Content-Type': 'application/json' }, 
-          body: data,
-          keepalive: true 
-        }).catch(e => console.error('[WeekPlan] Unload fetch failed:', e));
-      }
-    }
-  }, []);
-  
-  // Save on page unload/navigation
-  useEffect(() => {
-    window.addEventListener('beforeunload', saveBlocksNow);
-    window.addEventListener('pagehide', saveBlocksNow);
-    
-    // Also save on visibility change (when user switches tabs/apps)
-    const handleVisibilityChange = () => {
-      if (document.visibilityState === 'hidden') {
-        saveBlocksNow();
-      }
-    };
-    document.addEventListener('visibilitychange', handleVisibilityChange);
-    
-    return () => {
-      // Save on component unmount (client-side navigation)
-      saveBlocksNow();
-      window.removeEventListener('beforeunload', saveBlocksNow);
-      window.removeEventListener('pagehide', saveBlocksNow);
-      document.removeEventListener('visibilitychange', handleVisibilityChange);
-    };
-  }, [saveBlocksNow]);
-  
-  useEffect(() => { try { if (typeof window !== 'undefined') window.localStorage.setItem(LS_WEEK_START, ymd(weekStart)); } catch {} try { void apiFetch('/api/settings', { method: 'PATCH', body: { weekPlanWeekStartYmd: ymd(weekStart) } }); } catch {} }, [weekStart]);
-  useEffect(() => { try { void apiFetch('/api/settings', { method: 'PATCH', body: { availabilityTemplateV1: availability } }); } catch {} }, [availability]);
-  useEffect(() => { try { void apiFetch('/api/settings', { method: 'PATCH', body: { weeklyGoalsV1: goals } }); } catch {} }, [goals]);
-  // Persist windows and breaks
-  useEffect(() => { try { const nowIso=new Date().toISOString(); if (typeof window!=='undefined') window.localStorage.setItem(LS_AVAIL_WINDOWS, JSON.stringify({ ...windowsByDow, updatedAt: nowIso })); if (settingsReady) void apiFetch('/api/settings', { method:'PATCH', body: { availabilityWindowsV1: { ...windowsByDow, updatedAt: nowIso } } }); } catch {} }, [windowsByDow, settingsReady]);
-  useEffect(() => { try { const nowIso=new Date().toISOString(); if (typeof window!=='undefined') window.localStorage.setItem(LS_AVAIL_BREAKS, JSON.stringify({ ...breaksByDow, updatedAt: nowIso })); if (settingsReady) void apiFetch('/api/settings', { method:'PATCH', body: { availabilityBreaksV1: { ...breaksByDow, updatedAt: nowIso } } }); } catch {} }, [breaksByDow, settingsReady]);
+  }, [weekStart]);
 
-  // Derive availability minutes from Windows minus Breaks (always active now)
-  useEffect(() => {
-    setAvailability(prev => {
-      const next: Record<number, number> = { ...prev } as any;
-      let changed = false;
-      for (const dow of [0,1,2,3,4,5,6]) {
-        const wins = (windowsByDow[dow]||[]) as Array<{ start?: string; end?: string }>;
-        const winIntervals: Array<[number,number]> = wins
-          .map(w => [toMin(normHHMM(w.start||''))??-1, toMin(normHHMM(w.end||''))??-1])
-          .filter(([a,b]) => a>=0 && b>=0 && b>a) as Array<[number,number]>;
-        winIntervals.sort((a,b)=>a[0]-b[0]);
-        const mergedWins: Array<[number,number]> = [];
-        for (const iv of winIntervals) {
-          if (!mergedWins.length || iv[0] > mergedWins[mergedWins.length-1][1]) mergedWins.push([iv[0], iv[1]]);
-          else mergedWins[mergedWins.length-1][1] = Math.max(mergedWins[mergedWins.length-1][1], iv[1]);
-        }
-        const brs = (breaksByDow[dow]||[]) as Array<{ start?: string; end?: string }>;
-        const brIntervals: Array<[number,number]> = brs
-          .map(b => [toMin(normHHMM(b.start||''))??-1, toMin(normHHMM(b.end||''))??-1])
-          .filter(([a,b]) => a>=0 && b>=0 && b>a) as Array<[number,number]>;
-        brIntervals.sort((a,b)=>a[0]-b[0]);
-        const mergedBr: Array<[number,number]> = [];
-        for (const iv of brIntervals) {
-          if (!mergedBr.length || iv[0] > mergedBr[mergedBr.length-1][1]) mergedBr.push([iv[0], iv[1]]);
-          else mergedBr[mergedBr.length-1][1] = Math.max(mergedBr[mergedBr.length-1][1], iv[1]);
-        }
-        let total = 0;
-        for (const [ws,we] of mergedWins) {
-          const base = Math.max(0, we - ws);
-          let over = 0;
-          for (const [bs,be] of mergedBr) { const sC = Math.max(ws, bs); const eC = Math.min(we, be); if (eC>sC) over += (eC - sC); }
-          total += Math.max(0, base - over);
-        }
-        if ((next as any)[dow] !== total) { (next as any)[dow] = total; changed = true; }
-      }
-      return changed ? next : prev;
-    });
-  }, [windowsByDow, breaksByDow]);
-
-  // Tasks for catch-up and unscheduled lists come from shared useTasks hook
-  // Load goals and twoWeeksOnly flag from localStorage
-  useEffect(() => { setGoals(loadGoals()); }, []);
-  useEffect(() => { try { if (typeof window!=='undefined') setTwoWeeksOnly((window.localStorage.getItem(LS_TWO_WEEKS)||'false')==='true'); } catch {} }, []);
-  useEffect(() => { if (typeof window!=='undefined') window.localStorage.setItem(LS_TWO_WEEKS, twoWeeksOnly ? 'true':'false'); try { void apiFetch('/api/settings', { method: 'PATCH', body: { weekPlanTwoWeeksOnly: twoWeeksOnly } }); } catch {} }, [twoWeeksOnly]);
-
-  const days = useMemo(() => Array.from({ length: 7 }, (_, i) => { const d = new Date(weekStart); d.setDate(d.getDate()+i); return d; }), [weekStart]);
-
-  const colorForCourse = useMemo(() => {
-    const map: Record<string, string> = {};
-    for (const c of (courses||[])) {
-      const key = normCourseKey(c?.title || '');
-      const col = (c?.color || '').toString().trim();
-      if (key && col) map[key] = col;
-    }
-    return (name?: string | null) => {
-      const raw = (name || '').toString();
-      const k = normCourseKey(raw);
-      try { if (typeof window !== 'undefined' && k === 'internship') { const ls = window.localStorage.getItem('internshipColor'); if (ls) return ls; } } catch {}
-      try { if (typeof window !== 'undefined' && k === 'sports law review') { const ls = window.localStorage.getItem('sportsLawReviewColor'); if (ls) return ls; } } catch {}
-      return map[k] || courseColor(raw || '');
-    };
-  }, [courses]);
-
-  const plannedByDay = useMemo(() => {
-    const m: Record<string, number> = {}; for (const d of days) m[ymd(d)] = 0;
-    for (const b of blocks) if (m[b.day] !== undefined) m[b.day] += b.plannedMinutes;
-    return m;
-  }, [blocks, days]);
-
-  
-
-  // Event intervals (minutes) by day key, merged and minutes totals — used in capacity math
-  const eventIntervalsByKey = useMemo(() => {
-    const map: Record<string, Array<[number,number]>> = {};
-    for (const d of days) map[ymd(d)] = [];
-    // Classes
-    for (const c of (courses||[])) {
-      const start = c.startDate ? new Date(c.startDate) : null;
-      const end = c.endDate ? new Date(c.endDate) : null;
-      const blocksArr = (Array.isArray(c.meetingBlocks) && c.meetingBlocks.length)
-        ? c.meetingBlocks
-        : ((Array.isArray(c.meetingDays) && c.meetingStart && c.meetingEnd) ? [{ days: c.meetingDays, start: c.meetingStart, end: c.meetingEnd }] : []);
-      if (!Array.isArray(blocksArr) || !blocksArr.length) continue;
-      for (const d of days) {
-        const within = (!start || d >= start) && (!end || d <= end);
-        if (!within) continue;
-        for (const b of blocksArr) {
-          if (!Array.isArray(b.days)) continue;
-          if (b.days.includes(d.getDay())) {
-            const sMin = toMin(normHHMM((b as any).start)); const eMin = toMin(normHHMM((b as any).end));
-            if (sMin!=null && eMin!=null && eMin>sMin) map[ymd(d)].push([sMin, eMin]);
-          }
-        }
-      }
-    }
-    // Timed tasks
-    for (const t of (tasks||[])) {
-      const k = ymd(new Date(t.dueDate)); if (!(k in map)) continue;
-      const sMin = toMin(normHHMM((t as any).startTime)); const eMin = toMin(normHHMM((t as any).endTime));
-      if (sMin!=null && eMin!=null && eMin>sMin) map[k].push([sMin, eMin]);
-    }
-    // Merge per day
-    for (const k of Object.keys(map)) {
-      const arr = map[k].slice().sort((a,b)=>a[0]-b[0]);
-      const merged: Array<[number,number]> = [];
-      for (const iv of arr) {
-        if (!merged.length || iv[0] > merged[merged.length-1][1]) merged.push([iv[0], iv[1]]);
-        else merged[merged.length-1][1] = Math.max(merged[merged.length-1][1], iv[1]);
-      }
-      map[k] = merged;
-    }
-    return map;
-  }, [courses, tasks, days]);
-
-  const eventMinutesByKey = useMemo(() => {
-    const m: Record<string, number> = {};
-    for (const d of days) {
-      const k = ymd(d);
-      const iv = eventIntervalsByKey[k] || [];
-      let sum = 0; for (const [a,b] of iv) sum += Math.max(0, b-a);
-      m[k] = sum;
-    }
-    return m;
-  }, [days, eventIntervalsByKey]);
-
-  const effectiveCapByKey = useMemo(() => {
-    const m: Record<string, number> = {};
-    for (const d of days) {
-      const k = ymd(d); const dow = d.getDay();
-      // Build merged windows and breaks
-      const winIntervals: Array<[number,number]> = (windowsByDow[dow]||[])
-        .map(w => [toMin(normHHMM(w.start||''))??-1, toMin(normHHMM(w.end||''))??-1])
-        .filter(([a,b]) => a>=0 && b>=0 && b>a) as Array<[number,number]>;
-      winIntervals.sort((a,b)=>a[0]-b[0]);
-      const mergedWins: Array<[number,number]> = [];
-      for (const iv of winIntervals) { if (!mergedWins.length || iv[0] > mergedWins[mergedWins.length-1][1]) mergedWins.push([iv[0], iv[1]]); else mergedWins[mergedWins.length-1][1] = Math.max(mergedWins[mergedWins.length-1][1], iv[1]); }
-      const brIntervals: Array<[number,number]> = (breaksByDow[dow]||[])
-        .map(b => [toMin(normHHMM(b.start||''))??-1, toMin(normHHMM(b.end||''))??-1])
-        .filter(([a,b]) => a>=0 && b>=0 && b>a) as Array<[number,number]>;
-      brIntervals.sort((a,b)=>a[0]-b[0]);
-      const mergedBr: Array<[number,number]> = [];
-      for (const iv of brIntervals) { if (!mergedBr.length || iv[0] > mergedBr[mergedBr.length-1][1]) mergedBr.push([iv[0], iv[1]]); else mergedBr[mergedBr.length-1][1] = Math.max(mergedBr[mergedBr.length-1][1], iv[1]); }
-      const evIntervals: Array<[number,number]> = eventIntervalsByKey[k] || [];
-      // Sum W − overlaps(B) − overlaps(E)
+  const busyMinutes = useMemo(() => {
+    const busy: Record<string, number> = {};
+    for (const day of days) {
+      const key = dateKey(day);
       let total = 0;
-      if (mergedWins.length>0) {
-        for (const [ws,we] of mergedWins) {
-          const base = Math.max(0, we - ws);
-          let overB = 0; for (const [bs,be] of mergedBr) { const sC = Math.max(ws, bs); const eC = Math.min(we, be); if (eC>sC) overB += (eC - sC); }
-          let overE = 0; for (const [es,ee] of evIntervals) { const sC = Math.max(ws, es); const eC = Math.min(we, ee); if (eC>sC) overE += (eC - sC); }
-          total += Math.max(0, base - overB - overE);
-        }
-        m[k] = Math.max(0, total);
-      } else {
-        // Fallback when no explicit windows: subtract total event minutes from availability
-        const availMin = Math.max(0, Number(availability[dow]||0));
-        const evMin = Math.max(0, Number(eventMinutesByKey[k] || 0));
-        m[k] = Math.max(0, availMin - evMin);
+      for (const course of activeCourses) {
+        for (const block of courseBlocks(course)) if (block.days.includes(day.getDay())) total += duration(block.start, block.end);
       }
+      for (const event of events) if (event.date === key && !event.allDay) total += duration(event.startTime, event.endTime);
+      busy[key] = total;
     }
-    return m;
-  }, [days, windowsByDow, breaksByDow, availability, eventIntervalsByKey, eventMinutesByKey]);
+    return busy;
+  }, [days, activeCourses, events]);
 
-  const eventsByDay = useMemo(() => {
-    const map: Record<string, Array<{ label: string; time?: string; color?: string; s?: number }>> = {};
-    const keyOf = (dt: Date) => `${dt.getFullYear()}-${String(dt.getMonth()+1).padStart(2,'0')}-${String(dt.getDate()).padStart(2,'0')}`;
-    const fmt12 = (hhmm?: string | null) => {
-      if (!hhmm || !/^(\d{2}):(\d{2})$/.test(hhmm)) return '';
-      const [hStr, mStr] = hhmm.split(':');
-      const h = parseInt(hStr, 10);
-      const ap = h >= 12 ? 'PM' : 'AM';
-      let h12 = h % 12;
-      if (h12 === 0) h12 = 12;
-      return `${h12}:${mStr} ${ap}`;
-    };
-    const fmt12Range = (s?: string|null, e?: string|null) => {
-      const ss = fmt12(s||''); const ee = fmt12(e||'');
-      if (!ss || !ee) return (ss||ee||'All day');
-      const sm = /\s(AM|PM)$/i.exec(ss)?.[1] || '';
-      const em = /\s(AM|PM)$/i.exec(ee)?.[1] || '';
-      if (sm && em && sm===em) return `${ss.replace(/\s(AM|PM)$/i,'')}–${ee.replace(/\s(AM|PM)$/i,'')} ${sm}`;
-      return `${ss}–${ee}`;
-    };
-    for (const d of days) {
-      map[ymd(d)] = [];
-    }
-    // Classes only (no tasks) in Events panel
-    for (const c of (courses||[])) {
-      const start = c.startDate ? new Date(c.startDate) : null;
-      const end = c.endDate ? new Date(c.endDate) : null;
-      const blocksArr = (Array.isArray(c.meetingBlocks) && c.meetingBlocks.length)
-        ? c.meetingBlocks
-        : ((Array.isArray(c.meetingDays) && c.meetingStart && c.meetingEnd)
-            ? [{ days: c.meetingDays, start: c.meetingStart, end: c.meetingEnd, location: c.room || c.location || null }]
-            : []);
-      if (!Array.isArray(blocksArr) || !blocksArr.length) continue;
-      for (const d of days) {
-        const within = (!start || d >= start) && (!end || d <= end);
-        if (!within) continue;
-        for (const b of blocksArr) {
-          if (!Array.isArray(b.days)) continue;
-          if (!b.days.includes(d.getDay())) continue;
-          const sNorm = normHHMM((b as any).start);
-          const eNorm = normHHMM((b as any).end);
-          const k = keyOf(d);
-          const courseName = (c.title || c.code || '').toString();
-          const sMin = toMin(sNorm||'');
-          if (!map[k]) map[k] = [];
-          map[k].push({
-            label: courseName || 'Class',
-            time: (sNorm && eNorm) ? fmt12Range(sNorm,eNorm) : 'All day',
-            color: colorForCourse(courseName),
-            s: (sMin ?? 24*60),
-          });
-        }
-      }
-    }
-    // Sort by start minutes asc; all-day at end
-    for (const k of Object.keys(map)) {
-      map[k].sort((a,b) => (
-        (Number(a.s ?? 1e9) - Number(b.s ?? 1e9)) ||
-        String(a.label || '').localeCompare(String(b.label || ''))
-      ));
-    }
-    return map;
-  }, [courses, days]);
+  const generated = useMemo(() => buildWeeklyPlanDetailed(relevantTasks, weekStart, availability, busyMinutes), [relevantTasks, weekStart, availability, busyMinutes]);
+  const byDay = useMemo(() => Object.fromEntries(days.map(day => [dateKey(day), blocks.filter(block => block.day === dateKey(day))])) as Record<string, WeeklyPlanBlock[]>, [days, blocks]);
+  const plannedByTask = useMemo(() => Object.fromEntries(relevantTasks.map(task => [task.id, blocks.filter(block => block.taskId === task.id).reduce((sum, block) => sum + block.plannedMinutes, 0)])) as Record<string, number>, [relevantTasks, blocks]);
+  const remainders = useMemo(() => generated.remainders.map(item => ({ ...item, plannedMinutes: plannedByTask[item.taskId] || 0, remainingMinutes: Math.max(0, item.estimatedMinutes - (plannedByTask[item.taskId] || 0)) })), [generated.remainders, plannedByTask]);
+  const didNotFit = remainders.filter(item => item.remainingMinutes > 0);
+  const totalGross = days.reduce((sum, day) => sum + (availability[day.getDay()] || 0), 0);
+  const totalBusy = Object.values(busyMinutes).reduce((sum, value) => sum + value, 0);
+  const totalNet = Object.values(generated.availableByDay).reduce((sum, value) => sum + value, 0);
+  const totalPlanned = blocks.reduce((sum, block) => sum + block.plannedMinutes, 0);
 
-  const taskById = useMemo(() => {
-    const m = new Map<string, Task>();
-    for (const t of (tasks || [])) {
-      if (!t || !t.id) continue;
-      m.set(t.id, t);
-    }
-    return m;
-  }, [tasks]);
-
-  function moveBlockLaterToday(b: ScheduledBlock) {
-    // Just reorder to end if same-day slack allows (cap - busy - others >= minutes); else no-op
-    const k = b.day;
-    const effCap = effectiveCapByKey[k] || 0;
-    const others = (plannedByDay[k] || 0) - b.plannedMinutes;
-    const slack = effCap - others;
-    if (slack < b.plannedMinutes) return; // insufficient space today
-    setBlocks(prev => {
-      const sameDay = prev.filter(x => x.day === k && x.id !== b.id);
-      const otherDays = prev.filter(x => x.day !== k);
-      return [...otherDays, ...sameDay, b];
-    });
-  }
-
-  function pushBlockToTomorrow(b: ScheduledBlock) {
-    const tryDays = 21; // look ahead up to 3 weeks
-    const base = new Date(`${b.day}T12:00:00`);
-    const withoutThis = new Map<string, number>(Object.entries(plannedByDay));
-    withoutThis.set(b.day, Math.max(0, (plannedByDay[b.day]||0) - b.plannedMinutes));
-    for (let i=1;i<=tryDays;i++) {
-      const d = new Date(base); d.setDate(d.getDate()+i);
-      const k = ymd(d); const dow = d.getDay();
-      const effCap = Math.max(0, Number(availability[dow] || 0));
-      const planned = withoutThis.get(k) || 0;
-      if (planned + b.plannedMinutes <= effCap) {
-        setBlocks(prev => prev.map(x => x.id === b.id ? { ...x, day: k } : x));
-        return;
-      }
-    }
-  }
-
-  // Weekly quota selectors (current week in Chicago time)
-  const weekKeysCur = useMemo(() => weekKeysChicago(new Date()), []);
-  const todayKeyCur = useMemo(() => chicagoYmd(new Date()), []);
-  const todayIdxCur = useMemo(() => weekKeysCur.indexOf(todayKeyCur), [weekKeysCur, todayKeyCur]);
-  const plannedByDayCur = useMemo(() => {
-    const m: Record<string, number> = {}; for (const k of weekKeysCur) m[k] = 0;
-    for (const b of blocks) if (m[b.day] !== undefined) m[b.day] += b.plannedMinutes;
-    return m;
-  }, [blocks, weekKeysCur]);
-  const todayDowCur = useMemo(() => { const [y,m,da]=todayKeyCur.split('-').map(x=>parseInt(x,10)); return new Date(y,(m as number)-1,da).getDay(); }, [todayKeyCur]);
-  const todayCapacityCur = useMemo(() => Math.max(0, Number(availability[todayDowCur]||0)), [availability, todayDowCur]);
-  const remainingTodayCapacityCur = useMemo(() => Math.max(0, todayCapacityCur - (plannedByDayCur[todayKeyCur]||0)), [todayCapacityCur, plannedByDayCur, todayKeyCur]);
-  const workdaysLeftCur = useMemo(() => {
-    const future = weekKeysCur.slice(Math.max(0, todayIdxCur+1)).filter(k => { const [y,m,da]=k.split('-').map(x=>parseInt(x,10)); const d=new Date(y,(m as number)-1,da); return (availability[d.getDay()]||0) > 0; }).length;
-    const includeToday = remainingTodayCapacityCur > 0 ? 1 : 0;
-    return includeToday + future;
-  }, [weekKeysCur, todayIdxCur, availability, remainingTodayCapacityCur]);
-  const globalGoalMinutes = useMemo(() => (goals.find(g => g.scope==='global')?.weeklyMinutes || 0), [goals]);
-  const loggedToDateCur = useMemo(() => {
-    return (sessions||[]).filter((s:any)=>{ const k=chicagoYmd(new Date(s.when)); const i=weekKeysCur.indexOf(k); return i!==-1 && i<=todayIdxCur; }).reduce((sum:number,s:any)=>sum+(s.minutes||0),0);
-  }, [sessions, weekKeysCur, todayIdxCur]);
-  const weeklyNeededCur = useMemo(() => Math.max(0, globalGoalMinutes - loggedToDateCur), [globalGoalMinutes, loggedToDateCur]);
-  const dailyQuotaCur = useMemo(() => Math.ceil(weeklyNeededCur / Math.max(workdaysLeftCur,1)), [weeklyNeededCur, workdaysLeftCur]);
-
-  // Catch-Up helpers
-  function ymdFromISO(iso: string): string { const dt = new Date(iso); return ymd(dt); }
-  function addDaysYmd(ymdStr: string, delta: number): string { const [y,m,da]=ymdStr.split('-').map(n=>parseInt(n,10)); const d=new Date(y,(m as number)-1,da); d.setDate(d.getDate()+delta); return ymd(d); }
-
-  function computeCatchUpPreview() {
+  async function persist(nextBlocks = blocks, nextAvailability = availability) {
+    setSaving(true);
     try {
-      const today = ymd(new Date());
-      const horizonEnd = addDaysYmd(today, 13); // 14 days
-      const horizonDays: string[] = []; for (let i=0;i<14;i++) horizonDays.push(addDaysYmd(today, i));
-      const totalCap: Record<string, number> = {};
-      for (const dk of horizonDays) { const [Y,M,D] = dk.split('-').map(x=>parseInt(x,10)); const dt = new Date(Y,(M as number)-1,D); totalCap[dk] = availability[dt.getDay()] ?? 0; }
-      const usedBefore: Record<string, number> = {}; horizonDays.forEach(dk => usedBefore[dk] = 0);
-      for (const b of blocks) if (usedBefore[b.day] !== undefined) usedBefore[b.day] += b.plannedMinutes;
-      const capLeft: Record<string, number> = {}; horizonDays.forEach(dk => { capLeft[dk] = Math.max(0, (totalCap[dk]||0) - (usedBefore[dk]||0)); });
-
-      const scheduledByTask = new Map<string, number>();
-      for (const b of blocks) { if (b.taskId) scheduledByTask.set(b.taskId, (scheduledByTask.get(b.taskId)||0) + b.plannedMinutes); }
-
-      const spill = (tasks||[]).filter(t => t && t.status==='todo').filter(t => { const dueY = ymdFromISO(t.dueDate); return (dueY < today || dueY <= horizonEnd); });
-      const withRemaining: Array<{ task: Task; est: number; remaining: number; guessed: boolean }> = spill.map(t => {
-        const { minutes: baseMinutes, guessed } = estimateMinutesForTask(t as any);
-        const already = scheduledByTask.get(t.id) || 0;
-        const rem = Math.max(0, baseMinutes - already);
-        return { task: t, est: baseMinutes, remaining: rem, guessed };
-      }).filter(x => x.remaining > 0);
-
-      withRemaining.sort((a,b) => {
-        const ad = ymdFromISO(a.task.dueDate), bd = ymdFromISO(b.task.dueDate);
-        if (ad !== bd) return ad.localeCompare(bd);
-        const ap = a.task.priority ?? 0, bp = b.task.priority ?? 0; if (ap !== bp) return bp - ap;
-        return b.remaining - a.remaining;
-      });
-
-      const proposed = horizonDays.map(dk => ({ day: dk, total: totalCap[dk]||0, usedBefore: usedBefore[dk]||0, usedAfter: usedBefore[dk]||0, items: [] as Array<{ taskId:string; title:string; course:string; minutes:number; guessed:boolean }> }));
-      const unsched: Array<{ taskId: string; title: string; remaining: number; dueYmd: string }> = [];
-      for (const entry of withRemaining) {
-        const t = entry.task; let rem = entry.remaining; const dueY = ymdFromISO(t.dueDate); const guessed = entry.guessed;
-        for (const dk of horizonDays) {
-          if (rem <= 0) break; if (dk > dueY) break; let left = capLeft[dk] || 0; if (left < 30) continue;
-          let chunk = Math.min(rem, left); if (chunk >= 30) chunk = chunk - (chunk % 30); if (chunk < 30) continue;
-          const row = proposed.find(r => r.day === dk)!; row.items.push({ taskId: t.id, title: t.title, course: t.course || '', minutes: chunk, guessed }); row.usedAfter += chunk; capLeft[dk] -= chunk; rem -= chunk;
-        }
-        if (rem > 0) unsched.push({ taskId: t.id, title: t.title, remaining: rem, dueYmd: dueY });
-      }
-      setCatchupPreview({ days: proposed, unschedulable: unsched });
-      setShowCatchup(true);
-    } catch { setCatchupPreview(null); setShowCatchup(false); }
+      const state: WeeklyPlanState = { weekStart: dateKey(weekStart), blocks: nextBlocks, updatedAt: new Date().toISOString() };
+      await apiFetch('/api/settings', { method: 'PATCH', body: { [WEEKLY_PLAN_KEY]: state, [WEEKLY_AVAILABILITY_KEY]: nextAvailability } });
+      setMessage('Weekly plan saved.');
+    } catch { setMessage('Weekly plan could not be saved.'); }
+    finally { setSaving(false); }
   }
 
-  function applyCatchUp() {
-    if (!catchupPreview) return;
-    const prev = blocks.slice();
-    const additions: ScheduledBlock[] = [];
-    for (const dayRow of catchupPreview.days) {
-      for (const it of dayRow.items) {
-        additions.push({ id: uid(), taskId: it.taskId, day: dayRow.day, plannedMinutes: it.minutes, guessed: it.guessed, title: it.title, course: it.course || '', pages: null, priority: null, catchup: true });
-      }
-    }
-    setUndoSnapshot(prev);
-    setBlocks(prev => [...prev, ...additions]);
-    setShowCatchup(false);
-    setCatchupPreview(null);
+  async function buildPlan() {
+    setBlocks(generated.blocks);
+    await persist(generated.blocks, availability);
   }
-
-  function undoCatchUp() { if (!undoSnapshot) return; setBlocks(undoSnapshot); setUndoSnapshot(null); }
-
-  // Tasks to schedule: from Tasks API (status=todo), excluding tasks already scheduled this week
-  const tasksTodo = useMemo(() => (tasks||[]).filter(t => t && t.status === 'todo'), [tasks]);
-  const scheduledIdsThisWeek = useMemo(() => {
-    const keys = new Set(days.map(d => ymd(d))); return new Set(blocks.filter(b => keys.has(b.day)).map(b => b.taskId));
-  }, [blocks, days]);
-  const unscheduledTasks = useMemo(() => {
-    const base = tasksTodo.filter(t => !scheduledIdsThisWeek.has(t.id));
-    if (!twoWeeksOnly) return base;
-    const today = ymd(new Date());
-    const end = addDaysYmd(today, 13);
-    return base.filter(t => { const dy = ymdFromISO(t.dueDate); return dy >= today && dy <= end; });
-  }, [tasksTodo, scheduledIdsThisWeek, twoWeeksOnly]);
-  function sortValCourse(t: Task) { return displayCourseFor(t).toLowerCase(); }
-  function sortValDue(t: Task) { const n = new Date(t.dueDate).getTime(); return isNaN(n) ? Number.MAX_SAFE_INTEGER : n; }
-  function sortValPriority(t: Task) { return -(t.priority ?? 0); }
-  function sortValEstimate(t: Task) { return -((t.estimatedMinutes ?? 0) as number); }
-  const unscheduledSorted = useMemo(() => {
-    const arr = unscheduledTasks.slice();
-    arr.sort((a,b) => {
-      let cmp = 0;
-      if (sortBy === 'due') cmp = sortValDue(a) - sortValDue(b);
-      else if (sortBy === 'course') cmp = sortValCourse(a).localeCompare(sortValCourse(b));
-      else if (sortBy === 'priority') cmp = sortValPriority(a) - sortValPriority(b);
-      else cmp = sortValEstimate(a) - sortValEstimate(b);
-      return sortDir === 'asc' ? cmp : -cmp;
-    });
-    return arr;
-  }, [unscheduledTasks, sortBy, sortDir]);
-  function displayCourseFor(t: Task): string {
-    const c = (t.course || '').trim(); if (c) return c;
-    const a = (t as any).activity; if ((a || '').toLowerCase() === 'internship') return 'Internship';
-    const titleL = (t.title || '').toLowerCase();
-    const tagsL: string[] = Array.isArray((t as any).tags) ? ((t as any).tags as string[]).map(s=>String(s).toLowerCase()) : [];
-    if (titleL.includes('sports law review') || tagsL.includes('sports law review') || /\bslr\b/i.test(t.title || '')) return 'Sports Law Review';
-    return '';
-  }
-  function onDragStartTask(e: React.DragEvent, t: Task) { e.dataTransfer.setData('text/plain', `task:${t.id}`); }
-  function onDropDay(e: React.DragEvent, d: Date) {
-    e.preventDefault(); const id = e.dataTransfer.getData('text/plain'); if (!id) return;
-    if (id.startsWith('task:')) {
-      const tid = id.slice('task:'.length);
-      const t = tasksTodo.find(x => x.id === tid);
-      if (!t) return;
-      const { minutes, guessed } = estimateMinutesForTask(t);
-      const p = (typeof (t as any).pagesRead==='number' && (t as any).pagesRead>0) ? (t as any).pagesRead : null;
-      const block: ScheduledBlock = { id: uid(), taskId: t.id, day: ymd(d), plannedMinutes: minutes, guessed, title: t.title, course: displayCourseFor(t) || '', pages: p, priority: t.priority ?? null };
-      setBlocks(prev => [...prev, block]);
+  async function clearPlan() { setBlocks([]); await persist([], availability); }
+  async function moveBlock(blockId: string, day: string) {
+    const block = blocks.find(item => item.id === blockId);
+    if (!block) return;
+    const currentDayMinutes = blocks.filter(item => item.day === day && item.id !== blockId).reduce((sum, item) => sum + item.plannedMinutes, 0);
+    const capacity = generated.availableByDay[day] || 0;
+    if (currentDayMinutes + block.plannedMinutes > capacity) {
+      setMessage(`That move would exceed ${formatMinutes(capacity)} of net study capacity for the day.`);
       return;
     }
-    // legacy: backlog id
-    const it = backlog.find(x => x.id === id); if (!it) return;
-    const { minutes, guessed } = estimateMinutesFor(it);
-    const block: ScheduledBlock = { id: uid(), taskId: it.id, day: ymd(d), plannedMinutes: minutes, guessed, title: it.title, course: it.course, pages: it.pages ?? null, priority: it.priority ?? null };
-    setBlocks(prev => [...prev, block]);
+    const next = blocks.map(item => item.id === blockId ? { ...item, day } : item);
+    setBlocks(next); await persist(next, availability);
   }
-  function removeBlock(id: string) { setBlocks(prev => prev.filter(b => b.id !== id)); }
+  function onDrop(event: React.DragEvent, day: string) { event.preventDefault(); const blockId = event.dataTransfer.getData('text/plain'); if (blockId) void moveBlock(blockId, day); }
+  function updateAvailability(day: number, minutes: number) { setAvailability(previous => ({ ...previous, [day]: Math.max(0, minutes) })); }
+  function changeWeek(offset: number) { setWeekStart(addDays(weekStart, offset * 7)); setBlocks([]); setMessage(''); }
 
-  function autopackWeek() {
-    const keys = new Set(days.map(d => ymd(d)));
-    const existing = blocks.filter(b => keys.has(b.day));
-    const planned = new Map<string, number>(); for (const d of days) planned.set(ymd(d), existing.filter(b => b.day===ymd(d)).reduce((s,b)=>s+b.plannedMinutes,0));
-    const eff = (d: Date) => effectiveCapByKey[ymd(d)] ?? (availability[d.getDay()] ?? 0);
-    const unscheduled = unscheduledSorted.filter(t => !existing.some(b => b.taskId === t.id));
-    const nextBlocks: ScheduledBlock[] = [];
-    for (const t of unscheduled) {
-      const { minutes, guessed } = estimateMinutesForTask(t);
-      const dueY = chicagoYmd(new Date(t.dueDate));
-      let placed = false;
-      // try days up to and including due date
-      for (const d of days) {
-        const k = ymd(d);
-        if (k > dueY) continue;
-        const cap = eff(d); const cur = planned.get(k)!;
-        if (cur + minutes <= cap) { nextBlocks.push({ id: uid(), taskId: t.id, day: k, plannedMinutes: minutes, guessed, title: t.title, course: t.course || '', pages: (typeof (t as any).pagesRead==='number' && (t as any).pagesRead>0)? (t as any).pagesRead : null, priority: t.priority ?? null }); planned.set(k, cur + minutes); placed = true; break; }
-      }
-      // if not placed before due date, choose best remaining before due date if any, else best overall
-      if (!placed) {
-        let bestDay: Date | null = null; let bestRem = -Infinity;
-        for (const d of days) { const k = ymd(d); if (k > dueY) continue; const cap = eff(d); const cur = planned.get(k)!; const rem = cap - cur; if (rem > bestRem) { bestRem = rem; bestDay = d; } }
-        if (bestDay) {
-          const k = ymd(bestDay);
-          nextBlocks.push({ id: uid(), taskId: t.id, day: k, plannedMinutes: minutes, guessed, title: t.title, course: t.course || '', pages: (typeof (t as any).pagesRead==='number' && (t as any).pagesRead>0)? (t as any).pagesRead : null, priority: t.priority ?? null });
-          planned.set(k, planned.get(k)! + minutes);
-          placed = true;
-        }
-      }
-      // final fallback: any day in week with most remaining
-      if (!placed) {
-        let bestDay: Date | null = null; let bestRem = -Infinity;
-        for (const d2 of days) { const k2 = ymd(d2); const cap2 = eff(d2); const cur2 = planned.get(k2)!; const rem2 = cap2 - cur2; if (rem2 > bestRem) { bestRem = rem2; bestDay = d2; } }
-        if (bestDay) {
-          const k2 = ymd(bestDay);
-          nextBlocks.push({ id: uid(), taskId: t.id, day: k2, plannedMinutes: minutes, guessed, title: t.title, course: t.course || '', pages: (typeof (t as any).pagesRead==='number' && (t as any).pagesRead>0)? (t as any).pagesRead : null, priority: t.priority ?? null });
-          planned.set(k2, planned.get(k2)! + minutes);
-        }
-      }
-    }
-    if (nextBlocks.length) setBlocks(prev => [...prev, ...nextBlocks]);
-  }
-function toMin(hhmm?: string | null): number | null { if (!hhmm) return null; const m=/^(\d{2}):(\d{2})$/.exec(hhmm); if(!m) return null; const h=parseInt(m[1],10), mi=parseInt(m[2],10); if(isNaN(h)||isNaN(mi)) return null; return h*60+mi; }
-function minutesToHHMM(mins: number): string { const m = ((mins % 1440) + 1440) % 1440; const h = Math.floor(m/60); const mi = m % 60; return `${String(h).padStart(2,'0')}:${String(mi).padStart(2,'0')}`; }
-function adjustTimeText(val: string, deltaMin: number): string {
-  const n = toMin(normHHMM(val||'')); if (n==null) return val;
-  const next = minutesToHHMM(n + deltaMin);
-  return fmt12Input(next);
-}
-function shiftWeek(delta: number) {
-    // Save immediately before shifting to prevent data loss
-    try { void apiFetch('/api/schedule', { method: 'PUT', body: { blocks } }).then(() => { try { notifyToast({ kind: 'success', message: 'Schedule saved.' }); } catch {} }); } catch {}
-    setWeekStart(prev => { const x = new Date(prev); x.setDate(x.getDate() + delta*7); return saturdayOf(x); });
-  }
-  function clearThisWeek() { const keys = new Set(days.map(d => ymd(d))); setBlocks(prev => prev.filter(b => !keys.has(b.day))); }
-  async function promoteWeekToTasks() {
-    const keys = new Set(days.map(d => ymd(d))); const batch = blocks.filter(b => keys.has(b.day)); let ok = 0, fail = 0;
-    for (const b of batch) {
-      const body: any = { title: b.title, course: b.course || null, dueDate: endOfDayIso(b.day), status: 'todo', estimatedMinutes: b.plannedMinutes, priority: b.priority ?? null, tags: ['week-plan'] };
-      try { await apiFetch('/api/tasks', { method: 'POST', body }); ok++; } catch { fail++; }
-    }
-    try { notifyToast({ kind: fail ? 'warning' : 'success', message: `Promoted ${ok} task${ok!==1?'s':''}${fail?`, ${fail} failed`:''}.` }); } catch {}
-  }
-
-  const noTasksToPlan = unscheduledSorted.length === 0;
-
-  return (
-    <main className="flex flex-col space-y-6">
-      <section className="card p-6 space-y-4 order-1">
-        <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
-          <div className="flex items-center gap-2">
-            <button aria-label="Previous week" onClick={()=>shiftWeek(-1)} className="px-2 py-1 rounded border border-[#1b2344] focus-visible:outline focus-visible:outline-2 focus-visible:outline-emerald-500">◀</button>
-            <div className="text-sm" aria-live="polite">Week of {dayLabel(weekStart)}</div>
-            <button aria-label="Jump to this week" onClick={()=>setWeekStart(saturdayOf(new Date()))} className="px-2 py-1 rounded border border-[#1b2344] focus-visible:outline focus-visible:outline-2 focus-visible:outline-emerald-500">This week</button>
-            <button aria-label="Next week" onClick={()=>shiftWeek(1)} className="px-2 py-1 rounded border border-[#1b2344] focus-visible:outline focus-visible:outline-2 focus-visible:outline-emerald-500">▶</button>
-          </div>
-          <div className="flex items-center gap-3">
-            <button onClick={autopackWeek} className="px-3 py-2 rounded bg-emerald-600 hover:bg-emerald-500 text-sm focus-visible:outline focus-visible:outline-2 focus-visible:outline-emerald-500">Autopack Week</button>
-            <button onClick={clearThisWeek} className="px-3 py-2 rounded border border-[#1b2344] text-sm focus-visible:outline focus-visible:outline-2 focus-visible:outline-emerald-500">Clear This Week</button>
-            <button onClick={promoteWeekToTasks} className="px-3 py-2 rounded border border-emerald-600 text-emerald-400 text-sm focus-visible:outline focus-visible:outline-2 focus-visible:outline-emerald-500">Promote Week → Tasks</button>
-            <button onClick={computeCatchUpPreview} className="px-3 py-2 rounded border border-[#1b2344] text-sm focus-visible:outline focus-visible:outline-2 focus-visible:outline-emerald-500">Catch-Up</button>
-            <button onClick={undoCatchUp} className="px-3 py-2 rounded border border-[#1b2344] text-sm disabled:opacity-50" disabled={!undoSnapshot}>Undo Last</button>
-            <div className="text-xs text-slate-300/80 ml-2">Need ~{minutesToHM(dailyQuotaCur)}/day to hit goal · <button onClick={autopackWeek} className="underline">Autopack</button></div>
-          </div>
-        </div>
-        {/* Compact Availability Summary */}
-        <div className="space-y-3">
-          <div className="flex flex-wrap items-center justify-between gap-3">
-            <div className="text-sm text-slate-300/70">Weekly Availability</div>
-            <div className="flex flex-wrap gap-2 text-xs">
-              <button onClick={()=>{ const w = [{ id: uid(), start:'9:00 AM', end:'5:00 PM' }]; setWindowsByDow({ 0:[], 1:w.map(x=>({...x, id:uid()})), 2:w.map(x=>({...x, id:uid()})), 3:w.map(x=>({...x, id:uid()})), 4:w.map(x=>({...x, id:uid()})), 5:w.map(x=>({...x, id:uid()})), 6:[] }); setBreaksByDow({ 0:[],1:[],2:[],3:[],4:[],5:[],6:[] }); }} className="px-2 py-1 rounded border border-emerald-600/50 text-emerald-400 hover:bg-emerald-900/20">9–5 Weekdays</button>
-              <button onClick={()=>{ const w = [{ id: uid(), start:'6:00 PM', end:'10:00 PM' }]; setWindowsByDow({ 0:w.map(x=>({...x, id:uid()})), 1:w.map(x=>({...x, id:uid()})), 2:w.map(x=>({...x, id:uid()})), 3:w.map(x=>({...x, id:uid()})), 4:w.map(x=>({...x, id:uid()})), 5:w.map(x=>({...x, id:uid()})), 6:w.map(x=>({...x, id:uid()})) }); setBreaksByDow({ 0:[],1:[],2:[],3:[],4:[],5:[],6:[] }); }} className="px-2 py-1 rounded border border-blue-600/50 text-blue-400 hover:bg-blue-900/20">Evenings</button>
-              <button onClick={()=>{ setWindowsByDow({ 0:[],1:[],2:[],3:[],4:[],5:[],6:[] }); setBreaksByDow({ 0:[],1:[],2:[],3:[],4:[],5:[],6:[] }); }} className="px-2 py-1 rounded border border-white/20 text-slate-400 hover:bg-white/5">Clear</button>
-            </div>
-          </div>
-          
-          {/* Compact 7-day grid */}
-          <div className="grid grid-cols-7 gap-2">
-            {[6,0,1,2,3,4,5].map(dow => {
-              const wins = windowsByDow[dow] || [];
-              const brks = breaksByDow[dow] || [];
-              const mins = availability[dow] ?? 0;
-              return (
-                <button
-                  key={dow}
-                  onClick={() => setToolbarMenu(m => (m && m.dow === dow) ? null : { dow })}
-                  className={`relative rounded-lg p-3 border text-center transition-all hover:bg-white/5 ${
-                    toolbarMenu?.dow === dow ? 'border-emerald-500 bg-emerald-900/20' : 'border-white/10 bg-white/5'
-                  }`}
-                >
-                  <div className="text-xs font-medium text-slate-300">{['Sun','Mon','Tue','Wed','Thu','Fri','Sat'][dow]}</div>
-                  <div className={`text-lg font-semibold ${mins > 0 ? 'text-emerald-400' : 'text-slate-500'}`}>
-                    {mins > 0 ? minutesToHM(mins) : '—'}
-                  </div>
-                  <div className="text-[10px] text-slate-400">
-                    {wins.length > 0 ? `${wins.length} window${wins.length > 1 ? 's' : ''}` : 'No windows'}
-                  </div>
-                </button>
-              );
-            })}
-          </div>
-
-          {/* Edit Panel for selected day */}
-          {toolbarMenu && (
-            <div className="rounded-xl border border-white/10 bg-[#0b1020] p-4 space-y-4">
-              <div className="flex items-center justify-between">
-                <div className="text-sm font-medium">{['Sunday','Monday','Tuesday','Wednesday','Thursday','Friday','Saturday'][toolbarMenu.dow]} Schedule</div>
-                <button onClick={() => setToolbarMenu(null)} className="text-xs text-slate-400 hover:text-white">Close</button>
-              </div>
-              
-              {/* Study Windows */}
-              <div>
-                <div className="text-xs text-emerald-400 mb-2 font-medium">Study Windows</div>
-                <div className="space-y-2">
-                  {(windowsByDow[toolbarMenu.dow] || []).map((w, i) => {
-                    const sOk = toMin(normHHMM(w.start||''))!=null;
-                    const eOk = toMin(normHHMM(w.end||''))!=null;
-                    return (
-                      <div key={(w as any).id || i} className="flex items-center gap-2">
-                        <input
-                          type="text"
-                          placeholder="9:00 AM"
-                          value={fmt12Input(w.start||'')}
-                          onChange={e => setWindowsByDow(prev => {
-                            const arr = (prev[toolbarMenu.dow]||[]).slice();
-                            arr[i] = {...arr[i], start: e.target.value};
-                            return {...prev, [toolbarMenu.dow]: arr};
-                          })}
-                          className={`w-28 px-3 py-2 text-sm rounded bg-white/10 border ${sOk ? 'border-white/10' : 'border-rose-600'}`}
-                        />
-                        <span className="text-slate-400">to</span>
-                        <input
-                          type="text"
-                          placeholder="5:00 PM"
-                          value={fmt12Input(w.end||'')}
-                          onChange={e => setWindowsByDow(prev => {
-                            const arr = (prev[toolbarMenu.dow]||[]).slice();
-                            arr[i] = {...arr[i], end: e.target.value};
-                            return {...prev, [toolbarMenu.dow]: arr};
-                          })}
-                          className={`w-28 px-3 py-2 text-sm rounded bg-white/10 border ${eOk ? 'border-white/10' : 'border-rose-600'}`}
-                        />
-                        <button
-                          onClick={() => setWindowsByDow(prev => {
-                            const arr = (prev[toolbarMenu.dow]||[]).slice();
-                            arr.splice(i, 1);
-                            return {...prev, [toolbarMenu.dow]: arr};
-                          })}
-                          className="px-2 py-1 rounded text-rose-400 hover:bg-rose-900/20 text-xs"
-                        >×</button>
-                      </div>
-                    );
-                  })}
-                  <div className="flex gap-2 mt-2">
-                    <button onClick={() => setWindowsByDow(prev => {
-                      const arr = (prev[toolbarMenu.dow]||[]).slice();
-                      arr.push({id: uid(), start:'', end:''} as any);
-                      return {...prev, [toolbarMenu.dow]: arr};
-                    })} className="px-3 py-1.5 rounded border border-emerald-600/50 text-emerald-400 text-xs hover:bg-emerald-900/20">+ Add Window</button>
-                    <button onClick={() => setWindowsByDow(prev => ({...prev, [toolbarMenu.dow]: [{id: uid(), start:'9:00 AM', end:'5:00 PM'}]}))} className="px-2 py-1 rounded border border-white/10 text-xs hover:bg-white/5">9–5</button>
-                    <button onClick={() => setWindowsByDow(prev => ({...prev, [toolbarMenu.dow]: [{id: uid(), start:'8:00 AM', end:'12:00 PM'}, {id: uid(), start:'1:00 PM', end:'5:00 PM'}]}))} className="px-2 py-1 rounded border border-white/10 text-xs hover:bg-white/5">8–12, 1–5</button>
-                  </div>
-                </div>
-              </div>
-
-              {/* Breaks */}
-              <div>
-                <div className="text-xs text-amber-400 mb-2 font-medium">Breaks (subtracted from windows)</div>
-                <div className="space-y-2">
-                  {(breaksByDow[toolbarMenu.dow] || []).map((br, i) => {
-                    const sOk = toMin(normHHMM(br.start||''))!=null;
-                    const eOk = toMin(normHHMM(br.end||''))!=null;
-                    return (
-                      <div key={(br as any).id || i} className="flex items-center gap-2">
-                        <input
-                          type="text"
-                          placeholder="12:00 PM"
-                          value={fmt12Input(br.start||'')}
-                          onChange={e => setBreaksByDow(prev => {
-                            const arr = (prev[toolbarMenu.dow]||[]).slice();
-                            arr[i] = {...arr[i], start: e.target.value};
-                            return {...prev, [toolbarMenu.dow]: arr};
-                          })}
-                          className={`w-28 px-3 py-2 text-sm rounded bg-white/10 border ${sOk ? 'border-white/10' : 'border-rose-600'}`}
-                        />
-                        <span className="text-slate-400">to</span>
-                        <input
-                          type="text"
-                          placeholder="1:00 PM"
-                          value={fmt12Input(br.end||'')}
-                          onChange={e => setBreaksByDow(prev => {
-                            const arr = (prev[toolbarMenu.dow]||[]).slice();
-                            arr[i] = {...arr[i], end: e.target.value};
-                            return {...prev, [toolbarMenu.dow]: arr};
-                          })}
-                          className={`w-28 px-3 py-2 text-sm rounded bg-white/10 border ${eOk ? 'border-white/10' : 'border-rose-600'}`}
-                        />
-                        <button
-                          onClick={() => setBreaksByDow(prev => {
-                            const arr = (prev[toolbarMenu.dow]||[]).slice();
-                            arr.splice(i, 1);
-                            return {...prev, [toolbarMenu.dow]: arr};
-                          })}
-                          className="px-2 py-1 rounded text-rose-400 hover:bg-rose-900/20 text-xs"
-                        >×</button>
-                      </div>
-                    );
-                  })}
-                  <button onClick={() => setBreaksByDow(prev => {
-                    const arr = (prev[toolbarMenu.dow]||[]).slice();
-                    arr.push({id: uid(), start:'', end:''} as any);
-                    return {...prev, [toolbarMenu.dow]: arr};
-                  })} className="px-3 py-1.5 rounded border border-amber-600/50 text-amber-400 text-xs hover:bg-amber-900/20">+ Add Break</button>
-                </div>
-              </div>
-
-              {/* Copy to other days */}
-              <div className="flex gap-2 pt-2 border-t border-white/10">
-                <button onClick={() => {
-                  const wins = (windowsByDow[toolbarMenu.dow]||[]).slice();
-                  const brks = (breaksByDow[toolbarMenu.dow]||[]).slice();
-                  setWindowsByDow(prev => ({...prev, 1: wins.map(x=>({...x, id:uid()})), 2: wins.map(x=>({...x, id:uid()})), 3: wins.map(x=>({...x, id:uid()})), 4: wins.map(x=>({...x, id:uid()})), 5: wins.map(x=>({...x, id:uid()}))}));
-                  setBreaksByDow(prev => ({...prev, 1: brks.map(x=>({...x, id:uid()})), 2: brks.map(x=>({...x, id:uid()})), 3: brks.map(x=>({...x, id:uid()})), 4: brks.map(x=>({...x, id:uid()})), 5: brks.map(x=>({...x, id:uid()}))}));
-                }} className="px-3 py-1.5 rounded border border-white/10 text-xs hover:bg-white/5">Copy to Weekdays</button>
-                <button onClick={() => {
-                  const wins = (windowsByDow[toolbarMenu.dow]||[]).slice();
-                  const brks = (breaksByDow[toolbarMenu.dow]||[]).slice();
-                  setWindowsByDow({0: wins.map(x=>({...x, id:uid()})), 1: wins.map(x=>({...x, id:uid()})), 2: wins.map(x=>({...x, id:uid()})), 3: wins.map(x=>({...x, id:uid()})), 4: wins.map(x=>({...x, id:uid()})), 5: wins.map(x=>({...x, id:uid()})), 6: wins.map(x=>({...x, id:uid()}))});
-                  setBreaksByDow({0: brks.map(x=>({...x, id:uid()})), 1: brks.map(x=>({...x, id:uid()})), 2: brks.map(x=>({...x, id:uid()})), 3: brks.map(x=>({...x, id:uid()})), 4: brks.map(x=>({...x, id:uid()})), 5: brks.map(x=>({...x, id:uid()})), 6: brks.map(x=>({...x, id:uid()}))});
-                }} className="px-3 py-1.5 rounded border border-white/10 text-xs hover:bg-white/5">Copy to All Days</button>
-              </div>
-            </div>
-          )}
-        </div>
-      </section>
-
-      <section className="space-y-3 order-2">
-        <div className="grid grid-cols-1 md:grid-cols-7 gap-2">
-          {days.map((d) => {
-            const k = ymd(d);
-            const planned = plannedByDay[k] || 0;
-            const cap = effectiveCapByKey[k] ?? (availability[d.getDay()] ?? 0);
-            const overBy = Math.max(0, planned - cap);
-            const pct = cap>0 ? Math.min(100, Math.round((planned/cap)*100)) : (planned>0?100:0);
-            const dayBlocks = blocks.filter(b => b.day === k);
-            return (
-              <div key={k} className={`rounded border ${overBy>0?'border-rose-600':'border-[#1b2344]'} p-3 min-h-[220px]`} onDragOver={(e)=>e.preventDefault()} onDrop={(e)=>onDropDay(e,d)} role="listbox" aria-label={`Planned items for ${dayLabel(d)}`}>
-                <div className="flex items-center justify-between mb-2">
-                  <div className="text-sm text-slate-200">{dayLabel(d)}</div>
-                  <div className="text-xs text-slate-300/70 flex items-center gap-2">
-                    <span>{minutesToHM(planned)} / {minutesToHM(cap)}</span>
-                  </div>
-                </div>
-                <div className="h-2 w-full bg-[#0b1020] border border-[#1b2344] rounded overflow-hidden mb-2" role="progressbar" aria-valuemin={0} aria-valuemax={cap||0} aria-valuenow={planned} aria-label="Planned minutes">
-                  <div className={`${overBy>0?'bg-rose-600':'bg-emerald-600'}`} style={{ width: `${pct}%`, height: '100%' }} />
-                </div>
-                {overBy>0 ? <div className="text-[11px] text-rose-400 mb-2">Over by {minutesToHM(overBy)}</div> : null}
-                
-                <div className="text-xs text-slate-300/70 mb-1">Events</div>
-                <ul className="space-y-1 mb-2">
-                  {(eventsByDay[k]||[]).length===0 ? (
-                    <li className="text-[11px] text-slate-300/50">—</li>
-                  ) : (
-                    (eventsByDay[k]||[]).map((ev,i) => (
-                      <li key={i} className="text-[11px] flex items-center gap-2 justify-between">
-                        <div className="flex items-center gap-2 min-w-0">
-                          <span className="inline-block w-2 h-2 rounded-full" style={{ backgroundColor: ev.color||'#64748b' }} />
-                          <span className="truncate">{ev.label}</span>
-                        </div>
-                        {ev.time ? <span className="shrink-0 text-slate-300/70">{ev.time}</span> : null}
-                      </li>
-                    ))
-                  )}
-                </ul>
-                <div className="text-xs text-slate-300/70 mb-1">Planned</div>
-                <ul className="space-y-1">
-                  {dayBlocks.length===0 ? (
-                    <li className="text-[11px] text-slate-300/50">Drop tasks here</li>
-                  ) : dayBlocks.map(b => {
-                    const t = b.taskId ? taskById.get(b.taskId) : undefined;
-                    const displayCourse = (t?.course || b.course || "");
-                    const displayTitle = t?.title || b.title;
-                    const pages = (typeof (t as any)?.pagesRead === 'number' && (t as any).pagesRead > 0)
-                      ? (t as any).pagesRead
-                      : (typeof b.pages === 'number' && b.pages > 0 ? b.pages : null);
-                    return (
-                      <li key={b.id} className="text-[11px] flex items-start gap-2">
-                        <span className="mt-1 w-2 h-2 rounded-full flex-shrink-0" style={{ backgroundColor: colorForCourse(displayCourse) }} />
-                        <div className="flex-1 min-w-0">
-                          <div className="text-slate-200 truncate">{displayCourse ? `${displayCourse}: ` : ''}{displayTitle}</div>
-                          <div className="text-slate-300/70 flex items-center gap-2">
-                            <span>{minutesToHM(b.plannedMinutes)}{b.guessed ? <span className="ml-1 inline-block px-1 rounded border border-amber-500 text-amber-400">guessed</span> : null}{pages ? <span className="ml-2">· {pages}p</span> : null}</span>
-                            <span className="inline-flex items-center gap-1">
-                              <button onClick={()=>moveBlockLaterToday(b)} className="px-1 py-0.5 rounded border border-[#1b2344]">Move later today</button>
-                              <button onClick={()=>pushBlockToTomorrow(b)} className="px-1 py-0.5 rounded border border-[#1b2344]">Push → tomorrow</button>
-                            </span>
-                          </div>
-                        </div>
-                        <button aria-label="Remove block" onClick={()=>removeBlock(b.id)} className="px-1 py-0.5 rounded border border-[#1b2344] text-xs focus-visible:outline focus-visible:outline-2 focus-visible:outline-blue-500">X</button>
-                      </li>
-                    );
-                  })}
-                </ul>
-              </div>
-            );
-          })}
-        </div>
-      </section>
-
-      <section className="card p-6 space-y-4 order-3">
-        <div className="flex items-end justify-between gap-2">
-          <h3 className="text-sm font-medium">Tasks to plan (drag to a day)</h3>
-          <div className="flex items-center gap-2 text-xs">
-            <label className="flex items-center gap-1">
-              <span>Sort by</span>
-              <select value={sortBy} onChange={e=>setSortBy(e.target.value as any)} className="bg-[#0b1020] border border-[#1b2344] rounded px-2 py-1">
-                <option value="due">Due date</option>
-                <option value="course">Course</option>
-                <option value="priority">Priority</option>
-                <option value="estimate">Estimate</option>
-              </select>
-            </label>
-            <button onClick={()=>setSortDir(d=>d==='asc'?'desc':'asc')} className="px-2 py-1 rounded border border-[#1b2344]">{sortDir==='asc'?'Asc':'Desc'}</button>
-            <label className="flex items-center gap-1">
-              <input type="checkbox" checked={twoWeeksOnly} onChange={e=>setTwoWeeksOnly(e.target.checked)} />
-              <span>Due next 2 weeks</span>
-            </label>
-          </div>
-        </div>
-        {noTasksToPlan ? (
-          <div className="rounded border border-dashed border-[#1b2344] p-4 text-sm text-slate-300/80">No todo tasks to plan. Add some in <a href="/tasks" className="underline focus-visible:outline focus-visible:outline-2 focus-visible:outline-blue-500">Tasks</a> and return.</div>
-        ) : (
-          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-2">
-            {unscheduledSorted.map(t => (
-              <div key={t.id} draggable onDragStart={(e)=>onDragStartTask(e,t)} className={`p-2 pl-3 rounded border focus-within:outline focus-within:outline-2 focus-within:outline-blue-500 ${scheduledIdsThisWeek.has(t.id)?'border-emerald-700 bg-emerald-900/10':'border-[#1b2344]'}`} aria-grabbed="false" style={{ borderLeft: `3px solid ${colorForCourse(displayCourseFor(t))}` }}>
-                <div className="text-sm text-slate-200 truncate">{displayCourseFor(t) ? `${displayCourseFor(t)}: ` : ''}{t.title}</div>
-                <div className="text-xs text-slate-300/70 flex items-center gap-2 mt-1">
-                  <span>due {ymdFromISO(t.dueDate)}</span>
-                  {typeof t.priority==='number' ? <span>p{t.priority}</span> : null}
-                  {typeof (t as any).pagesRead==='number' ? <span>{(t as any).pagesRead}p</span> : null}
-                  {typeof t.estimatedMinutes==='number' && (t.estimatedMinutes ?? 0) > 0 ? <span>{minutesToHM(t.estimatedMinutes)}</span> : null}
-                </div>
-              </div>
-            ))}
-          </div>
-        )}
-      </section>
-
-      {showCatchup && catchupPreview && (
-        <div role="dialog" aria-modal="true" className="fixed inset-0 z-50 flex items-center justify-center">
-          <div className="absolute inset-0 bg-black/60" onClick={()=>{ setShowCatchup(false); setCatchupPreview(null); }} />
-          <div className="relative z-10 max-w-3xl w-[92vw] bg-[#0b1020] border border-[#1b2344] rounded p-4">
-            <div className="flex items-center justify-between mb-2">
-              <h4 className="text-sm font-medium">Catch-Up Preview (next 14 days)</h4>
-              <button onClick={()=>{ setShowCatchup(false); setCatchupPreview(null); }} className="text-xs px-2 py-1 rounded border border-[#1b2344]">Close</button>
-            </div>
-            <div className="max-h-[60vh] overflow-y-auto space-y-3">
-              {(catchupPreview?.days || []).map(d => (
-                <div key={d.day} className="border border-[#1b2344] rounded p-2">
-                  <div className="text-xs text-slate-300/70 mb-1">{d.day} · {d.usedAfter}/{d.total}m (was {d.usedBefore}m)</div>
-                  {d.items.length === 0 ? (
-                    <div className="text-xs text-slate-300/50">No placements</div>
-                  ) : (
-                    <ul className="text-xs space-y-1">
-                      {d.items.map((it, i) => (
-                        <li key={i} className="flex items-center justify-between">
-                          <div className="flex items-center min-w-0">
-                            <span className="inline-block w-2 h-2 rounded-full mr-2 flex-shrink-0" style={{ backgroundColor: colorForCourse(it.course) }} />
-                            <span className="truncate mr-2">{it.course ? `${it.course}: `: ''}{it.title}</span>
-                          </div>
-                          <span>{minutesToHM(it.minutes)}{it.guessed ? <span className="ml-1 inline-block px-1 rounded border border-amber-500 text-amber-400">guessed</span> : null}</span>
-                        </li>
-                      ))}
-                    </ul>
-                  )}
-                </div>
-              ))}
-              {(catchupPreview?.unschedulable?.length || 0) > 0 && (
-                <div className="border border-rose-700 rounded p-2">
-                  <div className="text-xs text-rose-400 mb-1">Could not schedule (insufficient capacity before due date)</div>
-                  <ul className="text-xs space-y-1">
-                    {(catchupPreview?.unschedulable || []).map(u => (
-                      <li key={u.taskId} className="flex items-center justify-between">
-                        <span className="truncate mr-2">{u.title}</span>
-                        <span>{u.remaining}m · due {u.dueYmd}</span>
-                      </li>
-                    ))}
-                  </ul>
-                </div>
-              )}
-            </div>
-            <div className="mt-3 flex items-center justify-end gap-2">
-              <button onClick={()=>{ setShowCatchup(false); setCatchupPreview(null); }} className="px-3 py-2 rounded border border-[#1b2344] text-sm">Cancel</button>
-              <button onClick={applyCatchUp} className="px-3 py-2 rounded bg-blue-600 hover:bg-blue-500 text-sm">Apply Catch-Up</button>
-            </div>
-          </div>
-        </div>
-      )}
-    </main>
-  );
+  return <main className="space-y-6">
+    <section className="rounded-2xl border border-slate-700/70 bg-gradient-to-br from-slate-900 to-slate-950 p-6"><p className="text-sm font-medium text-violet-300">Plan my week</p><h2 className="mt-1 text-2xl font-semibold text-slate-100">Plan against real capacity</h2><p className="mt-2 max-w-3xl text-sm text-slate-400">The proposed plan subtracts class meetings and timed commitments, then shows the exact minutes left unscheduled for every partially planned task.</p></section>
+    {message ? <div className="rounded-xl border border-emerald-500/30 bg-emerald-500/10 p-4 text-sm text-emerald-200">{message}</div> : null}
+    <section className="flex flex-col gap-3 rounded-xl border border-slate-700/70 bg-slate-900/45 p-4 sm:flex-row sm:items-center sm:justify-between"><div className="flex gap-2"><button onClick={() => changeWeek(-1)} className="rounded-lg border border-slate-600 px-3 py-2 text-sm text-slate-200">Previous</button><button onClick={() => { setWeekStart(mondayOf(new Date())); setBlocks([]); }} className="rounded-lg border border-slate-600 px-3 py-2 text-sm text-slate-200">This week</button><button onClick={() => changeWeek(1)} className="rounded-lg border border-slate-600 px-3 py-2 text-sm text-slate-200">Next</button></div><div className="text-center"><p className="font-semibold text-slate-100">{formatDay(weekStart)} to {formatDay(addDays(weekStart, 6))}</p><p className="text-xs text-slate-500">{activeSemester?.name || 'Active semester'}</p></div><div className="flex flex-wrap gap-2 text-xs"><span className="rounded-full bg-slate-800 px-2.5 py-1 text-slate-300">{formatMinutes(totalGross)} entered</span><span className="rounded-full bg-amber-500/10 px-2.5 py-1 text-amber-300">{formatMinutes(totalBusy)} fixed</span><span className="rounded-full bg-sky-500/10 px-2.5 py-1 text-sky-300">{formatMinutes(totalNet)} net</span><span className="rounded-full bg-violet-500/10 px-2.5 py-1 text-violet-300">{formatMinutes(totalPlanned)} planned</span></div></section>
+    <section className="rounded-xl border border-slate-700/70 bg-slate-900/45 p-5"><div className="flex flex-col gap-3 sm:flex-row sm:items-end sm:justify-between"><div><h2 className="font-semibold text-slate-100">Weekly capacity</h2><p className="text-sm text-slate-400">Enter the maximum study time before fixed classes and commitments are deducted.</p></div><div className="flex gap-2"><button disabled={saving || loading || !relevantTasks.length} onClick={buildPlan} className="rounded-lg bg-violet-500 px-4 py-2.5 text-sm font-semibold text-white disabled:opacity-50">Build proposed plan</button><button disabled={saving || !blocks.length} onClick={clearPlan} className="rounded-lg border border-slate-600 px-3 py-2.5 text-sm text-slate-200 disabled:opacity-50">Clear</button></div></div><div className="mt-4 grid grid-cols-2 gap-3 sm:grid-cols-4 lg:grid-cols-7">{days.map(day => { const key = dateKey(day); return <label key={key} className="rounded-lg bg-slate-950/45 p-3 text-sm text-slate-300"><span className="block font-medium">{formatDay(day)}</span><input type="number" min={0} step={30} value={availability[day.getDay()] || 0} onChange={event => updateAvailability(day.getDay(), Number(event.target.value))} className="mt-2 w-full rounded-lg border border-slate-600 bg-slate-950 px-2 py-1.5 text-slate-100" /><span className="mt-1 block text-xs text-slate-500">{formatMinutes(busyMinutes[key] || 0)} fixed · {formatMinutes(generated.availableByDay[key] || 0)} net</span></label>; })}</div></section>
+    {!loading && !relevantTasks.length ? <section className="rounded-xl border border-dashed border-slate-700 p-8 text-center"><p className="font-medium text-slate-200">No work is due in the next two weeks.</p><Link href="/tasks" className="mt-3 inline-flex rounded-lg border border-slate-600 px-3 py-2 text-sm text-slate-200">Open Tasks</Link></section> : null}
+    {blocks.length ? <section className="grid gap-4 xl:grid-cols-7">{days.map(day => { const key = dateKey(day); const dayBlocks = byDay[key] || []; const planned = dayBlocks.reduce((sum, block) => sum + block.plannedMinutes, 0); const capacity = generated.availableByDay[key] || 0; return <article key={key} onDragOver={event => event.preventDefault()} onDrop={event => onDrop(event, key)} className="min-h-64 rounded-xl border border-slate-700 bg-slate-900/45 p-3"><div className="flex items-center justify-between"><div><p className="text-xs uppercase text-slate-500">{new Intl.DateTimeFormat('en-US', { weekday: 'short' }).format(day)}</p><p className="font-semibold text-slate-100">{new Intl.DateTimeFormat('en-US', { month: 'short', day: 'numeric' }).format(day)}</p></div><span className={`text-xs ${planned > capacity ? 'text-rose-300' : 'text-slate-500'}`}>{formatMinutes(planned)} / {formatMinutes(capacity)}</span></div><div className="mt-3 space-y-2">{dayBlocks.map(block => <div key={block.id} draggable onDragStart={event => event.dataTransfer.setData('text/plain', block.id)} className="cursor-grab rounded-lg border border-violet-500/30 bg-violet-500/10 p-3"><p className="text-xs font-medium text-violet-100">{block.title}</p><p className="mt-1 text-[11px] text-violet-300/70">{block.course || 'General'} · {formatMinutes(block.plannedMinutes)}</p></div>)}{!dayBlocks.length ? <p className="py-8 text-center text-xs text-slate-600">Drop work here</p> : null}</div></article>; })}</section> : null}
+    {didNotFit.length ? <section className="rounded-xl border border-amber-500/30 bg-amber-500/5 p-5"><div className="flex items-end justify-between"><div><h2 className="font-semibold text-amber-200">Work that did not fully fit</h2><p className="text-sm text-slate-400">Partially scheduled tasks remain here until all estimated minutes are placed.</p></div><Link href="/recovery" className="text-sm text-rose-300">Open Recovery Mode</Link></div><div className="mt-4 grid gap-2 md:grid-cols-2">{didNotFit.map(item => <div key={item.taskId} className="rounded-lg bg-slate-950/40 p-3"><p className="text-sm font-medium text-slate-200">{item.title}</p><p className="mt-1 text-xs text-slate-500">{item.course || 'General'} · {formatMinutes(item.plannedMinutes)} placed · <span className="text-amber-300">{formatMinutes(item.remainingMinutes)} still unplanned</span></p></div>)}</div></section> : null}
+  </main>;
 }

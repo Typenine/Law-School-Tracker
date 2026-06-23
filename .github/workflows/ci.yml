@@ -1,0 +1,49 @@
+name: Build and workflow audit
+
+on:
+  pull_request:
+  push:
+    branches:
+      - redesign/useful-command-center
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+      - name: Use Node.js 22
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - name: Install dependencies
+        run: npm ci
+      - name: Build application
+        shell: bash
+        run: npm run build > build.log 2>&1
+      - name: Run parser, workflow, route, and mutation audits
+        shell: bash
+        run: |
+          npm run start -- -p 3000 > server.log 2>&1 &
+          SERVER_PID=$!
+          trap 'kill $SERVER_PID 2>/dev/null || true' EXIT
+          for attempt in {1..30}; do
+            if curl --fail --silent http://127.0.0.1:3000/api/hardening-audit > /dev/null; then
+              break
+            fi
+            sleep 1
+          done
+          node scripts/ci-runtime-audit.mjs | tee audit.log
+      - name: Upload verification logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: verification-logs
+          path: |
+            build.log
+            server.log
+            audit.log
+          if-no-files-found: warn
+          retention-days: 3

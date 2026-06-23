@@ -1,8 +1,6 @@
-// Data model for Import Wizard (strict names per spec)
-
-export type SourceType = 'casebook' | 'article' | 'case' | 'statute';
+export type SourceType = 'casebook' | 'article' | 'case' | 'statute' | 'problem' | 'other';
 export type ReadingPriority = 'required' | 'optional' | 'skim';
-export type TaskType = 'reading' | 'brief' | 'memo' | 'quiz' | 'exam' | 'admin';
+export type TaskType = 'reading' | 'brief' | 'memo' | 'quiz' | 'exam' | 'paper' | 'presentation' | 'problem_set' | 'admin' | 'other';
 export type TaskStatusWizard = 'planned' | 'confirmed' | 'edited';
 
 export interface WizardCourse {
@@ -10,50 +8,79 @@ export interface WizardCourse {
   title: string | null;
   section: string | null;
   professor: string | null;
-  meeting_days: number[] | null; // 0=Sun..6=Sat
-  meeting_time: string | null; // HH:MM 24h (start time of class)
-  timezone: string | null; // e.g., America/Chicago
-  start_date: string | null; // ISO date
-  end_date: string | null; // ISO date
+  professor_email?: string | null;
+  office_hours?: string | null;
+  location?: string | null;
+  meeting_days: number[] | null;
+  meeting_time: string | null;
+  meeting_end_time?: string | null;
+  timezone: string | null;
+  start_date: string | null;
+  end_date: string | null;
 }
 
 export interface Reading {
   source_type: SourceType;
-  short_title: string | null; // or citation
-  pages: string | null; // pages/sections like "pp. 10–25" or "§2.03"
+  short_title: string | null;
+  pages: string | null;
   priority: ReadingPriority;
-  // provenance
-  source_ref?: string; // original row/line id
-  confidence?: number; // 0..1
+  estimated_minutes?: number | null;
+  source_text?: string;
+  source_ref?: string;
+  confidence?: number;
 }
 
 export interface WizardTask {
   type: TaskType;
   title: string;
-  due_datetime: string; // ISO datetime with implied timezone
+  due_datetime: string;
   estimated_minutes: number | null;
-  blocking: boolean; // true/false
-  source_ref: string; // pointer to session/reading row
-  status: TaskStatusWizard; // planned/confirmed/edited
-  confidence?: number; // 0..1
+  blocking: boolean;
+  source_ref: string;
+  source_text?: string;
+  status: TaskStatusWizard;
+  confidence?: number;
 }
 
 export interface Session {
-  date: string; // ISO date
+  date: string;
   sequence_number: number;
   topic: string | null;
   readings: Reading[];
   assignments_due: WizardTask[];
   notes: string | null;
   canceled: boolean;
-  source_ref?: string; // original line/table row id
-  confidence?: number; // 0..1
+  source_ref?: string;
+  source_text?: string;
+  confidence?: number;
+}
+
+export interface ExtractedDocumentSections {
+  required_materials: string[];
+  grading_components: string[];
+  office_hours: string[];
+  major_assessments: string[];
+  policies: string[];
+  holidays_and_breaks: string[];
 }
 
 export interface WizardPreview {
   course: WizardCourse | null;
   sessions: Session[];
-  readings: Reading[]; // flattened across sessions
-  tasks: WizardTask[]; // flattened across sessions
-  lowConfidence: Array<{ kind: 'course' | 'session' | 'reading' | 'task'; ref?: string; confidence: number; reason?: string }>
+  readings: Reading[];
+  tasks: WizardTask[];
+  sections?: ExtractedDocumentSections;
+  unassignedImportantLines?: Array<{ text: string; source_ref: string; reason: string }>;
+  diagnostics?: {
+    sourceCharacters: number;
+    sourceLines: number;
+    normalizedLines: number;
+    sessions: number;
+    readings: number;
+    tasks: number;
+    canceledSessions: number;
+    dateCoverage: number;
+    likelyScannedDocument: boolean;
+  };
+  lowConfidence: Array<{ kind: 'course' | 'session' | 'reading' | 'task' | 'document'; ref?: string; confidence: number; reason?: string }>;
 }
