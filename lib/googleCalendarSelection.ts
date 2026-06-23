@@ -18,6 +18,14 @@ type PrivateConnection = {
   calendarName?: string;
 };
 
+export interface WritableGoogleCalendar {
+  id: string;
+  name: string;
+  primary: boolean;
+  accessRole: string;
+  selected: boolean;
+}
+
 function encryptionKey() {
   const secret = process.env.GOOGLE_CALENDAR_TOKEN_KEY || process.env.GOOGLE_CLIENT_SECRET || '';
   if (!secret) throw new Error('GOOGLE_CALENDAR_TOKEN_KEY is not configured.');
@@ -42,10 +50,7 @@ function decrypt<T>(payload: any): T {
 async function connection() {
   const settings = await getSettings([PRIVATE_KEY, PUBLIC_KEY]);
   if (!settings[PRIVATE_KEY]) throw new Error('Google Calendar is not connected.');
-  return {
-    privateConnection: decrypt<PrivateConnection>(settings[PRIVATE_KEY]),
-    publicConnection: settings[PUBLIC_KEY] || {},
-  };
+  return { privateConnection: decrypt<PrivateConnection>(settings[PRIVATE_KEY]), publicConnection: settings[PUBLIC_KEY] || {} };
 }
 
 async function refresh(current: PrivateConnection) {
@@ -66,18 +71,16 @@ async function refresh(current: PrivateConnection) {
 }
 
 async function calendarList(tokens: TokenPayload) {
-  const response = await fetch('https://www.googleapis.com/calendar/v3/users/me/calendarList?minAccessRole=writer', {
-    headers: { Authorization: `Bearer ${tokens.accessToken}` },
-  });
+  const response = await fetch('https://www.googleapis.com/calendar/v3/users/me/calendarList?minAccessRole=writer', { headers: { Authorization: `Bearer ${tokens.accessToken}` } });
   if (!response.ok) throw new Error(`Unable to list Google calendars: ${response.status}`);
   return response.json();
 }
 
-export async function listWritableGoogleCalendars() {
+export async function listWritableGoogleCalendars(): Promise<WritableGoogleCalendar[]> {
   const state = await connection();
   const current = await refresh(state.privateConnection);
   const data = await calendarList(current.tokens);
-  return (data.items || []).map((item: any) => ({
+  return (data.items || []).map((item: any): WritableGoogleCalendar => ({
     id: item.id,
     name: item.summary || item.id,
     primary: Boolean(item.primary),
@@ -89,8 +92,8 @@ export async function listWritableGoogleCalendars() {
 export async function selectGoogleCalendar(calendarId: string) {
   const state = await connection();
   const current = await refresh(state.privateConnection);
-  const calendars = await listWritableGoogleCalendars();
-  const selected = calendars.find(item => item.id === calendarId);
+  const calendars: WritableGoogleCalendar[] = await listWritableGoogleCalendars();
+  const selected = calendars.find((item: WritableGoogleCalendar) => item.id === calendarId);
   if (!selected) throw new Error('Select a calendar where you have permission to create and update events.');
   const next: PrivateConnection = { ...current, calendarId: selected.id, calendarName: selected.name };
   await patchSettings({
