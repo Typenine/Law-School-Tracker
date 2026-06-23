@@ -1,6 +1,8 @@
 import type { Course, Task } from './types';
 import { courseIdFromTags, mergeTaskTags } from './taskMetadata';
-import { listCourses, listTasks, updateTask } from './storage';
+import { getSettings, listCourses, listTasks, patchSettings, updateTask } from './storage';
+
+const MIGRATION_KEY = 'taskCourseIdMigrationV1';
 
 function key(value?: string | null) {
   return (value || '').trim().toLowerCase();
@@ -18,8 +20,7 @@ export async function backfillTaskCourseIds() {
   let unmatched = 0;
 
   for (const task of tasks) {
-    if (courseIdFromTags(task.tags)) continue;
-    if (!task.course) continue;
+    if (courseIdFromTags(task.tags) || !task.course) continue;
     const course = uniqueCourseByTitle(courses, task.course);
     if (!course) {
       const matches = courses.filter(item => key(item.title) === key(task.course));
@@ -30,7 +31,15 @@ export async function backfillTaskCourseIds() {
     updated++;
   }
 
-  return { updated, ambiguous, unmatched, total: tasks.length };
+  const result = { updated, ambiguous, unmatched, total: tasks.length, completedAt: new Date().toISOString() };
+  await patchSettings({ [MIGRATION_KEY]: result });
+  return result;
+}
+
+export async function ensureTaskCourseIdsBackfilled() {
+  const settings = await getSettings([MIGRATION_KEY]);
+  if (settings[MIGRATION_KEY]) return settings[MIGRATION_KEY];
+  return backfillTaskCourseIds();
 }
 
 export async function cascadeCourseRename(course: Course, oldTitle: string) {
@@ -41,10 +50,7 @@ export async function cascadeCourseRename(course: Course, oldTitle: string) {
     const linkedId = courseIdFromTags(task.tags);
     const legacyMatch = !linkedId && key(task.course) === key(oldTitle);
     if (linkedId !== course.id && !legacyMatch) continue;
-    await updateTask(task.id, {
-      course: course.title,
-      tags: mergeTaskTags(task.tags, task.tags, { courseId: course.id }),
-    });
+    await updateTask(task.id, { course: course.title, tags: mergeTaskTags(task.tags, task.tags, { courseId: course.id }) });
     updated++;
   }
   return updated;
