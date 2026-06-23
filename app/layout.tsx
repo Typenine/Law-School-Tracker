@@ -5,6 +5,7 @@ import PWARegister from '@/components/PWARegister'
 import CommandPalette from '@/components/CommandPalette'
 import AppNav from '@/components/AppNav'
 import SetupChecklist from '@/components/SetupChecklist'
+import ReviewWorkflowPanel from '@/components/ReviewWorkflowPanel'
 import Providers from '@/app/providers'
 
 export const metadata: Metadata = {
@@ -31,6 +32,7 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
               <AppNav />
             </header>
             <SetupChecklist />
+            <ReviewWorkflowPanel />
             <div id="main-content">{children}</div>
           </div>
           <ReminderManager />
