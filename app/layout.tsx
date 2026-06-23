@@ -9,7 +9,7 @@ import Providers from '@/app/providers'
 
 export const metadata: Metadata = {
   title: 'Law School Tracker',
-  description: 'Know what to do next, what is due soon, and where each course stands.',
+  description: 'Know what to do next, open the material, and stay ready for class and exams.',
 }
 
 export default function RootLayout({ children }: { children: React.ReactNode }) {
@@ -39,7 +39,7 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
               <div className="flex items-center justify-between gap-4">
                 <div>
                   <h1 className="text-2xl font-semibold">Law School Tracker</h1>
-                  <p className="text-sm opacity-80">Know what to do next, what is due soon, and where each course stands.</p>
+                  <p className="text-sm opacity-80">Know what to do next, open the material, and stay ready for class and exams.</p>
                 </div>
                 <ThemeToggleButton />
               </div>
@@ -49,13 +49,16 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
                   <Link href="/tasks" className="nav-link">Tasks</Link>
                   <Link href="/courses" className="nav-link">Courses</Link>
                   <Link href="/calendar" className="nav-link">Calendar</Link>
-                  <Link href="/semester" className="nav-link">Term Setup</Link>
                   <Link href="/review" className="nav-link">Weekly Review</Link>
-                  <Link href="/settings" className="nav-link">Settings</Link>
+                  <Link href="/exam" className="nav-link">Exam Prep</Link>
+                  <Link href="/semester" className="nav-link">Term Setup</Link>
                 </nav>
                 <details className="relative text-sm">
                   <summary className="cursor-pointer list-none rounded-lg border border-slate-600 px-3 py-2 text-slate-300 hover:bg-slate-800">More</summary>
-                  <div className="absolute right-0 z-20 mt-2 w-44 rounded-xl border border-slate-700 bg-slate-950 p-2 shadow-xl">
+                  <div className="absolute right-0 z-20 mt-2 w-48 rounded-xl border border-slate-700 bg-slate-950 p-2 shadow-xl">
+                    <Link href="/recovery" className="block rounded-lg px-3 py-2 text-rose-300 hover:bg-slate-800">I’m Behind</Link>
+                    <Link href="/wizard" className="block rounded-lg px-3 py-2 text-slate-300 hover:bg-slate-800">Import Syllabus</Link>
+                    <Link href="/settings" className="block rounded-lg px-3 py-2 text-slate-300 hover:bg-slate-800">Settings</Link>
                     <Link href="/week-plan" className="block rounded-lg px-3 py-2 text-slate-300 hover:bg-slate-800">Week Plan</Link>
                     <Link href="/log" className="block rounded-lg px-3 py-2 text-slate-300 hover:bg-slate-800">Study Log</Link>
                     <Link href="/help" className="block rounded-lg px-3 py-2 text-slate-300 hover:bg-slate-800">Help</Link>
