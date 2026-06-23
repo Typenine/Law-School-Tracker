@@ -1,5 +1,6 @@
 import type { Course, Task } from './types';
 import { courseIdFromTags, mergeTaskTags } from './taskMetadata';
+import { renameCourseCalendarEvents } from './calendarEventStore';
 import { getSettings, listCourses, listTasks, patchSettings, updateTask } from './storage';
 
 const MIGRATION_KEY = 'taskCourseIdMigrationV1';
@@ -53,6 +54,7 @@ export async function cascadeCourseRename(course: Course, oldTitle: string) {
     await updateTask(task.id, { course: course.title, tags: mergeTaskTags(task.tags, task.tags, { courseId: course.id }) });
     updated++;
   }
+  await renameCourseCalendarEvents(course.id, oldTitle, course.title);
   return updated;
 }
 
