@@ -28,6 +28,7 @@ export default function AppNav() {
         <div className="absolute right-0 z-30 mt-2 w-48 rounded-xl border border-slate-700 bg-slate-950 p-2 shadow-xl">
           <Link href="/recovery" className="block rounded-lg px-3 py-2 text-rose-300 hover:bg-slate-800">I’m Behind</Link>
           <Link href="/wizard" className="block rounded-lg px-3 py-2 text-slate-300 hover:bg-slate-800">Import Syllabus</Link>
+          <Link href="/calendar/google" className="block rounded-lg px-3 py-2 text-sky-300 hover:bg-slate-800">Google Calendar</Link>
           <Link href="/week-plan" className="block rounded-lg px-3 py-2 text-slate-300 hover:bg-slate-800">Plan My Week</Link>
           <Link href="/log" className="block rounded-lg px-3 py-2 text-slate-300 hover:bg-slate-800">Study History</Link>
           <Link href="/settings" className="block rounded-lg px-3 py-2 text-slate-300 hover:bg-slate-800">Settings</Link>
