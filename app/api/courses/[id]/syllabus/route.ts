@@ -1,19 +1,18 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { compareSyllabusVersions } from '@/lib/academicWorkflow';
-import { COURSE_WORKSPACES_KEY, CourseWorkspaceMap, StoredSyllabusAnalysis } from '@/lib/courseWorkspace';
-import { getSettings, patchSettings } from '@/lib/storage';
+import { compareSyllabusVersions } from '@/lib/syllabusCompare';
+import type { StoredSyllabusAnalysis } from '@/lib/courseWorkspace';
+import { readCourseWorkspace, writeCourseWorkspace } from '@/lib/courseWorkspaceStore';
 
 export const dynamic = 'force-dynamic';
 export const runtime = 'nodejs';
 
 export async function GET(_: NextRequest, context: { params: { id: string } }) {
-  const settings = await getSettings([COURSE_WORKSPACES_KEY]);
-  const map = (settings[COURSE_WORKSPACES_KEY] || {}) as CourseWorkspaceMap;
-  const workspace = map[context.params.id] || {};
+  const current = await readCourseWorkspace(context.params.id);
   return NextResponse.json({
-    analysis: workspace.syllabusAnalysis || null,
-    versions: workspace.syllabusVersions || [],
-    latestDiff: workspace.latestSyllabusDiff || null,
+    analysis: current.workspace.syllabusAnalysis || null,
+    versions: current.workspace.syllabusVersions || [],
+    latestDiff: current.workspace.latestSyllabusDiff || null,
+    revision: current.revision,
   });
 }
 
@@ -22,30 +21,28 @@ export async function PUT(req: NextRequest, context: { params: { id: string } })
     const body = await req.json();
     const incoming = body?.analysis as StoredSyllabusAnalysis | undefined;
     if (!incoming || typeof incoming !== 'object') return NextResponse.json({ error: 'analysis is required' }, { status: 400 });
-    const settings = await getSettings([COURSE_WORKSPACES_KEY]);
-    const map = (settings[COURSE_WORKSPACES_KEY] || {}) as CourseWorkspaceMap;
-    const currentWorkspace = map[context.params.id] || {};
-    const previous = currentWorkspace.syllabusAnalysis;
-    const analysis: StoredSyllabusAnalysis = {
-      ...incoming,
-      id: incoming.id || `syllabus:${context.params.id}:${Date.now()}`,
-      importedAt: incoming.importedAt || new Date().toISOString(),
-    };
-    const diff = compareSyllabusVersions(previous, analysis);
-    const versions = [...(currentWorkspace.syllabusVersions || []), ...(previous ? [previous] : [])]
-      .filter((version, index, all) => all.findIndex(item => item.id === version.id && item.importedAt === version.importedAt) === index)
-      .slice(-10);
-    const nextMap: CourseWorkspaceMap = {
-      ...map,
-      [context.params.id]: {
-        ...currentWorkspace,
+
+    for (let attempt = 0; attempt < 2; attempt++) {
+      const current = await readCourseWorkspace(context.params.id);
+      const previous = current.workspace.syllabusAnalysis;
+      const analysis: StoredSyllabusAnalysis = {
+        ...incoming,
+        id: incoming.id || `syllabus:${context.params.id}:${Date.now()}`,
+        importedAt: incoming.importedAt || new Date().toISOString(),
+      };
+      const diff = compareSyllabusVersions(previous, analysis);
+      const versions = [...(current.workspace.syllabusVersions || []), ...(previous ? [previous] : [])]
+        .filter((version, index, all) => all.findIndex(item => item.id === version.id && item.importedAt === version.importedAt) === index)
+        .slice(-10);
+      const result = await writeCourseWorkspace(context.params.id, {
+        ...current.workspace,
         syllabusAnalysis: analysis,
         syllabusVersions: versions,
         latestSyllabusDiff: diff,
-      },
-    };
-    await patchSettings({ [COURSE_WORKSPACES_KEY]: nextMap });
-    return NextResponse.json({ success: true, analysis, diff, versions });
+      }, current.revision);
+      if (!result.conflict) return NextResponse.json({ success: true, analysis, diff, versions, revision: result.revision });
+    }
+    return NextResponse.json({ error: 'Course data changed during syllabus save. Try again.' }, { status: 409 });
   } catch (error: any) {
     return NextResponse.json({ error: error?.message || 'Unable to save syllabus analysis.' }, { status: 500 });
   }
