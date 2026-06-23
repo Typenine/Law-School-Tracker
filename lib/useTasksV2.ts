@@ -3,7 +3,7 @@
 import { useCallback, useEffect, useState } from 'react';
 import type { Task } from './types';
 import { onTasksChanged } from './taskBus';
-import { normalizeTask } from './taskMetadata';
+import { isActiveTask, normalizeTask } from './taskMetadata';
 
 export function useTasks() {
   const [tasks, setTasks] = useState<Task[]>([]);
@@ -16,7 +16,8 @@ export function useTasks() {
       const response = await fetch('/api/tasks', { cache: 'no-store' });
       if (!response.ok) throw new Error('Failed to load tasks');
       const data = await response.json();
-      setTasks(Array.isArray(data?.tasks) ? data.tasks.map(normalizeTask) : []);
+      const normalized = Array.isArray(data?.tasks) ? data.tasks.map(normalizeTask) : [];
+      setTasks(normalized.filter(isActiveTask));
       setError(null);
     } catch (cause: any) {
       setError(cause?.message || 'Failed to load tasks');
