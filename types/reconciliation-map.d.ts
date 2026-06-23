@@ -2,6 +2,6 @@ export {};
 
 declare global {
   interface MapConstructor {
-    new(entries: Array<Array<string | object>>): Map<any, any>;
+    new(entries: Array<Array<unknown>>): Map<any, any>;
   }
 }
