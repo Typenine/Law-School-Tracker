@@ -107,16 +107,21 @@ function TaskRow({ task, onRefresh }: { task: Task; onRefresh: () => Promise<voi
 export default function TodayPage() {
   const { tasks, loading, error, refresh } = useTasks();
   const { courses } = useCourses();
-  const { currentTerm, showAllTerms } = useSemester();
+  const { currentTerm, showAllTerms, activeSemester, loading: semesterLoading } = useSemester();
   const [title, setTitle] = useState("");
   const [course, setCourse] = useState("");
   const [dueDate, setDueDate] = useState(addDaysKey(0));
   const [adding, setAdding] = useState(false);
 
+  const activeCourses = useMemo(() => {
+    if (!activeSemester) return courses;
+    return courses.filter((item) => item.semester === activeSemester.season && item.year === activeSemester.year);
+  }, [courses, activeSemester]);
+
   const activeTasks = useMemo(() => {
     return tasks
       .filter((task) => task.status !== "done")
-      .filter((task) => showAllTerms || !currentTerm || !task.term || task.term === currentTerm)
+      .filter((task) => showAllTerms || !currentTerm || task.term === currentTerm)
       .sort((a, b) => taskScore(b) - taskScore(a));
   }, [tasks, currentTerm, showAllTerms]);
 
@@ -130,7 +135,7 @@ export default function TodayPage() {
 
   const courseStatuses = useMemo(() => {
     const names = Array.from(new Set([
-      ...courses.map((item) => item.title),
+      ...activeCourses.map((item) => item.title),
       ...activeTasks.map((task) => task.course || "").filter(Boolean),
     ]));
 
@@ -151,12 +156,12 @@ export default function TodayPage() {
         tone = "text-sky-300 bg-sky-500/10";
       }
       return { name, open: open.length, status, tone };
-    }).filter((item) => item.open > 0).slice(0, 6);
-  }, [courses, activeTasks, todayKey]);
+    }).filter((item) => item.open > 0 || activeCourses.some((courseItem) => courseItem.title === item.name)).slice(0, 6);
+  }, [activeCourses, activeTasks, todayKey]);
 
   async function addTask(event: FormEvent) {
     event.preventDefault();
-    if (!title.trim() || !dueDate) return;
+    if (!title.trim() || !dueDate || !currentTerm) return;
     setAdding(true);
     try {
       const due = new Date(`${dueDate}T23:59:59`);
@@ -165,7 +170,7 @@ export default function TodayPage() {
         course: course || null,
         dueDate: due.toISOString(),
         status: "todo",
-        term: currentTerm || null,
+        term: currentTerm,
       }, { silent: true });
       setTitle("");
       await refresh();
@@ -179,7 +184,10 @@ export default function TodayPage() {
       <section className="rounded-2xl border border-slate-700/70 bg-gradient-to-br from-slate-900 to-slate-950 p-5 shadow-lg sm:p-6">
         <div className="flex flex-col gap-4 lg:flex-row lg:items-end lg:justify-between">
           <div>
-            <p className="text-sm font-medium text-emerald-300">Your law school command center</p>
+            <div className="flex flex-wrap items-center gap-2">
+              <p className="text-sm font-medium text-emerald-300">Your law school command center</p>
+              {activeSemester ? <Link href="/semester" className="rounded-full bg-slate-800 px-2.5 py-1 text-xs text-slate-300 hover:text-white">{activeSemester.name}</Link> : null}
+            </div>
             <h2 className="mt-1 text-2xl font-semibold text-slate-100">What needs your attention today</h2>
             <p className="mt-2 max-w-2xl text-sm text-slate-400">The list is ranked by urgency. Complete the work, move it once, or open the full task list when you need more control.</p>
           </div>
@@ -191,19 +199,30 @@ export default function TodayPage() {
         </div>
       </section>
 
+      {!semesterLoading && !activeSemester ? (
+        <section className="rounded-xl border border-amber-500/40 bg-amber-500/10 p-4">
+          <h2 className="font-semibold text-amber-200">Set an active semester before adding work</h2>
+          <p className="mt-1 text-sm text-amber-100/70">This keeps old coursework out of the current dashboard.</p>
+          <Link href="/semester" className="mt-3 inline-flex rounded-lg bg-amber-300 px-3 py-2 text-sm font-semibold text-slate-950">Open Term Setup</Link>
+        </section>
+      ) : null}
+
       <form onSubmit={addTask} className="rounded-xl border border-slate-700/70 bg-slate-900/45 p-4">
         <div className="mb-3 flex items-center justify-between">
-          <h2 className="font-semibold text-slate-100">Quick add</h2>
+          <div>
+            <h2 className="font-semibold text-slate-100">Quick add</h2>
+            {activeSemester ? <p className="text-xs text-slate-500">New work is saved to {activeSemester.name}.</p> : null}
+          </div>
           <Link href="/tasks" className="text-sm text-emerald-300 hover:text-emerald-200">Open all tasks</Link>
         </div>
         <div className="grid gap-3 md:grid-cols-[minmax(0,1fr)_220px_170px_auto]">
           <input value={title} onChange={(e) => setTitle(e.target.value)} placeholder="What needs to be done?" className="rounded-lg border border-slate-600 bg-slate-950/60 px-3 py-2.5 text-slate-100 outline-none placeholder:text-slate-500 focus:border-emerald-400" />
           <select value={course} onChange={(e) => setCourse(e.target.value)} className="rounded-lg border border-slate-600 bg-slate-950/60 px-3 py-2.5 text-slate-100 outline-none focus:border-emerald-400">
             <option value="">No course</option>
-            {courses.map((item) => <option key={item.id} value={item.title}>{item.title}</option>)}
+            {activeCourses.map((item) => <option key={item.id} value={item.title}>{item.title}</option>)}
           </select>
           <input type="date" value={dueDate} onChange={(e) => setDueDate(e.target.value)} className="rounded-lg border border-slate-600 bg-slate-950/60 px-3 py-2.5 text-slate-100 outline-none focus:border-emerald-400" />
-          <button disabled={adding || !title.trim()} className="rounded-lg bg-emerald-500 px-4 py-2.5 font-semibold text-slate-950 hover:bg-emerald-400 disabled:cursor-not-allowed disabled:opacity-50">Add task</button>
+          <button disabled={adding || !title.trim() || !currentTerm} className="rounded-lg bg-emerald-500 px-4 py-2.5 font-semibold text-slate-950 hover:bg-emerald-400 disabled:cursor-not-allowed disabled:opacity-50">Add task</button>
         </div>
       </form>
 
@@ -222,7 +241,8 @@ export default function TodayPage() {
           {!loading && !error && recommended.length === 0 ? (
             <div className="rounded-xl border border-dashed border-slate-600 p-8 text-center">
               <p className="font-medium text-slate-200">Nothing currently needs attention.</p>
-              <p className="mt-1 text-sm text-slate-400">Add your next reading or assignment above.</p>
+              <p className="mt-1 text-sm text-slate-400">Add your Fall 2026 courses, then add or import the first readings and assignments.</p>
+              <Link href="/courses" className="mt-3 inline-flex rounded-lg border border-slate-600 px-3 py-2 text-sm text-slate-200 hover:bg-slate-800">Set up courses</Link>
             </div>
           ) : null}
           {recommended.map((task) => <TaskRow key={task.id} task={task} onRefresh={refresh} />)}
@@ -255,7 +275,7 @@ export default function TodayPage() {
             <div className="mb-3 flex items-center justify-between">
               <div>
                 <h2 className="font-semibold text-slate-100">Course status</h2>
-                <p className="text-sm text-slate-400">Calculated from open work</p>
+                <p className="text-sm text-slate-400">Current semester only</p>
               </div>
               <Link href="/courses" className="text-sm text-emerald-300 hover:text-emerald-200">Courses</Link>
             </div>
@@ -269,7 +289,7 @@ export default function TodayPage() {
                   <p className="mt-1 text-xs text-slate-500">{item.open} open task{item.open === 1 ? "" : "s"}</p>
                 </div>
               ))}
-              {!courseStatuses.length ? <p className="py-4 text-center text-sm text-slate-500">Course status will appear when tasks are added.</p> : null}
+              {!courseStatuses.length ? <p className="py-4 text-center text-sm text-slate-500">No courses are set up for {activeSemester?.name || "the active semester"}.</p> : null}
             </div>
           </section>
         </aside>
