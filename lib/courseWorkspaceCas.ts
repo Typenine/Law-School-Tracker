@@ -3,6 +3,15 @@ import { COURSE_WORKSPACES_KEY, type CourseWorkspaceMap } from './courseWorkspac
 import type { VersionedWorkspace } from './courseWorkspaceStore';
 import { getSettings, patchSettings } from './storage';
 
+type TransactionClient = {
+  query: (text: string, values?: unknown[]) => Promise<{ rows: any[] }>;
+  release: () => void;
+};
+
+type ConnectablePool = Pool & {
+  connect: () => Promise<TransactionClient>;
+};
+
 function resolveDbUrl() {
   const direct = process.env.DATABASE_URL || process.env.POSTGRES_URL || process.env.POSTGRES_PRISMA_URL || process.env.POSTGRES_URL_NON_POOLING;
   if (direct) return direct;
@@ -28,7 +37,7 @@ function currentFromMap(map: CourseWorkspaceMap, courseId: string) {
 }
 
 async function writeWithDatabase(courseId: string, expectedRevision: number, workspace: VersionedWorkspace) {
-  const client = await getPool().connect();
+  const client = await (getPool() as ConnectablePool).connect();
   try {
     await client.query('BEGIN');
     const result = await client.query('SELECT value FROM settings WHERE key=$1 FOR UPDATE', [COURSE_WORKSPACES_KEY]);
