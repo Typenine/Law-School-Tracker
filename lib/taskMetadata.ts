@@ -5,6 +5,11 @@ const LIFE_TAG = 'task-lifecycle:';
 const FINGERPRINT_TAG = 'syllabus-fingerprint:';
 const SOURCE_TAG = 'syllabus-source:';
 
+type MutableTaskPayload = Partial<NewTaskInput & UpdateTaskInput> & {
+  courseId?: string | null;
+  lifecycle?: TaskLifecycle;
+};
+
 function valueFromTag(tags: string[] | null | undefined, prefix: string) {
   const tag = (tags || []).find(item => item.startsWith(prefix));
   if (!tag) return null;
@@ -83,12 +88,14 @@ export function mergeTaskTags(current: string[] | null | undefined, requested: s
 }
 
 export function prepareTaskPayload<T extends NewTaskInput | UpdateTaskInput>(input: T, current?: Task | null) {
-  const metadata = input as T & { courseId?: string | null; lifecycle?: TaskLifecycle };
-  const { courseId, lifecycle, ...rest } = metadata;
-  const title = 'title' in rest ? rest.title : current?.title;
-  const course = 'course' in rest ? rest.course : current?.course;
-  const activity = 'activity' in rest ? rest.activity : current?.activity;
-  const syllabus = (rest.tags || []).includes('syllabus-import') || (current?.tags || []).includes('syllabus-import');
+  const metadata = input as MutableTaskPayload;
+  const { courseId, lifecycle, ...rawRest } = metadata;
+  const rest = rawRest as Partial<NewTaskInput & UpdateTaskInput>;
+  const requestedTags: string[] = Array.isArray(rest.tags) ? rest.tags : [];
+  const title = rest.title ?? current?.title;
+  const course = rest.course !== undefined ? rest.course : current?.course;
+  const activity = rest.activity !== undefined ? rest.activity : current?.activity;
+  const syllabus = requestedTags.includes('syllabus-import') || (current?.tags || []).includes('syllabus-import');
   const fingerprint = syllabus && title ? syllabusFingerprint({ title, course, activity }) : undefined;
   return {
     ...rest,
