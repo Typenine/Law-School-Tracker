@@ -261,7 +261,7 @@ export async function searchAiNotes(
     values,
   );
 
-  return result.rows.map(row => ({
+  return result.rows.map((row: any) => ({
     ...toSummary(row),
     excerpt: String(row.excerpt || '').replace(/\s+/g, ' ').trim(),
     score: Number(row.score) || 0,
