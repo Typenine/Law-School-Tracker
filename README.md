@@ -9,6 +9,7 @@ A simple app to help you stay on track with readings and assignments and log stu
 - Log study sessions with minutes, focus level (1-10), notes (CSV import supported)
 - Stats: upcoming tasks, hours this week, focus average
 - Planner page: next 7 days grouped by date
+- Upload and search law-school notes for a private custom GPT Action
 - Storage: Postgres via `DATABASE_URL` on Vercel; JSON file locally for dev
   
 Extras:
@@ -37,6 +38,30 @@ By default, data is stored in `data/db.json` (created on first write). This file
 ## Deploy to Vercel
 - Push this repo to GitHub/GitLab/Bitbucket
 - Import to Vercel → Framework: Next.js → set `DATABASE_URL` if using Postgres → Deploy
+
+## Law School GPT Action
+
+The Notes page can extract and store text from PDF, DOCX, TXT, and Markdown files. The original uploaded file is not retained. Notes are stored in Postgres and searched through protected, read-only GPT endpoints.
+
+Set these Vercel environment variables before using the feature:
+
+- `LAW_SCHOOL_GPT_TOKEN`: bearer token used by the custom GPT Action. This token has read-only access to courses, assignments, and notes.
+- `LAW_SCHOOL_NOTES_TOKEN`: token used by the Notes page for uploading, listing, and deleting notes. Use a different value from the GPT token. If omitted, the app falls back to `LAW_SCHOOL_GPT_TOKEN`.
+
+After deployment:
+
+1. Open `/notes` and save the notes token in the browser.
+2. Upload notes and verify they appear in the saved-notes list.
+3. Copy the OpenAPI schema URL shown on the Notes page.
+4. In the custom GPT builder, add an Action using that schema URL.
+5. Configure Action authentication as an API key sent with Bearer authentication, using `LAW_SCHOOL_GPT_TOKEN`.
+
+The GPT Action exposes only these read operations:
+
+- List courses
+- Filter assignments by status, course, or date range
+- Search uploaded notes by topic, course, semester, or class date
+- Retrieve the full text of a selected note
 
 ## Import Sessions (CSV)
 - Use Settings → Import Data (CSV) to import study sessions with mapping, preview, deduplication, and append/replace modes.
