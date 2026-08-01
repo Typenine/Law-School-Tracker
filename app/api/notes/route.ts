@@ -33,7 +33,8 @@ async function extractText(file: File): Promise<string> {
     mime === 'application/vnd.openxmlformats-officedocument.wordprocessingml.document'
     || name.endsWith('.docx')
   ) {
-    const mammoth = await import('mammoth');
+    const module = await import('mammoth');
+    const mammoth = (module as any).default || module;
     const result = await mammoth.extractRawText({ buffer });
     return result.value || '';
   }
