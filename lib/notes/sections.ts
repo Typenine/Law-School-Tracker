@@ -2,11 +2,15 @@ import { randomUUID } from 'crypto';
 import { cleanText, ensureNotesSchema, notesDb, toSection } from './db';
 import type { NoteSection } from './types';
 
+// The count has to match what the tree actually lists: pages you have set
+// aside are not pages you have. Leaving the trash in made deleting a page look
+// like it had done nothing, because the number beside the section never moved.
 const SECTION_SELECT = `
   SELECT section.*,
     (SELECT COUNT(*)::int FROM ai_notes note
       WHERE note.section_id = section.id
-        AND note.archived = FALSE) AS page_count
+        AND note.archived = FALSE
+        AND note.deleted_at IS NULL) AS page_count
   FROM ai_note_sections section
 `;
 

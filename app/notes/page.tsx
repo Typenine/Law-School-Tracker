@@ -1028,7 +1028,9 @@ export default function NotesPage() {
       setDraft(null);
       setPageId('');
       const remaining = await loadPages(notebookId, sectionName);
-      await Promise.all([loadNotebooks(), refreshNotebookPages(notebookId)]);
+      // Sections carry a page count, so they have to be reloaded as well or
+      // the number beside the section keeps counting the page just deleted.
+      await Promise.all([loadNotebooks(), loadSections(), refreshNotebookPages(notebookId)]);
       if (remaining[0]) void openPage(remaining[0].id);
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Unable to delete the page.');
@@ -1435,7 +1437,7 @@ export default function NotesPage() {
                       </label>
                       <div className="nb-details-actions">
                         <button type="button" className="nb-link-warn" onClick={() => void archivePage()}>Archive page</button>
-                        <button type="button" className="nb-link-danger" onClick={() => void deletePage()}>Delete permanently</button>
+                        <button type="button" className="nb-link-danger" onClick={() => void deletePage()}>Move to trash</button>
                       </div>
                     </div>
                   )}

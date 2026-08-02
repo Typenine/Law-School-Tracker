@@ -30,6 +30,52 @@ describe('nothing is destroyed by accident', () => {
     assert.ok(trashed.some(n => n.id === brief.id), 'and turns up in the trash');
   });
 
+  it('stops counting a page once it is in the trash', async () => {
+    const book = await notebook();
+    const week = await section(book.id, 'Week 1');
+    const first = await page(book.id, week.id, 'One');
+    await page(book.id, week.id, 'Two');
+
+    const before = (await app.api('GET', `/api/notes/sections?notebookId=${book.id}`)).body.sections
+      .find(s => s.id === week.id);
+    assert.equal(before.pageCount, 2);
+
+    await app.api('DELETE', `/api/notes/${first.id}`);
+
+    // The count is the most visible sign a delete worked. Leaving the trash in
+    // it made deleting look like it had done nothing at all.
+    const after = (await app.api('GET', `/api/notes/sections?notebookId=${book.id}`)).body.sections
+      .find(s => s.id === week.id);
+    assert.equal(after.pageCount, 1, 'the section count drops');
+
+    const shelf = (await app.api('GET', '/api/notes/notebooks')).body.notebooks
+      .find(n => n.id === book.id);
+    assert.equal(shelf.noteCount, 1, 'and so does the notebook count');
+  });
+
+  it('counts a page again once it is restored', async () => {
+    const book = await notebook();
+    const week = await section(book.id, 'Week 1');
+    const only = await page(book.id, week.id, 'One');
+    await app.api('DELETE', `/api/notes/${only.id}`);
+    await app.api('POST', '/api/notes/deleted', { id: only.id });
+
+    const back = (await app.api('GET', `/api/notes/sections?notebookId=${book.id}`)).body.sections
+      .find(s => s.id === week.id);
+    assert.equal(back.pageCount, 1);
+  });
+
+  it('does not count archived pages either', async () => {
+    const book = await notebook();
+    const week = await section(book.id, 'Week 1');
+    const filed = await page(book.id, week.id, 'Set aside');
+    await app.api('PATCH', `/api/notes/${filed.id}`, { archived: true });
+
+    const shelf = (await app.api('GET', '/api/notes/notebooks')).body.notebooks
+      .find(n => n.id === book.id);
+    assert.equal(shelf.noteCount, 0, 'the notebook count matches what the tree lists');
+  });
+
   it('restore brings a page back where it was, with its text', async () => {
     const book = await notebook();
     const week = await section(book.id, 'Week 1');
