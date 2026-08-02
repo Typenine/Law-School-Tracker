@@ -53,6 +53,8 @@ export interface AiNoteSummary {
   mimeType: string | null;
   pinned: boolean;
   archived: boolean;
+  /** Set when the page is in the trash; null otherwise. */
+  deletedAt: string | null;
   wordCount: number;
   preview: string;
   createdAt: string;
@@ -80,5 +82,7 @@ export interface NoteFilters {
   from?: string | null;
   to?: string | null;
   archived?: boolean;
+  /** True to look inside the trash instead of past it. */
+  deleted?: boolean;
   limit?: number;
 }

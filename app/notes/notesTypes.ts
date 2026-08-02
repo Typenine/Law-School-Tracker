@@ -42,6 +42,7 @@ export type PageSummary = {
   mimeType: string | null;
   pinned: boolean;
   archived: boolean;
+  deletedAt: string | null;
   wordCount: number;
   preview: string;
   createdAt: string;

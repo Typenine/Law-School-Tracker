@@ -8,6 +8,8 @@ type Props = {
   initialHtml: string;
   onChange: (html: string) => void;
   onSaveNow: () => void;
+  /** Uploads an image and returns its URL, or null if it could not be stored. */
+  onUploadImage: (file: File) => Promise<string | null>;
 };
 
 const HIGHLIGHTS = [
@@ -50,7 +52,7 @@ const SIZES = [
  * by the DOM. Re-rendering the markup on each change would reset the caret to
  * the top of the page on every character.
  */
-export default function RichEditor({ pageId, initialHtml, onChange, onSaveNow }: Props) {
+export default function RichEditor({ pageId, initialHtml, onChange, onSaveNow, onUploadImage }: Props) {
   const editorRef = useRef<HTMLDivElement | null>(null);
   const [blockStyle, setBlockStyle] = useState('p');
   const [openMenu, setOpenMenu] = useState<'highlight' | 'color' | null>(null);
@@ -157,13 +159,42 @@ export default function RichEditor({ pageId, initialHtml, onChange, onSaveNow }:
     // Bold / italic / underline are handled natively by contenteditable.
   }
 
-  /** Paste as plain text so pasted PDFs and web pages do not import their CSS. */
+  const insertImage = useCallback(async (file: File) => {
+    const editor = editorRef.current;
+    if (!editor) return;
+    editor.focus();
+    const url = await onUploadImage(file);
+    if (!url) return;
+    try {
+      document.execCommand('insertHTML', false, `<img src="${url}" alt="${file.name.replace(/"/g, '')}">`);
+    } catch {}
+    emit();
+  }, [emit, onUploadImage]);
+
+  /**
+   * Paste text as plain text so pasted PDFs and web pages do not import their
+   * CSS, but let pasted screenshots through as images.
+   */
   function handlePaste(event: React.ClipboardEvent<HTMLDivElement>) {
+    const image = Array.from(event.clipboardData.items || [])
+      .find(item => item.kind === 'file' && item.type.startsWith('image/'));
+    if (image) {
+      const file = image.getAsFile();
+      if (file) { event.preventDefault(); void insertImage(file); return; }
+    }
     const text = event.clipboardData.getData('text/plain');
     if (!text) return;
     event.preventDefault();
     document.execCommand('insertText', false, text);
     emit();
+  }
+
+  /** Dropping an image file onto the canvas adds it too. */
+  function handleDrop(event: React.DragEvent<HTMLDivElement>) {
+    const file = Array.from(event.dataTransfer.files || []).find(f => f.type.startsWith('image/'));
+    if (!file) return;
+    event.preventDefault();
+    void insertImage(file);
   }
 
   function applyBlockStyle(value: string) {
@@ -327,6 +358,18 @@ export default function RichEditor({ pageId, initialHtml, onChange, onSaveNow }:
             🔗
           </Button>
           <Button title="Remove link" onClick={() => run('unlink')}>⛓</Button>
+          <Button
+            title="Insert an image"
+            onClick={() => {
+              const picker = document.createElement('input');
+              picker.type = 'file';
+              picker.accept = 'image/*';
+              picker.onchange = () => { const f = picker.files?.[0]; if (f) void insertImage(f); };
+              picker.click();
+            }}
+          >
+            🖼
+          </Button>
           <Button title="Clear formatting" onClick={() => run('removeFormat')}>⌫</Button>
         </div>
       </div>
@@ -345,6 +388,8 @@ export default function RichEditor({ pageId, initialHtml, onChange, onSaveNow }:
         onClick={handleClick}
         onKeyDown={handleKeyDown}
         onPaste={handlePaste}
+        onDrop={handleDrop}
+        onDragOver={event => { if (event.dataTransfer.types.includes('Files')) event.preventDefault(); }}
       />
     </div>
   );

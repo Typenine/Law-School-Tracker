@@ -151,6 +151,9 @@ async function applyNotesSchema(): Promise<void> {
   // Pages point at a section by id. The `section` name column stays as a
   // denormalised copy so search, the GPT endpoints and older rows keep working.
   await run(`ALTER TABLE ai_notes ADD COLUMN IF NOT EXISTS section_id TEXT`);
+  // Deleting a page is recoverable: it goes to the trash rather than vanishing.
+  await run(`ALTER TABLE ai_notes ADD COLUMN IF NOT EXISTS deleted_at TIMESTAMPTZ`);
+  await run(`CREATE INDEX IF NOT EXISTS ai_notes_deleted_idx ON ai_notes (deleted_at)`);
   await run(`CREATE INDEX IF NOT EXISTS ai_notes_section_id_idx ON ai_notes (section_id)`);
   await run(`CREATE INDEX IF NOT EXISTS ai_notes_course_idx ON ai_notes (LOWER(course))`);
   await run(`CREATE INDEX IF NOT EXISTS ai_notes_notebook_idx ON ai_notes (notebook_id)`);
@@ -195,6 +198,11 @@ async function applyNotesSchema(): Promise<void> {
 
   // Promote the section names already stored on pages into real section rows
   // so they can be ordered, recoloured and renamed like OneNote tabs.
+  //
+  // Only pages that have never been filed qualify. Pages keep a denormalised
+  // copy of their section name, so without the section_id guard this would run
+  // on every boot and resurrect a top-level tab for every section anyone had
+  // ever deleted. Pages in the trash are skipped for the same reason.
   await run(`
     INSERT INTO ai_note_sections (id, notebook_id, name)
     SELECT DISTINCT ON (note.notebook_id, LOWER(TRIM(note.section)))
@@ -203,6 +211,8 @@ async function applyNotesSchema(): Promise<void> {
       TRIM(note.section)
     FROM ai_notes note
     WHERE note.notebook_id IS NOT NULL
+      AND note.section_id IS NULL
+      AND note.deleted_at IS NULL
       AND NULLIF(TRIM(note.section), '') IS NOT NULL
     ON CONFLICT DO NOTHING
   `);
@@ -212,9 +222,21 @@ async function applyNotesSchema(): Promise<void> {
     SET section_id = section.id
     FROM ai_note_sections section
     WHERE note.section_id IS NULL
+      AND note.deleted_at IS NULL
       AND section.notebook_id = note.notebook_id
       AND section.parent_id IS NULL
       AND LOWER(section.name) = LOWER(TRIM(note.section))
+  `);
+
+  // A page whose section was deleted out from under it would otherwise be
+  // invisible: it is filed under an id that no longer resolves to anything.
+  await run(`
+    UPDATE ai_notes note
+    SET section_id = NULL
+    WHERE note.section_id IS NOT NULL
+      AND NOT EXISTS (
+        SELECT 1 FROM ai_note_sections section WHERE section.id = note.section_id
+      )
   `);
 
   // Every notebook gets at least one tab to write on.
@@ -257,6 +279,8 @@ export function htmlToPlainText(html: string): string {
     .replace(/<br\s*\/?>/gi, '\n')
     .replace(/<\/(p|div|h1|h2|h3|h4|li|tr|blockquote|pre)>/gi, '\n')
     .replace(/<hr\s*\/?>/gi, '\n---\n')
+    .replace(/<img[^>]*alt="([^"]+)"[^>]*>/gi, '\n[image: $1]\n')
+    .replace(/<img[^>]*>/gi, '\n[image]\n')
     .replace(/<[^>]+>/g, '')
     .replace(/&nbsp;/gi, ' ')
     .replace(/&amp;/gi, '&')
@@ -347,6 +371,14 @@ export function plainTextToHtml(text: string): string {
 export function sanitizeNoteHtml(html: string): string {
   if (!html) return '<p><br></p>';
   const cleaned = html
+    // Images are allowed, but only ones we serve: an arbitrary remote src is a
+    // tracking pixel, and javascript:/data: are script vectors.
+    .replace(/<img\b[^>]*>/gi, tag => {
+      const src = /\ssrc\s*=\s*["']([^"']+)["']/i.exec(tag)?.[1] || '';
+      if (!/^https:\/\//i.test(src)) return '';
+      const alt = /\salt\s*=\s*["']([^"']*)["']/i.exec(tag)?.[1] || '';
+      return `<img src="${src.replace(/"/g, '&quot;')}" alt="${alt.replace(/"/g, '&quot;')}">`;
+    })
     .replace(/<\s*(script|style|iframe|object|embed|form|input|link|meta)\b[\s\S]*?<\s*\/\s*\1\s*>/gi, '')
     .replace(/<\s*(script|style|iframe|object|embed|form|input|link|meta)\b[^>]*\/?\s*>/gi, '')
     .replace(/\son\w+\s*=\s*"[^"]*"/gi, '')
@@ -404,6 +436,7 @@ export function toNoteSummary(row: any): AiNoteSummary {
     mimeType: row.mime_type ?? null,
     pinned: Boolean(row.pinned),
     archived: Boolean(row.archived),
+    deletedAt: row.deleted_at ? iso(row.deleted_at) : null,
     wordCount: Number(row.word_count) || 0,
     preview: previewText.slice(0, 240),
     createdAt: iso(row.created_at),
@@ -472,6 +505,10 @@ export function addNoteFilters(input: NoteFilters, clauses: string[], values: un
   }
   values.push(input.archived === true);
   clauses.push(`${alias}.archived = $${values.length}`);
+  // The trash is a separate view; everything else ignores deleted pages.
+  clauses.push(input.deleted === true
+    ? `${alias}.deleted_at IS NOT NULL`
+    : `${alias}.deleted_at IS NULL`);
 }
 
 export async function getNotebookDefaults(id: string | null | undefined): Promise<{ course: string | null; semester: string | null } | null> {

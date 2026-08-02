@@ -1,8 +1,10 @@
 import { NextRequest } from 'next/server';
 import { z } from 'zod';
 import {
+  NoteConflictError,
   deleteAiNote,
   getAiNote,
+  purgeAiNote,
   updateAiNote,
   type NoteSourceType,
 } from '@/lib/aiNotes';
@@ -35,6 +37,7 @@ const updateSchema = z.object({
   content: z.string().max(2_000_000).optional(),
   contentHtml: z.string().max(4_000_000).optional(),
   position: z.number().int().min(0).max(10_000).optional(),
+  expectedUpdatedAt: z.string().trim().max(40).nullable().optional(),
 });
 
 export async function GET(
@@ -72,6 +75,10 @@ export async function PATCH(
     if (!note) return noStoreJson({ error: 'Note not found.' }, { status: 404 });
     return noStoreJson({ note });
   } catch (error) {
+    // 409 so the editor can offer to reload rather than clobbering.
+    if (error instanceof NoteConflictError) {
+      return noStoreJson({ error: error.message, note: error.current }, { status: 409 });
+    }
     return noStoreJson(
       { error: error instanceof Error ? error.message : 'Unable to update note.' },
       { status: 500 },
@@ -92,13 +99,15 @@ export async function POST(
 }
 
 export async function DELETE(
-  _req: NextRequest,
+  req: NextRequest,
   { params }: { params: { id: string } },
 ) {
   try {
-    const deleted = await deleteAiNote(params.id);
+    // ?purge=true is the only path that destroys a page for good.
+    const purge = req.nextUrl.searchParams.get('purge') === 'true';
+    const deleted = purge ? await purgeAiNote(params.id) : await deleteAiNote(params.id);
     if (!deleted) return noStoreJson({ error: 'Note not found.' }, { status: 404 });
-    return noStoreJson({ deleted: true });
+    return noStoreJson({ deleted: true, purged: purge });
   } catch (error) {
     return noStoreJson(
       { error: error instanceof Error ? error.message : 'Unable to delete note.' },

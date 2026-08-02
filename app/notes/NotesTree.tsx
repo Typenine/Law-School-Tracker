@@ -1,6 +1,6 @@
 'use client';
 
-import { useMemo } from 'react';
+import { useMemo, useState } from 'react';
 import { termSortKey } from '@/lib/semester';
 import { Notebook, PageSummary, Section, formatUpdated, sectionColor } from './notesTypes';
 
@@ -35,6 +35,8 @@ export type TreeProps = {
   onEditSection: (section: Section, colour: string) => void;
   onNewPage: (notebookId: string, sectionId: string, section: string) => void;
   searchResults: PageSummary[] | null;
+  /** Page dragged onto another page (reorder) or onto a section (move). */
+  onMovePage: (pageId: string, targetSectionId: string, beforePageId: string | null) => void;
 };
 
 export const semesterKey = (name: string) => `sem:${name}`;
@@ -50,8 +52,10 @@ export default function NotesTree(props: TreeProps) {
     notebooks, sections, pagesByNotebook, expanded, onToggle,
     selectedNotebookId, selectedSectionId, selectedPageId, loadingNotebookId,
     onSelectPage, onNewNotebook, onEditNotebook, onNewSection, onEditSection,
-    onNewPage, searchResults,
+    onNewPage, searchResults, onMovePage,
   } = props;
+  const [dragId, setDragId] = useState('');
+  const [dropId, setDropId] = useState('');
 
   /** Semester -> notebooks, newest term first. */
   const groups = useMemo(() => {
@@ -139,7 +143,13 @@ export default function NotesTree(props: TreeProps) {
                   const indent = 26 + depth * 20;
                   return (
                     <div key={section.id}>
-                      <div className={`nb-node nb-node-sec${isCurrent ? ' is-current' : ''}`} style={{ ['--sec' as any]: colour }}>
+                      <div
+                        className={`nb-node nb-node-sec${isCurrent ? ' is-current' : ''}${dropId === section.id ? ' is-drop-target' : ''}`}
+                        style={{ ['--sec' as any]: colour }}
+                        onDragOver={event => { if (dragId) { event.preventDefault(); setDropId(section.id); } }}
+                        onDragLeave={() => setDropId(current => current === section.id ? '' : current)}
+                        onDrop={event => { event.preventDefault(); if (dragId) onMovePage(dragId, section.id, null); setDragId(''); setDropId(''); }}
+                      >
                         <button type="button" className="nb-node-main" style={{ paddingLeft: indent }} onClick={() => onToggle(secKey)}>
                           <Twisty open={secOpen} />
                           <span className="nb-sec-chip" />
@@ -160,7 +170,17 @@ export default function NotesTree(props: TreeProps) {
                             <button
                               key={page.id}
                               type="button"
-                              className={`nb-node nb-node-page${page.id === selectedPageId ? ' is-active' : ''}`}
+                              draggable
+                              onDragStart={() => setDragId(page.id)}
+                              onDragEnd={() => { setDragId(''); setDropId(''); }}
+                              onDragOver={event => { if (dragId && dragId !== page.id) { event.preventDefault(); setDropId(page.id); } }}
+                              onDragLeave={() => setDropId(current => current === page.id ? '' : current)}
+                              onDrop={event => {
+                                event.preventDefault();
+                                if (dragId && dragId !== page.id) onMovePage(dragId, section.id, page.id);
+                                setDragId(''); setDropId('');
+                              }}
+                              className={`nb-node nb-node-page${page.id === selectedPageId ? ' is-active' : ''}${dragId === page.id ? ' is-drag' : ''}${dropId === page.id ? ' is-drop-target' : ''}`}
                               style={{ paddingLeft: indent + 22 }}
                               onClick={() => onSelectPage(book.id, section.id, section.name, page.id)}
                             >

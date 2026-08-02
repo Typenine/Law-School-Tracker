@@ -84,6 +84,25 @@ export async function GET(req: NextRequest) {
           },
         },
       },
+      '/api/gpt/notebooks': {
+        get: {
+          operationId: 'listNotebooks',
+          summary: 'List notebooks and their section hierarchy',
+          description: 'Returns every notebook with its nested sections. Notes are organised as notebook (a semester, such as "Fall 2026") > subject (such as "Evidence") > category (such as "Case Briefs" or "Class Notes") > week > pages, though the depth is up to the user. Call this first when a question names a subject, a category or a week, then pass the matching sectionId to searchNotes so you search the right branch instead of guessing at names.',
+          responses: {
+            '200': {
+              description: 'Notebooks with nested sections',
+              content: {
+                'application/json': {
+                  schema: { $ref: '#/components/schemas/NotebookListResponse' },
+                },
+              },
+            },
+            '401': { $ref: '#/components/responses/Unauthorized' },
+            '503': { $ref: '#/components/responses/NotConfigured' },
+          },
+        },
+      },
       '/api/gpt/notes': {
         get: {
           operationId: 'searchNotes',
@@ -105,6 +124,24 @@ export async function GET(req: NextRequest) {
             {
               name: 'semester',
               in: 'query',
+              schema: { type: 'string' },
+            },
+            {
+              name: 'notebookId',
+              in: 'query',
+              description: 'Restrict the search to one notebook. Get the id from listNotebooks.',
+              schema: { type: 'string' },
+            },
+            {
+              name: 'section',
+              in: 'query',
+              description: 'The section a page sits in, such as a category ("Case Briefs") or a week ("Week 3"). Exact match on the section name. Sections nest, so the same name can appear under more than one subject - prefer sectionId when you know it.',
+              schema: { type: 'string' },
+            },
+            {
+              name: 'sectionId',
+              in: 'query',
+              description: 'Restrict the search to one exact section from listNotebooks. This is the precise way to ask for one branch of the hierarchy, for example the Week 3 folder under Evidence > Case Briefs.',
               schema: { type: 'string' },
             },
             {
@@ -284,6 +321,16 @@ export async function GET(req: NextRequest) {
             title: { type: 'string' },
             course: { type: ['string', 'null'] },
             semester: { type: ['string', 'null'] },
+            notebookId: { type: ['string', 'null'] },
+            notebookName: { type: ['string', 'null'] },
+            section: {
+              type: ['string', 'null'],
+              description: 'Name of the section this page is filed under.',
+            },
+            sectionId: {
+              type: ['string', 'null'],
+              description: 'Pass back to searchNotes to find the rest of this page’s section.',
+            },
             classDate: { type: ['string', 'null'], format: 'date' },
             sourceType: {
               type: 'string',
@@ -319,6 +366,45 @@ export async function GET(req: NextRequest) {
               },
             },
           ],
+        },
+        NotebookSection: {
+          type: 'object',
+          required: ['id', 'name', 'pageCount', 'sections'],
+          properties: {
+            id: { type: 'string' },
+            name: { type: 'string' },
+            pageCount: { type: 'integer' },
+            sections: {
+              type: 'array',
+              description: 'Sections nested directly beneath this one.',
+              items: { $ref: '#/components/schemas/NotebookSection' },
+            },
+          },
+        },
+        NotebookListResponse: {
+          type: 'object',
+          required: ['notebooks'],
+          properties: {
+            notebooks: {
+              type: 'array',
+              items: {
+                type: 'object',
+                required: ['id', 'name', 'sections'],
+                properties: {
+                  id: { type: 'string' },
+                  name: { type: 'string' },
+                  course: { type: ['string', 'null'] },
+                  semester: { type: ['string', 'null'] },
+                  archived: { type: 'boolean' },
+                  pageCount: { type: 'integer' },
+                  sections: {
+                    type: 'array',
+                    items: { $ref: '#/components/schemas/NotebookSection' },
+                  },
+                },
+              },
+            },
+          },
         },
         NoteSearchResponse: {
           type: 'object',

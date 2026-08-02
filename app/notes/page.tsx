@@ -61,6 +61,8 @@ export default function NotesPage() {
   const [dirty, setDirty] = useState(false);
   const [saveState, setSaveState] = useState<'idle' | 'saving' | 'saved' | 'error'>('idle');
   const [error, setError] = useState('');
+  const [conflict, setConflict] = useState(false);
+  const [setAside, setSetAside] = useState<{ trashed: PageSummary[]; archived: PageSummary[] } | null>(null);
 
   const [notebookModal, setNotebookModal] = useState<NotebookForm | null>(null);
   const [sectionModal, setSectionModal] = useState<SectionForm | null>(null);
@@ -198,6 +200,9 @@ export default function NotesPage() {
     topics: current.topics,
     pinned: current.pinned,
     contentHtml: htmlRef.current,
+    // What we believe the server has. If it moved on, the save is refused
+    // rather than overwriting an edit made on another device.
+    expectedUpdatedAt: current.updatedAt,
   }), []);
 
   const savePage = useCallback(async (force = false) => {
@@ -230,10 +235,20 @@ export default function NotesPage() {
         return { ...current, [key]: list.map(p => p.id === saved.id ? { ...p, title: saved.title, section: saved.section, pinned: saved.pinned, updatedAt: saved.updatedAt } : p) };
       });
     } catch (err) {
+      const message = err instanceof Error ? err.message : 'Unable to save the page.';
+      // A conflict is not worth retrying: someone else's version is newer, so
+      // ask rather than looping until one of the two edits is lost.
+      if (/changed somewhere else/i.test(message)) {
+        setSaveState('error');
+        setConflict(true);
+        setError(`${message} Your unsaved text is still on screen — copy anything you need, then reload the page.`);
+        savingRef.current = false;
+        return;
+      }
       // Keep the edits marked dirty and try again shortly. Giving up here used
       // to leave "Save failed" on screen with the work only in the browser.
       setSaveState('error');
-      setError(err instanceof Error ? err.message : 'Unable to save the page.');
+      setError(message);
       const attempt = Math.min(retryRef.current + 1, 5);
       retryRef.current = attempt;
       if (retryTimerRef.current) window.clearTimeout(retryTimerRef.current);
@@ -363,10 +378,10 @@ export default function NotesPage() {
   useEffect(() => {
     const query = searchQuery.trim();
     if (!query) { setSearchResults(null); return; }
-    if (!notebookId) return;
     const timer = window.setTimeout(async () => {
       try {
-        const params = new URLSearchParams({ limit: '100', notebookId, q: query });
+        // Across every notebook: the box says "all notes" and now means it.
+        const params = new URLSearchParams({ limit: '100', q: query });
         const data = await api(`/api/notes?${params.toString()}`);
         setSearchResults(Array.isArray(data?.notes) ? (data.notes as PageSummary[]) : []);
       } catch {
@@ -470,6 +485,88 @@ export default function NotesPage() {
     setSectionId(secId);
     setSectionName(section);
     await createPage(nbId, section, secId);
+  }
+
+  /**
+   * Drag a page onto another page to reorder within its section, or onto a
+   * section to move it there. Both go through the same reorder call.
+   */
+  async function movePage(pageId: string, targetSectionId: string, beforePageId: string | null) {
+    const target = sections.find(x => x.id === targetSectionId);
+    if (!target) return;
+    const bookPages = pagesByNotebook[target.notebookId] || [];
+    const moving = bookPages.find(p => p.id === pageId);
+    if (!moving) return;
+
+    const rest = bookPages
+      .filter(p => p.sectionId === targetSectionId && p.id !== pageId)
+      .sort((a, b) => a.position - b.position)
+      .map(p => p.id);
+    const at = beforePageId ? rest.indexOf(beforePageId) : rest.length;
+    rest.splice(at < 0 ? rest.length : at, 0, pageId);
+
+    // Reflect the move straight away; the server call follows.
+    setPagesByNotebook(current => ({
+      ...current,
+      [target.notebookId]: (current[target.notebookId] || []).map(p => p.id === pageId
+        ? { ...p, sectionId: targetSectionId, section: target.name, position: rest.indexOf(pageId) }
+        : p),
+    }));
+    try {
+      await api('/api/notes/reorder', {
+        method: 'PUT',
+        body: JSON.stringify({ notebookId: target.notebookId, sectionId: targetSectionId, orderedIds: rest }),
+      });
+      await Promise.all([loadSections(), refreshNotebookPages(target.notebookId)]);
+      if (pageId === draftRef.current?.id) await openPage(pageId);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Unable to move the page.');
+      await refreshNotebookPages(target.notebookId);
+    }
+  }
+
+  const uploadImage = useCallback(async (file: File): Promise<string | null> => {
+    try {
+      const body = new FormData();
+      body.set('file', file);
+      const data = await api('/api/notes/images', { method: 'POST', body });
+      return typeof data?.url === 'string' ? data.url : null;
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Unable to add the image.');
+      return null;
+    }
+  }, []);
+
+  const loadSetAside = useCallback(async () => {
+    try {
+      const data = await api('/api/notes/deleted');
+      setSetAside({
+        trashed: Array.isArray(data?.trashed) ? data.trashed : [],
+        archived: Array.isArray(data?.archived) ? data.archived : [],
+      });
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Unable to load set-aside pages.');
+    }
+  }, []);
+
+  async function restorePage(id: string) {
+    try {
+      await api('/api/notes/deleted', { method: 'POST', body: JSON.stringify({ id }) });
+      await Promise.all([loadNotebooks(), loadSections(), loadSetAside()]);
+      if (notebookId) await refreshNotebookPages(notebookId);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Unable to restore the page.');
+    }
+  }
+
+  async function purgePage(id: string, title: string) {
+    if (!window.confirm(`Permanently delete “${title}”? This cannot be undone.`)) return;
+    try {
+      await api(`/api/notes/${encodeURIComponent(id)}?purge=true`, { method: 'DELETE' });
+      await loadSetAside();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Unable to delete the page.');
+    }
   }
 
   function patchDraft(patch: Partial<Page>) {
@@ -685,7 +782,7 @@ export default function NotesPage() {
 
   async function deletePage() {
     if (!draft) return;
-    if (!window.confirm(`Permanently delete “${draft.title}”?`)) return;
+    if (!window.confirm(`Move “${draft.title}” to the trash? You can restore it from Set aside.`)) return;
     try {
       await api(`/api/notes/${encodeURIComponent(draft.id)}`, { method: 'DELETE' });
       // Clear the dirty flag first so the autosave effect cannot re-create the
@@ -730,6 +827,18 @@ export default function NotesPage() {
     } finally {
       setSavingModal(false);
     }
+  }
+
+  /**
+   * A copy of the notes that lives outside this app. One notebook, or the lot.
+   * The server assembles the Markdown in tree order; the browser just saves it.
+   */
+  function downloadBackup(notebook: string | null) {
+    const query = notebook ? `?notebookId=${encodeURIComponent(notebook)}` : '';
+    const anchor = document.createElement('a');
+    anchor.href = `/api/notes/export${query}`;
+    anchor.rel = 'noopener';
+    anchor.click();
   }
 
   function exportPage() {
@@ -882,7 +991,21 @@ export default function NotesPage() {
               onEditSection={(section, colour) => { setNotebookId(section.notebookId); setSectionModal({ id: section.id, parentId: section.parentId, name: section.name, color: colour }); }}
               onNewPage={(nb, secId, section) => void createPageIn(nb, secId, section)}
               searchResults={searchResults}
+              onMovePage={(pageId, targetSectionId, beforePageId) => void movePage(pageId, targetSectionId, beforePageId)}
             />
+          </div>
+          <div className="nb-rail-foot-row">
+            <button type="button" className="nb-rail-foot" onClick={() => void loadSetAside()}>
+              Set aside — trash &amp; archive
+            </button>
+            <button
+              type="button"
+              className="nb-rail-foot"
+              onClick={() => downloadBackup(null)}
+              title="Download every notebook as one Markdown file"
+            >
+              Back up everything
+            </button>
           </div>
         </aside>
 
@@ -970,7 +1093,15 @@ export default function NotesPage() {
                         {draft.pinned ? '★ Pinned' : '☆ Pin'}
                       </button>
                       <button type="button" className="nb-chip" onClick={() => setShowDetails(open => !open)}>Page info</button>
-                      <button type="button" className="nb-chip" onClick={exportPage}>Export</button>
+                      <button type="button" className="nb-chip" onClick={exportPage}>Export page</button>
+                      <button
+                        type="button"
+                        className="nb-chip"
+                        onClick={() => downloadBackup(notebookId)}
+                        title="Download this whole notebook as one Markdown file"
+                      >
+                        Export notebook
+                      </button>
                       <button type="button" className="nb-chip" onClick={() => void savePage(true)}>Save now</button>
                     </div>
                   </div>
@@ -1024,6 +1155,7 @@ export default function NotesPage() {
                       if (!dirtyRef.current) { setDirty(true); setSaveState('idle'); }
                     }}
                     onSaveNow={() => void savePage(true)}
+                    onUploadImage={uploadImage}
                   />
                 </>
               )}
@@ -1111,6 +1243,39 @@ export default function NotesPage() {
           </div>
         </div>
       </div>
+
+      {setAside && (
+        <div className="nb-modal-scrim" onMouseDown={event => event.target === event.currentTarget && setSetAside(null)}>
+          <div className="nb-modal nb-modal-wide">
+            <div className="nb-modal-head">
+              <div>
+                <h3>Set aside</h3>
+                <p>Pages you deleted or archived. Nothing here is gone until you say so.</p>
+              </div>
+              <button type="button" onClick={() => setSetAside(null)} aria-label="Close">×</button>
+            </div>
+            <div className="nb-aside-list">
+              {[['In the trash', setAside.trashed, true] as const, ['Archived', setAside.archived, false] as const].map(([label, list, purgeable]) => (
+                <section key={label}>
+                  <div className="nb-aside-head">{label} · {list.length}</div>
+                  {list.length === 0 ? <p className="nb-tree-empty">Nothing here.</p> : list.map(page => (
+                    <div key={page.id} className="nb-aside-row">
+                      <div className="nb-aside-main">
+                        <span className="nb-node-label">{page.title}</span>
+                        <span className="nb-node-meta">{page.notebookName || 'Unfiled'} · {page.section}</span>
+                      </div>
+                      <button type="button" className="nb-secondary" onClick={() => void restorePage(page.id)}>Restore</button>
+                      {purgeable && (
+                        <button type="button" className="nb-link-danger" onClick={() => void purgePage(page.id, page.title)}>Delete forever</button>
+                      )}
+                    </div>
+                  ))}
+                </section>
+              ))}
+            </div>
+          </div>
+        </div>
+      )}
 
       {notebookModal && (
         <NotebookModal

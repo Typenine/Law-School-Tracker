@@ -143,8 +143,21 @@ export async function deleteSection(
         [ids, fallback.id, fallback.name],
       );
     } else {
-      const removed = await client.query(`DELETE FROM ai_notes WHERE section_id = ANY($1::text[])`, [ids]);
+      // Pages go to the trash rather than being destroyed with the section.
+      // Their section_id is cleared at the same time - the row it points at is
+      // about to disappear, and a page filed under a section that no longer
+      // exists cannot be found again after it is restored.
+      const removed = await client.query(
+        `UPDATE ai_notes SET deleted_at = NOW(), section_id = NULL, updated_at = NOW()
+         WHERE section_id = ANY($1::text[]) AND deleted_at IS NULL`,
+        [ids],
+      );
       deletedPages = removed.rowCount || 0;
+      await client.query(
+        `UPDATE ai_notes SET section_id = NULL, updated_at = NOW()
+         WHERE section_id = ANY($1::text[])`,
+        [ids],
+      );
     }
     await client.query(`DELETE FROM ai_note_sections WHERE id = ANY($1::text[])`, [ids]);
     await client.query('COMMIT');

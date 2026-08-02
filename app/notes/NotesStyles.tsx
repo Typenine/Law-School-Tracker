@@ -66,6 +66,21 @@ export default function NotesStyles() {
       .nb-node-page.is-active { background: var(--active); color: var(--text); box-shadow: inset 2px 0 var(--tab); }
       .nb-node-empty { font-style: italic; opacity: .6; }
 
+      .nb-rail-foot-row { display: grid; gap: 6px; }
+      .nb-rail-foot { margin: 0 8px 10px; padding: 8px; border: 1px solid var(--line2); border-radius: 7px; background: var(--s2); color: var(--muted); font-size: 11.5px; cursor: pointer; }
+      .nb-rail-foot-row .nb-rail-foot { margin-bottom: 0; }
+      .nb-rail-foot-row { margin-bottom: 10px; }
+      .nb-rail-foot:hover { background: var(--s3); color: var(--text2); }
+      .nb-aside-list { display: grid; gap: 16px; max-height: 58vh; overflow-y: auto; }
+      .nb-aside-head { color: var(--label); font: 500 10px/1 'IBM Plex Mono', monospace; letter-spacing: .1em; text-transform: uppercase; padding-bottom: 7px; }
+      .nb-aside-row { display: flex; align-items: center; gap: 10px; padding: 8px 0; border-bottom: 1px solid var(--line); }
+      .nb-aside-main { flex: 1; min-width: 0; display: grid; }
+      .nb-conflict { border-color: rgba(255,204,0,.5) !important; background: rgba(255,204,0,.1) !important; color: #ffe8a3 !important; }
+
+      /* Drag feedback in the tree */
+      .nb-node-page.is-drag { opacity: .45; }
+      .nb-node.is-drop-target { outline: 1px dashed var(--tab); outline-offset: -1px; }
+
       /* Breadcrumb replaces the old horizontal tab strip */
       .nb-crumbs { flex: 1; min-width: 0; display: flex; align-items: center; gap: 8px; padding-bottom: 7px; overflow: hidden; }
       .nb-crumb { color: var(--text2); font-size: 13px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
@@ -161,6 +176,7 @@ export default function NotesStyles() {
       .nb-canvas blockquote { margin: 0 0 12px; padding: 4px 0 4px 15px; border-left: 3px solid var(--tab); color: var(--text2); }
       .nb-canvas hr { margin: 20px 0; border: 0; border-top: 1px solid var(--line2); }
       .nb-canvas a { color: var(--blue2); }
+      .nb-canvas img { max-width: 100%; height: auto; margin: 8px 0; border-radius: 6px; border: 1px solid var(--line2); }
       .nb-canvas code { padding: 1px 5px; border-radius: 4px; background: var(--s3); font-size: 13px; }
       .nb-canvas ::selection { background: rgba(139,92,246,.4); }
 
