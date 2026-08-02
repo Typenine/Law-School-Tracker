@@ -5,6 +5,7 @@ import RichEditor from './RichEditor';
 import { useTerm } from '@/lib/useTerm';
 import { termOptions, termSortKey } from '@/lib/semester';
 import NotesStyles from './NotesStyles';
+import NotesTree, { notebookKey, sectionKey, semesterKey } from './NotesTree';
 import {
   Notebook,
   Page,
@@ -66,8 +67,14 @@ export default function NotesPage() {
   const [savingModal, setSavingModal] = useState(false);
   const [showDetails, setShowDetails] = useState(false);
   const [railOpen, setRailOpen] = useState(true);
-  const [pageListOpen, setPageListOpen] = useState(true);
+  // The tree handles navigation, so the page list starts out of the way and
+  // the canvas gets the width. The Pages tab brings it back.
+  const [pageListOpen, setPageListOpen] = useState(false);
   const [dragPageId, setDragPageId] = useState<string>('');
+  /** Pages per notebook, fetched when a notebook is expanded in the tree. */
+  const [pagesByNotebook, setPagesByNotebook] = useState<Record<string, PageSummary[]>>({});
+  const [loadingNotebookId, setLoadingNotebookId] = useState('');
+  const [expanded, setExpanded] = useState<Set<string>>(new Set());
   // New notebooks belong to the semester you are actually in.
   const { term } = useTerm();
 
@@ -77,6 +84,8 @@ export default function NotesPage() {
   const draftRef = useRef<Page | null>(null);
   const savingRef = useRef(false);
   const dirtyRef = useRef(false);
+  const retryRef = useRef(0);
+  const retryTimerRef = useRef<number | null>(null);
 
   useEffect(() => { draftRef.current = draft; }, [draft]);
   useEffect(() => { dirtyRef.current = dirty; }, [dirty]);
@@ -176,6 +185,18 @@ export default function NotesPage() {
 
   // ------------------------------------------------------------------ saving
 
+  /** The body a save sends; shared by the normal path and the exit flush. */
+  const savePayload = useCallback((current: Page) => JSON.stringify({
+    title: current.title.trim() || 'Untitled Page',
+    notebookId: current.notebookId,
+    section: current.section || 'Notes',
+    classDate: current.classDate,
+    sourceType: current.sourceType,
+    topics: current.topics,
+    pinned: current.pinned,
+    contentHtml: htmlRef.current,
+  }), []);
+
   const savePage = useCallback(async (force = false) => {
     const current = draftRef.current;
     if (!current) return;
@@ -186,16 +207,7 @@ export default function NotesPage() {
     try {
       const data = await api(`/api/notes/${encodeURIComponent(current.id)}`, {
         method: 'PATCH',
-        body: JSON.stringify({
-          title: current.title.trim() || 'Untitled Page',
-          notebookId: current.notebookId,
-          section: current.section || 'Notes',
-          classDate: current.classDate,
-          sourceType: current.sourceType,
-          topics: current.topics,
-          pinned: current.pinned,
-          contentHtml: htmlRef.current,
-        }),
+        body: savePayload(current),
       });
       const saved = data.note as Page;
       setDraft(existing => existing && existing.id === saved.id
@@ -206,13 +218,45 @@ export default function NotesPage() {
         : page));
       setDirty(false);
       setSaveState('saved');
+      retryRef.current = 0;
+      // Keep the tree's copy of this page's title in step with the editor.
+      setPagesByNotebook(current => {
+        const key = saved.notebookId || '';
+        const list = current[key];
+        if (!list) return current;
+        return { ...current, [key]: list.map(p => p.id === saved.id ? { ...p, title: saved.title, section: saved.section, pinned: saved.pinned, updatedAt: saved.updatedAt } : p) };
+      });
     } catch (err) {
+      // Keep the edits marked dirty and try again shortly. Giving up here used
+      // to leave "Save failed" on screen with the work only in the browser.
       setSaveState('error');
       setError(err instanceof Error ? err.message : 'Unable to save the page.');
+      const attempt = Math.min(retryRef.current + 1, 5);
+      retryRef.current = attempt;
+      if (retryTimerRef.current) window.clearTimeout(retryTimerRef.current);
+      retryTimerRef.current = window.setTimeout(() => { void savePageRef.current?.(true); }, 1000 * 2 ** (attempt - 1));
     } finally {
       savingRef.current = false;
     }
-  }, []);
+  }, [savePayload]);
+
+  // savePage is referenced by the retry timer scheduled inside itself.
+  const savePageRef = useRef<((force?: boolean) => Promise<void>) | null>(null);
+  useEffect(() => { savePageRef.current = savePage; }, [savePage]);
+
+  /**
+   * Last-chance flush when the tab is hidden or closing. sendBeacon is the only
+   * request a browser reliably completes during unload, so a pending debounce
+   * is no longer lost when the tab goes away.
+   */
+  const flushOnExit = useCallback(() => {
+    const current = draftRef.current;
+    if (!current || !dirtyRef.current) return;
+    try {
+      const body = new Blob([savePayload(current)], { type: 'application/json' });
+      navigator.sendBeacon(`/api/notes/${encodeURIComponent(current.id)}`, body);
+    } catch {}
+  }, [savePayload]);
 
   // Autosave.
   useEffect(() => {
@@ -228,12 +272,20 @@ export default function NotesPage() {
       event.preventDefault();
       event.returnValue = '';
     }
+    function onHide() {
+      if (document.visibilityState === 'hidden') flushOnExit();
+    }
     window.addEventListener('beforeunload', beforeUnload);
+    window.addEventListener('pagehide', flushOnExit);
+    document.addEventListener('visibilitychange', onHide);
     return () => {
       window.removeEventListener('beforeunload', beforeUnload);
+      window.removeEventListener('pagehide', flushOnExit);
+      document.removeEventListener('visibilitychange', onHide);
+      if (retryTimerRef.current) window.clearTimeout(retryTimerRef.current);
       if (dirtyRef.current) void savePage(true);
     };
-  }, [savePage]);
+  }, [savePage, flushOnExit]);
 
   // ------------------------------------------------------------------- boot
 
@@ -292,6 +344,9 @@ export default function NotesPage() {
   useEffect(() => {
     if (!notebookId || !sectionName || !pageId) return;
     window.localStorage.setItem(`notesLastPage:${notebookId}:${sectionName}`, pageId);
+    revealPath(notebooks.find(n => n.id === notebookId), sectionName);
+    void loadNotebookPages(notebookId);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [notebookId, sectionName, pageId]);
 
   // Search across every page in the notebook.
@@ -312,6 +367,93 @@ export default function NotesPage() {
   }, [searchQuery, notebookId]);
 
   // ----------------------------------------------------------------- actions
+
+  /** Remember which branches are open between visits. */
+  const [restoredTree, setRestoredTree] = useState(false);
+  useEffect(() => {
+    try {
+      const stored = JSON.parse(window.localStorage.getItem('notesTreeOpenV1') || '[]');
+      if (Array.isArray(stored) && stored.length) setExpanded(new Set(stored as string[]));
+    } catch {}
+    setRestoredTree(true);
+  }, []);
+
+  /**
+   * First visit: nothing is remembered, so open the newest semester and its
+   * first notebook and section. A tree that starts entirely closed gives you
+   * nothing to click.
+   */
+  useEffect(() => {
+    if (!restoredTree || !booted || expanded.size > 0 || !notebooks.length) return;
+    const first = notebooks.find(n => n.id === notebookId) || notebooks[0];
+    const firstSection = sections.find(x => x.notebookId === first.id);
+    const next = new Set<string>([semesterKey(first.semester || 'Unsorted'), notebookKey(first.id)]);
+    if (firstSection) next.add(sectionKey(firstSection.id));
+    setExpanded(next);
+    persistExpanded(next);
+    void loadNotebookPages(first.id);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [restoredTree, booted, notebooks, sections]);
+
+  const persistExpanded = useCallback((next: Set<string>) => {
+    try { window.localStorage.setItem('notesTreeOpenV1', JSON.stringify(Array.from(next))); } catch {}
+  }, []);
+
+  /** Load a notebook's pages once, so its sections can list them. */
+  const loadNotebookPages = useCallback(async (id: string) => {
+    if (!id || pagesByNotebook[id]) return;
+    setLoadingNotebookId(id);
+    try {
+      const data = await api(`/api/notes?limit=500&notebookId=${encodeURIComponent(id)}`);
+      const list = Array.isArray(data?.notes) ? (data.notes as PageSummary[]) : [];
+      setPagesByNotebook(current => ({ ...current, [id]: list }));
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Unable to load pages.');
+    } finally {
+      setLoadingNotebookId('');
+    }
+  }, [pagesByNotebook]);
+
+  const toggleNode = useCallback((key: string) => {
+    setExpanded(current => {
+      const next = new Set(current);
+      if (next.has(key)) next.delete(key);
+      else {
+        next.add(key);
+        if (key.startsWith('nb:')) void loadNotebookPages(key.slice(3));
+      }
+      persistExpanded(next);
+      return next;
+    });
+  }, [loadNotebookPages, persistExpanded]);
+
+  /** Open the branches leading to a page so the selection is always visible. */
+  const revealPath = useCallback((notebook: Notebook | undefined, section: string) => {
+    if (!notebook) return;
+    const target = sections.find(s => s.notebookId === notebook.id && s.name.toLowerCase() === section.toLowerCase());
+    setExpanded(current => {
+      const next = new Set(current);
+      next.add(semesterKey(notebook.semester || 'Unsorted'));
+      next.add(notebookKey(notebook.id));
+      if (target) next.add(sectionKey(target.id));
+      persistExpanded(next);
+      return next;
+    });
+  }, [sections, persistExpanded]);
+
+  async function selectTreePage(nbId: string, section: string, id: string) {
+    if (id === pageId) return;
+    if (dirtyRef.current) await savePage(true);
+    if (nbId) setNotebookId(nbId);
+    if (section) setSectionName(section);
+    await openPage(id);
+  }
+
+  async function createPageIn(nbId: string, section: string) {
+    setNotebookId(nbId);
+    setSectionName(section);
+    await createPage(nbId, section);
+  }
 
   function patchDraft(patch: Partial<Page>) {
     setDirty(true);
@@ -342,38 +484,49 @@ export default function NotesPage() {
     await openPage(id);
   }
 
-  async function createPage() {
-    if (!notebookId) {
+  async function createPage(targetNotebook = notebookId, targetSection = sectionName) {
+    if (!targetNotebook) {
       setError('Create a notebook first.');
       return;
     }
     if (dirtyRef.current) await savePage(true);
     try {
-      // A notebook can end up with no section tabs (for instance if creating
-      // its default one failed). Rather than refusing to make a page, give the
+      // A notebook can end up with no sections (for instance if creating its
+      // default one failed). Rather than refusing to make a page, give the
       // notebook the section it should have had.
-      let section = sectionName;
+      let section = targetSection;
       if (!section) {
         const created = await api('/api/notes/sections', {
           method: 'POST',
-          body: JSON.stringify({ notebookId, name: 'Notes' }),
+          body: JSON.stringify({ notebookId: targetNotebook, name: 'Notes' }),
         });
         section = created?.section?.name || 'Notes';
-        await loadSections();
         setSectionName(section);
       }
       const data = await api('/api/notes', {
         method: 'POST',
         body: JSON.stringify({
           title: 'Untitled Page',
-          notebookId,
+          notebookId: targetNotebook,
           section,
           sourceType: 'class-notes',
           contentHtml: '<p><br></p>',
         }),
       });
       const page = data.note as Page;
-      await Promise.all([loadNotebooks(), loadPages(notebookId, section)]);
+      const [, nextSections] = await Promise.all([loadNotebooks(), loadSections(), loadPages(targetNotebook, section)]);
+      await refreshNotebookPages(targetNotebook);
+      // Make sure the new page is visible in the tree.
+      const book = notebooks.find(n => n.id === targetNotebook);
+      const target = nextSections.find(x => x.notebookId === targetNotebook && x.name.toLowerCase() === section.toLowerCase());
+      setExpanded(current => {
+        const next = new Set(current);
+        if (book) next.add(semesterKey(book.semester || 'Unsorted'));
+        next.add(notebookKey(targetNotebook));
+        if (target) next.add(sectionKey(target.id));
+        persistExpanded(next);
+        return next;
+      });
       htmlRef.current = page.contentHtml;
       setPageId(page.id);
       setDraft(page);
@@ -383,6 +536,16 @@ export default function NotesPage() {
       setError(err instanceof Error ? err.message : 'Unable to create the page.');
     }
   }
+
+  /** Re-read a notebook's pages after something changes them. */
+  const refreshNotebookPages = useCallback(async (id: string) => {
+    if (!id) return;
+    try {
+      const data = await api(`/api/notes?limit=500&notebookId=${encodeURIComponent(id)}`);
+      const list = Array.isArray(data?.notes) ? (data.notes as PageSummary[]) : [];
+      setPagesByNotebook(current => ({ ...current, [id]: list }));
+    } catch {}
+  }, []);
 
   async function saveNotebook(event: FormEvent) {
     event.preventDefault();
@@ -511,7 +674,7 @@ export default function NotesPage() {
       setDraft(null);
       setPageId('');
       const remaining = await loadPages(notebookId, sectionName);
-      await loadNotebooks();
+      await Promise.all([loadNotebooks(), refreshNotebookPages(notebookId)]);
       if (remaining[0]) void openPage(remaining[0].id);
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Unable to delete the page.');
@@ -655,7 +818,7 @@ export default function NotesPage() {
       )}
 
       <div className="nb-frame" style={{ ['--tab' as any]: activeSectionColor }}>
-        {/* Notebook rail */}
+        {/* Semester > subject > week > pages, all collapsible */}
         <aside className="nb-rail">
           <div className="nb-rail-head">
             <span>Notebooks</span>
@@ -668,79 +831,55 @@ export default function NotesPage() {
               +
             </button>
           </div>
+          <div className="nb-rail-search">
+            <input
+              value={searchQuery}
+              onChange={event => setSearchQuery(event.target.value)}
+              placeholder="Search all notes…"
+              aria-label="Search all notes"
+            />
+          </div>
           <div className="nb-rail-scroll">
-            {notebookGroups.map(([semester, items]) => (
-              <section key={semester}>
-                <div className="nb-rail-group">{semester}</div>
-                {items.map(notebook => (
-                  <div key={notebook.id} className={`nb-rail-row${notebook.id === notebookId ? ' is-active' : ''}`}>
-                    <button type="button" className="nb-rail-item" onClick={() => void selectNotebook(notebook.id)}>
-                      <span className="nb-dot" style={{ background: notebook.color || SECTION_COLORS[0] }} />
-                      <span className="nb-rail-name">{notebook.name}</span>
-                      <span className="nb-rail-count">{notebook.noteCount}</span>
-                    </button>
-                    <button
-                      type="button"
-                      className="nb-rail-edit"
-                      title={`Notebook settings for ${notebook.name}`}
-                      onClick={() => setNotebookModal({
-                        id: notebook.id,
-                        name: notebook.name,
-                        semester: notebook.semester || '',
-                        color: notebook.color || SECTION_COLORS[0],
-                      })}
-                    >
-                      ⋯
-                    </button>
-                  </div>
-                ))}
-              </section>
-            ))}
+            <NotesTree
+              notebooks={notebooks}
+              sections={sections}
+              pagesByNotebook={pagesByNotebook}
+              expanded={expanded}
+              onToggle={toggleNode}
+              selectedNotebookId={notebookId}
+              selectedSection={sectionName}
+              selectedPageId={pageId}
+              loadingNotebookId={loadingNotebookId}
+              onSelectPage={(nb, section, id) => void selectTreePage(nb, section, id)}
+              onNewNotebook={semester => setNotebookModal({ id: null, name: '', semester, color: SECTION_COLORS[0] })}
+              onEditNotebook={notebook => setNotebookModal({
+                id: notebook.id,
+                name: notebook.name,
+                semester: notebook.semester || '',
+                color: notebook.color || SECTION_COLORS[0],
+              })}
+              onNewSection={nb => { setNotebookId(nb); setSectionModal({ id: null, name: '', color: SECTION_COLORS[sections.filter(x => x.notebookId === nb).length % SECTION_COLORS.length] }); }}
+              onEditSection={(section, colour) => { setNotebookId(section.notebookId); setSectionModal({ id: section.id, name: section.name, color: colour }); }}
+              onNewPage={(nb, section) => void createPageIn(nb, section)}
+              searchResults={searchResults}
+            />
           </div>
         </aside>
 
-        {/* Section tabs + canvas + page list */}
         <div className="nb-body">
           <div className="nb-tabbar">
             <button
               type="button"
               className="nb-rail-toggle"
-              title={railOpen ? 'Hide notebooks' : 'Show notebooks'}
+              title={railOpen ? 'Hide the notebook tree' : 'Show the notebook tree'}
               onClick={() => setRailOpen(open => !open)}
             >
               ☰
             </button>
-            <div className="nb-tabs">
-              {notebookSections.map((section, index) => (
-                <button
-                  key={section.id}
-                  type="button"
-                  className={`nb-tab${section.name === sectionName ? ' is-active' : ''}`}
-                  style={{ ['--tab-color' as any]: sectionColor(section, index) }}
-                  onClick={() => void selectSection(section.name)}
-                  onDoubleClick={() => setSectionModal({
-                    id: section.id,
-                    name: section.name,
-                    color: sectionColor(section, index),
-                  })}
-                  title={`${section.name} — double-click to rename`}
-                >
-                  <span className="nb-tab-name">{section.name}</span>
-                  <span className="nb-tab-count">{section.pageCount}</span>
-                </button>
-              ))}
-              <button
-                type="button"
-                className="nb-tab nb-tab-add"
-                title="New section"
-                onClick={() => setSectionModal({
-                  id: null,
-                  name: '',
-                  color: SECTION_COLORS[notebookSections.length % SECTION_COLORS.length],
-                })}
-              >
-                +
-              </button>
+            <div className="nb-crumbs">
+              {activeNotebook && <span className="nb-crumb">{activeNotebook.name}</span>}
+              {activeNotebook && sectionName && <span className="nb-crumb-sep">›</span>}
+              {sectionName && <span className="nb-crumb" style={{ color: activeSectionColor }}>{sectionName}</span>}
             </div>
             {activeSection && (
               <button

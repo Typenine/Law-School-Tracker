@@ -78,6 +78,18 @@ export async function PATCH(
   }
 }
 
+/**
+ * Same as PATCH. navigator.sendBeacon can only issue POST, and it is the only
+ * request the browser reliably completes while a tab is closing - so the
+ * editor uses it to flush unsaved edits on the way out.
+ */
+export async function POST(
+  req: NextRequest,
+  context: { params: { id: string } },
+) {
+  return PATCH(req, context);
+}
+
 export async function DELETE(
   _req: NextRequest,
   { params }: { params: { id: string } },

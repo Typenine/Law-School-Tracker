@@ -25,7 +25,7 @@ export default function NotesStyles() {
       .nb-error button { background: none; border: 0; color: inherit; font-size: 17px; cursor: pointer; }
 
       /* Frame ------------------------------------------------------------ */
-      .nb-frame { --tab: #8b5cf6; display: grid; grid-template-columns: 214px minmax(0, 1fr); height: calc(100vh - 118px); min-height: 620px; border: 1px solid var(--line); border-radius: 12px; background: var(--s1); overflow: hidden; }
+      .nb-frame { --tab: #8b5cf6; display: grid; grid-template-columns: 264px minmax(0, 1fr); height: calc(100vh - 118px); min-height: 620px; border: 1px solid var(--line); border-radius: 12px; background: var(--s1); overflow: hidden; }
       .nb-rail-collapsed .nb-frame { grid-template-columns: 0 minmax(0, 1fr); }
       .nb-rail-collapsed .nb-rail { display: none; }
 
@@ -34,7 +34,42 @@ export default function NotesStyles() {
       .nb-rail-head { display: flex; align-items: center; justify-content: space-between; padding: 13px 12px 10px; color: var(--label); font: 500 10px/1 'IBM Plex Mono', monospace; letter-spacing: .12em; text-transform: uppercase; }
       .nb-icon-button { width: 22px; height: 22px; display: grid; place-items: center; border: 1px solid var(--btn); border-radius: 5px; background: var(--s2); color: var(--text2); cursor: pointer; }
       .nb-icon-button:hover { background: var(--hover); }
-      .nb-rail-scroll { flex: 1; overflow-y: auto; padding: 0 8px 12px; }
+      .nb-rail-scroll { flex: 1; overflow-y: auto; padding: 0 6px 14px; }
+      .nb-rail-search { padding: 0 10px 10px; }
+      .nb-rail-search input { width: 100%; padding: 6px 9px !important; font-size: 12px; }
+
+      /* Collapsible tree: semester > subject > week > page */
+      .nb-tree { display: flex; flex-direction: column; gap: 1px; }
+      .nb-tree-group { margin-bottom: 5px; }
+      .nb-tree-note, .nb-tree-empty { padding: 7px 10px; color: var(--muted2); font-size: 11.5px; }
+      .nb-node { display: flex; align-items: center; border-radius: 6px; }
+      .nb-node:hover { background: var(--s3); }
+      .nb-node-main { flex: 1; min-width: 0; display: flex; align-items: center; gap: 6px; padding: 6px 4px; border: 0; background: none; color: inherit; font: inherit; text-align: left; cursor: pointer; }
+      .nb-node-label { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+      .nb-node-count { color: var(--muted2); font: 400 10px/1 'IBM Plex Mono', monospace; }
+      .nb-node-meta { color: var(--muted2); font: 400 10px/1 'IBM Plex Mono', monospace; padding-left: 6px; }
+      .nb-node-action { padding: 3px 6px; border: 0; background: none; color: var(--muted2); font-size: 12px; cursor: pointer; opacity: 0; border-radius: 4px; }
+      .nb-node:hover .nb-node-action, .nb-node-action:focus { opacity: 1; }
+      .nb-node-action:hover { background: var(--hover); color: var(--text); }
+      .nb-twisty { flex: 0 0 11px; color: var(--muted2); font-size: 9px; transition: transform .12s; }
+      .nb-twisty.is-open { transform: rotate(90deg); }
+
+      .nb-node-sem > .nb-node-main { color: var(--text2); font: 500 10.5px/1.2 'IBM Plex Mono', monospace; letter-spacing: .1em; text-transform: uppercase; }
+      .nb-node-book > .nb-node-main { padding-left: 14px; color: var(--text3); font-size: 12.5px; }
+      .nb-node-book.is-current > .nb-node-main { color: var(--text); font-weight: 500; }
+      .nb-node-sec > .nb-node-main { padding-left: 28px; color: var(--text3); font-size: 12px; }
+      .nb-node-sec.is-current { background: var(--active); }
+      .nb-node-sec.is-current > .nb-node-main { color: var(--text); }
+      .nb-sec-chip { flex: 0 0 3px; width: 3px; height: 12px; border-radius: 2px; background: var(--sec, var(--muted2)); }
+      .nb-node-page { width: 100%; padding: 5px 8px 5px 46px; border: 0; background: none; color: var(--muted); font-size: 12px; text-align: left; cursor: pointer; display: flex; align-items: center; }
+      .nb-node-page:hover { background: var(--s3); color: var(--text2); }
+      .nb-node-page.is-active { background: var(--active); color: var(--text); box-shadow: inset 2px 0 var(--tab); }
+      .nb-node-empty { font-style: italic; opacity: .6; }
+
+      /* Breadcrumb replaces the old horizontal tab strip */
+      .nb-crumbs { flex: 1; min-width: 0; display: flex; align-items: center; gap: 8px; padding-bottom: 7px; overflow: hidden; }
+      .nb-crumb { color: var(--text2); font-size: 13px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+      .nb-crumb-sep { color: var(--muted2); }
       .nb-rail-group { padding: 12px 6px 5px; color: var(--muted2); font: 500 9.5px/1 'IBM Plex Mono', monospace; letter-spacing: .11em; text-transform: uppercase; }
       .nb-rail-row { display: flex; align-items: center; border-radius: 7px; }
       .nb-rail-row:hover { background: var(--s3); }
@@ -49,8 +84,8 @@ export default function NotesStyles() {
 
       /* Section tabs ----------------------------------------------------- */
       .nb-body { display: flex; flex-direction: column; min-width: 0; }
-      .nb-tabbar { display: flex; align-items: flex-end; gap: 8px; padding: 9px 12px 0; background: var(--side); border-bottom: 2px solid var(--tab); }
-      .nb-rail-toggle { margin-bottom: 7px; width: 28px; height: 28px; border: 1px solid var(--btn); border-radius: 6px; background: var(--s2); color: var(--text3); cursor: pointer; }
+      .nb-tabbar { display: flex; align-items: center; gap: 10px; padding: 9px 14px 0; background: var(--side); border-bottom: 2px solid var(--tab); }
+      .nb-rail-toggle { margin-bottom: 7px; flex: 0 0 auto; width: 28px; height: 28px; border: 1px solid var(--btn); border-radius: 6px; background: var(--s2); color: var(--text3); cursor: pointer; }
       .nb-rail-toggle:hover { background: var(--hover); }
       .nb-tabs { flex: 1; min-width: 0; display: flex; align-items: flex-end; gap: 3px; overflow-x: auto; scrollbar-width: thin; }
       .nb-tab { position: relative; flex: 0 0 auto; display: flex; align-items: center; gap: 8px; max-width: 210px; padding: 8px 14px; border: 1px solid var(--line2); border-bottom: 0; border-radius: 7px 7px 0 0; background: var(--s2); color: var(--text3); font-size: 12.5px; cursor: pointer; }
@@ -61,7 +96,7 @@ export default function NotesStyles() {
       .nb-tab-count { color: var(--muted2); font: 400 10px/1 'IBM Plex Mono', monospace; }
       .nb-tab-add { padding-inline: 12px; font-size: 15px; }
       .nb-tab-add:before { background: transparent; }
-      .nb-tab-settings { margin-bottom: 7px; padding: 6px 11px; border: 1px solid var(--btn); border-radius: 6px; background: var(--s2); color: var(--text3); font-size: 11.5px; cursor: pointer; white-space: nowrap; }
+      .nb-tab-settings { margin-bottom: 7px; flex: 0 0 auto; padding: 6px 11px; border: 1px solid var(--btn); border-radius: 6px; background: var(--s2); color: var(--text3); font-size: 11.5px; cursor: pointer; white-space: nowrap; }
       .nb-tab-settings:hover { background: var(--hover); color: var(--text); }
 
       /* Workspace -------------------------------------------------------- */
@@ -190,7 +225,7 @@ export default function NotesStyles() {
 
       @media (max-width: 1080px) {
         .nb-workspace { grid-template-columns: minmax(0, 1fr) 232px; }
-        .nb-frame { grid-template-columns: 190px minmax(0, 1fr); }
+        .nb-frame { grid-template-columns: 230px minmax(0, 1fr); }
         .nb-page-head, .nb-ribbon, .nb-canvas, .nb-details { padding-inline: 18px; }
       }
       @media (max-width: 860px) {

@@ -1,0 +1,204 @@
+'use client';
+
+import { useMemo } from 'react';
+import { termSortKey } from '@/lib/semester';
+import { Notebook, PageSummary, Section, formatUpdated, sectionColor } from './notesTypes';
+
+/**
+ * The whole notes hierarchy in one collapsible tree:
+ *
+ *   Fall 2026
+ *     Evidence            (notebook / subject)
+ *       Week 1            (section)
+ *         Hearsay basics  (page)
+ *
+ * Every level collapses, and the open/closed state is remembered between
+ * visits by the page that owns it.
+ */
+
+export type TreeProps = {
+  notebooks: Notebook[];
+  sections: Section[];
+  /** Pages keyed by notebook id, loaded when a notebook is expanded. */
+  pagesByNotebook: Record<string, PageSummary[]>;
+  expanded: Set<string>;
+  onToggle: (key: string) => void;
+  selectedNotebookId: string;
+  selectedSection: string;
+  selectedPageId: string;
+  loadingNotebookId: string;
+  onSelectPage: (notebookId: string, section: string, pageId: string) => void;
+  onNewNotebook: (semester: string) => void;
+  onEditNotebook: (notebook: Notebook) => void;
+  onNewSection: (notebookId: string) => void;
+  onEditSection: (section: Section, colour: string) => void;
+  onNewPage: (notebookId: string, section: string) => void;
+  searchResults: PageSummary[] | null;
+};
+
+export const semesterKey = (name: string) => `sem:${name}`;
+export const notebookKey = (id: string) => `nb:${id}`;
+export const sectionKey = (id: string) => `sec:${id}`;
+
+function Twisty({ open }: { open: boolean }) {
+  return <span className={`nb-twisty${open ? ' is-open' : ''}`} aria-hidden="true">▸</span>;
+}
+
+export default function NotesTree(props: TreeProps) {
+  const {
+    notebooks, sections, pagesByNotebook, expanded, onToggle,
+    selectedNotebookId, selectedSection, selectedPageId, loadingNotebookId,
+    onSelectPage, onNewNotebook, onEditNotebook, onNewSection, onEditSection,
+    onNewPage, searchResults,
+  } = props;
+
+  /** Semester -> notebooks, newest term first. */
+  const groups = useMemo(() => {
+    const map = new Map<string, Notebook[]>();
+    for (const notebook of notebooks) {
+      const key = notebook.semester || 'Unsorted';
+      map.set(key, [...(map.get(key) || []), notebook]);
+    }
+    return Array.from(map.entries()).sort(([a], [b]) => {
+      if (a === 'Unsorted') return 1;
+      if (b === 'Unsorted') return -1;
+      const diff = termSortKey(b) - termSortKey(a);
+      return diff !== 0 ? diff : b.localeCompare(a);
+    });
+  }, [notebooks]);
+
+  // Search replaces the tree with a flat result list.
+  if (searchResults) {
+    return (
+      <div className="nb-tree">
+        <div className="nb-tree-note">
+          {searchResults.length} result{searchResults.length === 1 ? '' : 's'}
+        </div>
+        {searchResults.map(page => (
+          <button
+            key={page.id}
+            type="button"
+            className={`nb-node nb-node-page${page.id === selectedPageId ? ' is-active' : ''}`}
+            style={{ paddingLeft: 16 }}
+            onClick={() => onSelectPage(page.notebookId || '', page.section, page.id)}
+          >
+            <span className="nb-node-label">{page.pinned ? '★ ' : ''}{page.title}</span>
+            <span className="nb-node-meta">{page.notebookName} · {page.section}</span>
+          </button>
+        ))}
+        {searchResults.length === 0 && <p className="nb-tree-empty">Nothing matched that search.</p>}
+      </div>
+    );
+  }
+
+  return (
+    <div className="nb-tree">
+      {groups.map(([semester, items]) => {
+        const semKey = semesterKey(semester);
+        const semOpen = expanded.has(semKey);
+        return (
+          <section key={semester} className="nb-tree-group">
+            <div className="nb-node nb-node-sem">
+              <button type="button" className="nb-node-main" onClick={() => onToggle(semKey)}>
+                <Twisty open={semOpen} />
+                <span className="nb-node-label">{semester}</span>
+                <span className="nb-node-count">{items.length}</span>
+              </button>
+              <button
+                type="button"
+                className="nb-node-action"
+                title={`New notebook in ${semester}`}
+                onClick={() => onNewNotebook(semester === 'Unsorted' ? '' : semester)}
+              >
+                +
+              </button>
+            </div>
+
+            {semOpen && items.map(notebook => {
+              const nbKey = notebookKey(notebook.id);
+              const nbOpen = expanded.has(nbKey);
+              const nbSections = sections.filter(s => s.notebookId === notebook.id);
+              const nbPages = pagesByNotebook[notebook.id] || [];
+              return (
+                <div key={notebook.id}>
+                  <div className={`nb-node nb-node-book${notebook.id === selectedNotebookId ? ' is-current' : ''}`}>
+                    <button type="button" className="nb-node-main" onClick={() => onToggle(nbKey)}>
+                      <Twisty open={nbOpen} />
+                      <span className="nb-dot" style={{ background: notebook.color || '#8b5cf6' }} />
+                      <span className="nb-node-label">{notebook.name}</span>
+                      <span className="nb-node-count">{notebook.noteCount}</span>
+                    </button>
+                    <button type="button" className="nb-node-action" title={`New section in ${notebook.name}`} onClick={() => onNewSection(notebook.id)}>+</button>
+                    <button type="button" className="nb-node-action" title={`${notebook.name} settings`} onClick={() => onEditNotebook(notebook)}>⋯</button>
+                  </div>
+
+                  {nbOpen && (
+                    <>
+                      {loadingNotebookId === notebook.id && nbSections.length === 0 && (
+                        <p className="nb-tree-empty" style={{ paddingLeft: 34 }}>Loading…</p>
+                      )}
+                      {nbSections.map((section, index) => {
+                        const secKey = sectionKey(section.id);
+                        const secOpen = expanded.has(secKey);
+                        const colour = sectionColor(section, index);
+                        const secPages = nbPages
+                          .filter(p => p.section.toLowerCase() === section.name.toLowerCase())
+                          .sort((a, b) => Number(b.pinned) - Number(a.pinned) || a.position - b.position);
+                        const isCurrent = notebook.id === selectedNotebookId && section.name === selectedSection;
+                        return (
+                          <div key={section.id}>
+                            <div className={`nb-node nb-node-sec${isCurrent ? ' is-current' : ''}`} style={{ ['--sec' as any]: colour }}>
+                              <button type="button" className="nb-node-main" onClick={() => onToggle(secKey)}>
+                                <Twisty open={secOpen} />
+                                <span className="nb-sec-chip" />
+                                <span className="nb-node-label">{section.name}</span>
+                                <span className="nb-node-count">{section.pageCount}</span>
+                              </button>
+                              <button type="button" className="nb-node-action" title={`New page in ${section.name}`} onClick={() => onNewPage(notebook.id, section.name)}>+</button>
+                              <button type="button" className="nb-node-action" title={`${section.name} settings`} onClick={() => onEditSection(section, colour)}>⋯</button>
+                            </div>
+
+                            {secOpen && (
+                              secPages.length ? secPages.map(page => (
+                                <button
+                                  key={page.id}
+                                  type="button"
+                                  className={`nb-node nb-node-page${page.id === selectedPageId ? ' is-active' : ''}`}
+                                  onClick={() => onSelectPage(notebook.id, section.name, page.id)}
+                                >
+                                  <span className="nb-node-label">{page.pinned ? '★ ' : ''}{page.title}</span>
+                                  <span className="nb-node-meta">{formatUpdated(page.updatedAt)}</span>
+                                </button>
+                              )) : (
+                                <button
+                                  type="button"
+                                  className="nb-node nb-node-page nb-node-empty"
+                                  onClick={() => onNewPage(notebook.id, section.name)}
+                                >
+                                  <span className="nb-node-label">No pages — add one</span>
+                                </button>
+                              )
+                            )}
+                          </div>
+                        );
+                      })}
+                      {nbSections.length === 0 && loadingNotebookId !== notebook.id && (
+                        <button
+                          type="button"
+                          className="nb-node nb-node-sec nb-node-empty"
+                          onClick={() => onNewSection(notebook.id)}
+                        >
+                          <span className="nb-node-label">No sections — add one</span>
+                        </button>
+                      )}
+                    </>
+                  )}
+                </div>
+              );
+            })}
+          </section>
+        );
+      })}
+    </div>
+  );
+}
