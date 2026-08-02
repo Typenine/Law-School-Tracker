@@ -37,7 +37,12 @@ export type TreeProps = {
   searchResults: PageSummary[] | null;
   /** Page dragged onto another page (reorder) or onto a section (move). */
   onMovePage: (pageId: string, targetSectionId: string, beforePageId: string | null) => void;
+  /** Section dragged onto another section, or onto a notebook to go top level. */
+  onMoveSection: (sectionId: string, newParentId: string | null) => void;
 };
+
+/** What is currently being dragged. Pages and sections drop differently. */
+type Drag = { kind: 'page' | 'section'; id: string } | null;
 
 export const semesterKey = (name: string) => `sem:${name}`;
 export const notebookKey = (id: string) => `nb:${id}`;
@@ -52,10 +57,30 @@ export default function NotesTree(props: TreeProps) {
     notebooks, sections, pagesByNotebook, expanded, onToggle,
     selectedNotebookId, selectedSectionId, selectedPageId, loadingNotebookId,
     onSelectPage, onNewNotebook, onEditNotebook, onNewSection, onEditSection,
-    onNewPage, searchResults, onMovePage,
+    onNewPage, searchResults, onMovePage, onMoveSection,
   } = props;
-  const [dragId, setDragId] = useState('');
+  const [drag, setDrag] = useState<Drag>(null);
   const [dropId, setDropId] = useState('');
+  const clearDrag = () => { setDrag(null); setDropId(''); };
+
+  /** Section ids inside the branch being dragged: it cannot land on itself. */
+  const forbidden = useMemo(() => {
+    if (drag?.kind !== 'section') return new Set<string>();
+    const inside = new Set<string>([drag.id]);
+    // Sections arrive parents-first, but loop until it settles so ordering
+    // cannot leave a descendant out and wrongly offer it as a target.
+    for (let pass = 0; pass < sections.length; pass++) {
+      const before = inside.size;
+      for (const section of sections) {
+        if (section.parentId && inside.has(section.parentId)) inside.add(section.id);
+      }
+      if (inside.size === before) break;
+    }
+    return inside;
+  }, [drag, sections]);
+
+  const canDropOnSection = (sectionId: string) =>
+    !!drag && (drag.kind === 'page' || !forbidden.has(sectionId));
 
   /** Semester -> notebooks, newest term first. */
   const groups = useMemo(() => {
@@ -104,7 +129,7 @@ export default function NotesTree(props: TreeProps) {
         return (
           <section key={semester} className="nb-tree-group">
             <div className="nb-node nb-node-sem">
-              <button type="button" className="nb-node-main" onClick={() => onToggle(semKey)}>
+              <button type="button" className="nb-node-main" aria-expanded={semOpen} onClick={() => onToggle(semKey)}>
                 <Twisty open={semOpen} />
                 <span className="nb-node-label">{semester}</span>
                 <span className="nb-node-count">{items.length}</span>
@@ -144,13 +169,32 @@ export default function NotesTree(props: TreeProps) {
                   return (
                     <div key={section.id}>
                       <div
-                        className={`nb-node nb-node-sec${isCurrent ? ' is-current' : ''}${dropId === section.id ? ' is-drop-target' : ''}`}
+                        className={`nb-node nb-node-sec${isCurrent ? ' is-current' : ''}${dropId === section.id ? ' is-drop-target' : ''}${drag?.kind === 'section' && drag.id === section.id ? ' is-drag' : ''}`}
                         style={{ ['--sec' as any]: colour }}
-                        onDragOver={event => { if (dragId) { event.preventDefault(); setDropId(section.id); } }}
+                        draggable
+                        onDragStart={event => {
+                          event.stopPropagation();
+                          setDrag({ kind: 'section', id: section.id });
+                        }}
+                        onDragEnd={clearDrag}
+                        onDragOver={event => {
+                          if (!canDropOnSection(section.id)) return;
+                          event.preventDefault();
+                          setDropId(section.id);
+                        }}
                         onDragLeave={() => setDropId(current => current === section.id ? '' : current)}
-                        onDrop={event => { event.preventDefault(); if (dragId) onMovePage(dragId, section.id, null); setDragId(''); setDropId(''); }}
+                        onDrop={event => {
+                          event.preventDefault();
+                          event.stopPropagation();
+                          if (canDropOnSection(section.id) && drag) {
+                            if (drag.kind === 'page') onMovePage(drag.id, section.id, null);
+                            else onMoveSection(drag.id, section.id);
+                          }
+                          clearDrag();
+                        }}
+                        title="Drag to file this under another section"
                       >
-                        <button type="button" className="nb-node-main" style={{ paddingLeft: indent }} onClick={() => onToggle(secKey)}>
+                        <button type="button" className="nb-node-main" style={{ paddingLeft: indent }} aria-expanded={secOpen} onClick={() => onToggle(secKey)}>
                           <Twisty open={secOpen} />
                           <span className="nb-sec-chip" />
                           <span className="nb-node-label">{section.name}</span>
@@ -171,16 +215,26 @@ export default function NotesTree(props: TreeProps) {
                               key={page.id}
                               type="button"
                               draggable
-                              onDragStart={() => setDragId(page.id)}
-                              onDragEnd={() => { setDragId(''); setDropId(''); }}
-                              onDragOver={event => { if (dragId && dragId !== page.id) { event.preventDefault(); setDropId(page.id); } }}
+                              onDragStart={event => {
+                                event.stopPropagation();
+                                setDrag({ kind: 'page', id: page.id });
+                              }}
+                              onDragEnd={clearDrag}
+                              onDragOver={event => {
+                                if (drag?.kind !== 'page' || drag.id === page.id) return;
+                                event.preventDefault();
+                                setDropId(page.id);
+                              }}
                               onDragLeave={() => setDropId(current => current === page.id ? '' : current)}
                               onDrop={event => {
                                 event.preventDefault();
-                                if (dragId && dragId !== page.id) onMovePage(dragId, section.id, page.id);
-                                setDragId(''); setDropId('');
+                                event.stopPropagation();
+                                if (drag?.kind === 'page' && drag.id !== page.id) {
+                                  onMovePage(drag.id, section.id, page.id);
+                                }
+                                clearDrag();
                               }}
-                              className={`nb-node nb-node-page${page.id === selectedPageId ? ' is-active' : ''}${dragId === page.id ? ' is-drag' : ''}${dropId === page.id ? ' is-drop-target' : ''}`}
+                              className={`nb-node nb-node-page${page.id === selectedPageId ? ' is-active' : ''}${drag?.kind === 'page' && drag.id === page.id ? ' is-drag' : ''}${dropId === page.id ? ' is-drop-target' : ''}`}
                               style={{ paddingLeft: indent + 22 }}
                               onClick={() => onSelectPage(book.id, section.id, section.name, page.id)}
                             >
@@ -207,8 +261,23 @@ export default function NotesTree(props: TreeProps) {
 
               return (
                 <div key={notebook.id}>
-                  <div className={`nb-node nb-node-book${notebook.id === selectedNotebookId ? ' is-current' : ''}`}>
-                    <button type="button" className="nb-node-main" onClick={() => onToggle(nbKey)}>
+                  <div
+                    className={`nb-node nb-node-book${notebook.id === selectedNotebookId ? ' is-current' : ''}${dropId === nbKey ? ' is-drop-target' : ''}`}
+                    // Dropping a section here lifts it back out to the top
+                    // level, which is otherwise unreachable by dragging.
+                    onDragOver={event => {
+                      if (drag?.kind !== 'section') return;
+                      event.preventDefault();
+                      setDropId(nbKey);
+                    }}
+                    onDragLeave={() => setDropId(current => current === nbKey ? '' : current)}
+                    onDrop={event => {
+                      event.preventDefault();
+                      if (drag?.kind === 'section') onMoveSection(drag.id, null);
+                      clearDrag();
+                    }}
+                  >
+                    <button type="button" className="nb-node-main" aria-expanded={nbOpen} onClick={() => onToggle(nbKey)}>
                       <Twisty open={nbOpen} />
                       <span className="nb-dot" style={{ background: notebook.color || '#8b5cf6' }} />
                       <span className="nb-node-label">{notebook.name}</span>

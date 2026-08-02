@@ -1,6 +1,6 @@
 import { NextRequest } from 'next/server';
 import { z } from 'zod';
-import { deleteSection, updateSection } from '@/lib/aiNotes';
+import { SectionMoveError, deleteSection, updateSection } from '@/lib/aiNotes';
 import { noStoreJson } from '@/lib/actionAuth';
 
 export const dynamic = 'force-dynamic';
@@ -10,6 +10,8 @@ const updateSchema = z.object({
   name: z.string().trim().min(1).max(120).optional(),
   color: z.string().trim().max(40).nullable().optional(),
   position: z.number().int().min(0).max(500).optional(),
+  // null moves the section back up to the top level of its notebook.
+  parentId: z.string().trim().max(200).nullable().optional(),
 });
 
 export async function PATCH(req: NextRequest, { params }: { params: { id: string } }) {
@@ -22,6 +24,10 @@ export async function PATCH(req: NextRequest, { params }: { params: { id: string
     if (!section) return noStoreJson({ error: 'Section not found.' }, { status: 404 });
     return noStoreJson({ section });
   } catch (error) {
+    // An impossible move is the caller's mistake, not a server fault.
+    if (error instanceof SectionMoveError) {
+      return noStoreJson({ error: error.message }, { status: 400 });
+    }
     return noStoreJson(
       { error: error instanceof Error ? error.message : 'Unable to update the section.' },
       { status: 500 },

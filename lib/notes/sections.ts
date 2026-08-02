@@ -54,9 +54,46 @@ export async function createSection(input: {
   return toSection(result.rows[0]);
 }
 
+/**
+ * Raised when a move would put a section inside its own subtree, which would
+ * cut that whole branch loose from the tree with no way to reach it again.
+ */
+export class SectionMoveError extends Error {}
+
+/** Refuse a move that would orphan a branch or cross into another notebook. */
+async function checkMoveIsLegal(id: string, parentId: string | null, notebookId: string): Promise<void> {
+  if (!parentId) return;
+  if (parentId === id) {
+    throw new SectionMoveError('A section cannot be moved inside itself.');
+  }
+  const parent = await notesDb().query(
+    `SELECT notebook_id FROM ai_note_sections WHERE id = $1`,
+    [parentId],
+  );
+  if (!parent.rowCount) {
+    throw new SectionMoveError('That section no longer exists.');
+  }
+  if (parent.rows[0].notebook_id !== notebookId) {
+    throw new SectionMoveError('A section can only be moved within its own notebook.');
+  }
+  // Walk down from the section being moved: if the chosen parent turns up in
+  // its own subtree, the move would form a loop.
+  const descendants = await notesDb().query(
+    `WITH RECURSIVE tree AS (
+       SELECT id FROM ai_note_sections WHERE id = $1
+       UNION ALL
+       SELECT child.id FROM ai_note_sections child JOIN tree ON child.parent_id = tree.id
+     ) SELECT 1 FROM tree WHERE id = $2`,
+    [id, parentId],
+  );
+  if (descendants.rowCount) {
+    throw new SectionMoveError('A section cannot be moved inside one of its own folders.');
+  }
+}
+
 export async function updateSection(
   id: string,
-  input: Partial<{ name: string; color: string | null; position: number }>,
+  input: Partial<{ name: string; color: string | null; position: number; parentId: string | null }>,
 ): Promise<NoteSection | null> {
   await ensureNotesSchema();
   const database = notesDb();
@@ -65,14 +102,31 @@ export async function updateSection(
   const current = currentResult.rows[0];
   const name = input.name === undefined ? current.name : input.name.trim() || current.name;
   const color = input.color === undefined ? current.color : cleanText(input.color);
-  const position = input.position === undefined ? current.position : input.position;
+
+  const moving = input.parentId !== undefined;
+  const parentId = moving ? cleanText(input.parentId) : (current.parent_id ?? null);
+  if (moving && parentId !== (current.parent_id ?? null)) {
+    await checkMoveIsLegal(id, parentId, current.notebook_id);
+  }
+
+  // A section landing in a new parent goes to the end of it, unless the caller
+  // is placing it deliberately.
+  let position = input.position === undefined ? current.position : input.position;
+  if (input.position === undefined && parentId !== (current.parent_id ?? null)) {
+    const next = await database.query(
+      `SELECT COALESCE(MAX(position), -1) + 1 AS position FROM ai_note_sections
+       WHERE notebook_id = $1 AND COALESCE(parent_id, '') = COALESCE($2, '') AND id <> $3`,
+      [current.notebook_id, parentId, id],
+    );
+    position = Number(next.rows[0]?.position) || 0;
+  }
 
   const client = await database.connect();
   try {
     await client.query('BEGIN');
     await client.query(
-      `UPDATE ai_note_sections SET name=$2, color=$3, position=$4, updated_at=NOW() WHERE id=$1`,
-      [id, name, color, position],
+      `UPDATE ai_note_sections SET name=$2, color=$3, position=$4, parent_id=$5, updated_at=NOW() WHERE id=$1`,
+      [id, name, color, position, parentId],
     );
     if (name !== current.name) {
       // Pages keep a denormalised copy of the section name for search and the
@@ -85,8 +139,13 @@ export async function updateSection(
       );
     }
     await client.query('COMMIT');
-  } catch (error) {
+  } catch (error: any) {
     await client.query('ROLLBACK').catch(() => undefined);
+    // Siblings must have distinct names, so say which name is in the way
+    // rather than reporting a constraint violation.
+    if (String(error?.code) === '23505') {
+      throw new SectionMoveError(`There is already a “${name}” there. Rename one of them first.`);
+    }
     throw error;
   } finally {
     client.release();

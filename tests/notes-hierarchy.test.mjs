@@ -81,6 +81,104 @@ describe('the notebook hierarchy', () => {
   });
 });
 
+describe('moving a section', () => {
+  it('files a section under a different parent', async () => {
+    const fall = await notebook('Fall 2026', 'Fall 2026');
+    const briefs = await section(fall.id, 'Case briefs');
+    const reading = await section(fall.id, 'Reading notes');
+    const week = await section(fall.id, 'Week 1', briefs.id);
+
+    const moved = await app.api('PATCH', `/api/notes/sections/${week.id}`, { parentId: reading.id });
+    assert.equal(moved.status, 200);
+    assert.equal(moved.body.section.parentId, reading.id);
+  });
+
+  it('lifts a section back to the top level', async () => {
+    const fall = await notebook('Fall 2026', 'Fall 2026');
+    const briefs = await section(fall.id, 'Case briefs');
+    const week = await section(fall.id, 'Week 1', briefs.id);
+
+    const moved = await app.api('PATCH', `/api/notes/sections/${week.id}`, { parentId: null });
+    assert.equal(moved.status, 200);
+    assert.equal(moved.body.section.parentId, null);
+  });
+
+  it('carries its own pages and subsections with it', async () => {
+    const fall = await notebook('Fall 2026', 'Fall 2026');
+    const briefs = await section(fall.id, 'Case briefs');
+    const reading = await section(fall.id, 'Reading notes');
+    const week = await section(fall.id, 'Week 1', briefs.id);
+    const day = await section(fall.id, 'Monday', week.id);
+    const brief = await page(fall.id, day.id, 'Palsgraf');
+
+    await app.api('PATCH', `/api/notes/sections/${week.id}`, { parentId: reading.id });
+
+    const all = (await app.api('GET', `/api/notes/sections?notebookId=${fall.id}`)).body.sections;
+    assert.equal(all.find(s => s.id === day.id).parentId, week.id, 'the child stayed attached');
+    assert.equal((await app.api('GET', `/api/notes/${brief.id}`)).body.note.sectionId, day.id);
+  });
+
+  it('refuses to move a section inside itself', async () => {
+    const fall = await notebook('Fall 2026', 'Fall 2026');
+    const briefs = await section(fall.id, 'Case briefs');
+
+    const bad = await app.api('PATCH', `/api/notes/sections/${briefs.id}`, { parentId: briefs.id });
+    assert.equal(bad.status, 400);
+    assert.match(bad.body.error, /inside itself/i);
+  });
+
+  it('refuses to move a section inside its own subtree', async () => {
+    const fall = await notebook('Fall 2026', 'Fall 2026');
+    const briefs = await section(fall.id, 'Case briefs');
+    const week = await section(fall.id, 'Week 1', briefs.id);
+    const day = await section(fall.id, 'Monday', week.id);
+
+    const bad = await app.api('PATCH', `/api/notes/sections/${briefs.id}`, { parentId: day.id });
+    assert.equal(bad.status, 400, 'a loop would cut the whole branch loose');
+
+    const still = (await app.api('GET', `/api/notes/sections?notebookId=${fall.id}`)).body.sections;
+    assert.equal(still.find(s => s.id === briefs.id).parentId, null, 'and nothing changed');
+  });
+
+  it('refuses to move a section into another notebook', async () => {
+    const fall = await notebook('Fall 2026', 'Fall 2026');
+    const spring = await notebook('Spring 2027', 'Spring 2027');
+    const week = await section(fall.id, 'Week 1');
+    const elsewhere = await section(spring.id, 'Somewhere else');
+
+    const bad = await app.api('PATCH', `/api/notes/sections/${week.id}`, { parentId: elsewhere.id });
+    assert.equal(bad.status, 400);
+    assert.match(bad.body.error, /own notebook/i);
+  });
+
+  it('says which name is in the way rather than failing on a constraint', async () => {
+    const fall = await notebook('Fall 2026', 'Fall 2026');
+    const briefs = await section(fall.id, 'Case briefs');
+    const reading = await section(fall.id, 'Reading notes');
+    await section(fall.id, 'Week 1', reading.id);
+    const clashing = await section(fall.id, 'Week 1', briefs.id);
+
+    const bad = await app.api('PATCH', `/api/notes/sections/${clashing.id}`, { parentId: reading.id });
+    assert.equal(bad.status, 400);
+    assert.match(bad.body.error, /already a/i);
+    assert.match(bad.body.error, /Week 1/);
+  });
+
+  it('leaves a moved section where it was put after a restart', async () => {
+    const fall = await notebook('Fall 2026', 'Fall 2026');
+    const briefs = await section(fall.id, 'Case briefs');
+    const reading = await section(fall.id, 'Reading notes');
+    const week = await section(fall.id, 'Week 1', briefs.id);
+    await page(fall.id, week.id, 'Palsgraf');
+    await app.api('PATCH', `/api/notes/sections/${week.id}`, { parentId: reading.id });
+
+    await app.restart();
+    const all = (await app.api('GET', `/api/notes/sections?notebookId=${fall.id}`)).body.sections;
+    assert.equal(all.find(s => s.id === week.id).parentId, reading.id);
+    assert.equal(all.filter(s => s.name === 'Week 1').length, 1, 'no duplicate was left behind');
+  });
+});
+
 describe('moving pages around', () => {
   it('a page can be dropped into another section', async () => {
     const fall = await notebook('Fall 2026', 'Fall 2026');

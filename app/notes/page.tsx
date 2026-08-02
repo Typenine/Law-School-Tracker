@@ -101,6 +101,32 @@ export default function NotesPage() {
     () => sections.filter(section => section.notebookId === notebookId),
     [sections, notebookId],
   );
+  /**
+   * Where the section being edited is allowed to go: anywhere in this notebook
+   * except inside itself. Indented so "Week 1" under Case Briefs reads
+   * differently from "Week 1" under Class Notes.
+   */
+  const sectionParentOptions = useMemo(() => {
+    const editing = sectionModal?.id || '';
+    const barred = new Set<string>(editing ? [editing] : []);
+    for (let pass = 0; pass < notebookSections.length; pass++) {
+      const before = barred.size;
+      for (const section of notebookSections) {
+        if (section.parentId && barred.has(section.parentId)) barred.add(section.id);
+      }
+      if (barred.size === before) break;
+    }
+    const options: { id: string; label: string }[] = [];
+    const walk = (parentId: string | null, depth: number) => {
+      for (const section of notebookSections.filter(s => (s.parentId || null) === parentId)) {
+        if (barred.has(section.id)) continue;
+        options.push({ id: section.id, label: `${'— '.repeat(depth)}${section.name}` });
+        walk(section.id, depth + 1);
+      }
+    };
+    walk(null, 0);
+    return options;
+  }, [notebookSections, sectionModal?.id]);
   const activeSection = useMemo(
     () => notebookSections.find(section => section.id === sectionId)
       || notebookSections.find(section => section.name === sectionName)
@@ -525,6 +551,26 @@ export default function NotesPage() {
     }
   }
 
+  /**
+   * File a whole section somewhere else - a week that belongs under Reading
+   * Notes rather than Case Briefs, say. Passing null lifts it to the top level.
+   */
+  async function moveSection(sectionId: string, newParentId: string | null) {
+    const moving = sections.find(x => x.id === sectionId);
+    if (!moving || (moving.parentId || null) === newParentId) return;
+    try {
+      await api(`/api/notes/sections/${sectionId}`, {
+        method: 'PATCH',
+        body: JSON.stringify({ parentId: newParentId }),
+      });
+      // Open the new parent so the section does not appear to vanish.
+      if (newParentId) setExpanded(current => new Set(current).add(sectionKey(newParentId)));
+      await loadSections();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Unable to move the section.');
+    }
+  }
+
   const uploadImage = useCallback(async (file: File): Promise<string | null> => {
     try {
       const body = new FormData();
@@ -722,8 +768,11 @@ export default function NotesPage() {
       if (sectionModal.id) {
         await api(`/api/notes/sections/${encodeURIComponent(sectionModal.id)}`, {
           method: 'PATCH',
-          body: JSON.stringify({ name, color: sectionModal.color || null }),
+          body: JSON.stringify({ name, color: sectionModal.color || null, parentId: sectionModal.parentId }),
         });
+        if (sectionModal.parentId) {
+          setExpanded(current => new Set(current).add(sectionKey(sectionModal.parentId as string)));
+        }
       } else {
         await api('/api/notes/sections', {
           method: 'POST',
@@ -992,6 +1041,7 @@ export default function NotesPage() {
               onNewPage={(nb, secId, section) => void createPageIn(nb, secId, section)}
               searchResults={searchResults}
               onMovePage={(pageId, targetSectionId, beforePageId) => void movePage(pageId, targetSectionId, beforePageId)}
+              onMoveSection={(sectionId, newParentId) => void moveSection(sectionId, newParentId)}
             />
           </div>
           <div className="nb-rail-foot-row">
@@ -1305,6 +1355,18 @@ export default function NotesPage() {
                 onChange={event => setSectionModal({ ...sectionModal, name: event.target.value })}
                 placeholder="Hearsay"
               />
+            </label>
+            <label className="nb-field">
+              <span>Sits under</span>
+              <select
+                value={sectionModal.parentId || ''}
+                onChange={event => setSectionModal({ ...sectionModal, parentId: event.target.value || null })}
+              >
+                <option value="">Top level of {activeNotebook?.name || 'this notebook'}</option>
+                {sectionParentOptions.map(option => (
+                  <option key={option.id} value={option.id}>{option.label}</option>
+                ))}
+              </select>
             </label>
             <div className="nb-field">
               <span>Tab colour</span>
