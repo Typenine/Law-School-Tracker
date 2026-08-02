@@ -1,9 +1,38 @@
 import { NextRequest } from 'next/server';
-import { deleteAiNote, getAiNote } from '@/lib/aiNotes';
+import { z } from 'zod';
+import {
+  deleteAiNote,
+  getAiNote,
+  updateAiNote,
+  type NoteSourceType,
+} from '@/lib/aiNotes';
 import { noStoreJson, requireNotesToken } from '@/lib/actionAuth';
 
 export const dynamic = 'force-dynamic';
 export const runtime = 'nodejs';
+
+const sourceTypes = [
+  'class-notes',
+  'reading-notes',
+  'case-brief',
+  'outline',
+  'professor-material',
+  'other',
+] as const;
+
+const updateSchema = z.object({
+  title: z.string().trim().min(1).max(250).optional(),
+  notebookId: z.string().trim().max(200).nullable().optional(),
+  course: z.string().trim().max(200).nullable().optional(),
+  semester: z.string().trim().max(100).nullable().optional(),
+  section: z.string().trim().max(120).nullable().optional(),
+  classDate: z.string().trim().regex(/^\d{4}-\d{2}-\d{2}$/).nullable().optional(),
+  sourceType: z.enum(sourceTypes).optional(),
+  topics: z.array(z.string().trim().max(100)).max(50).optional(),
+  pinned: z.boolean().optional(),
+  archived: z.boolean().optional(),
+  content: z.string().max(2_000_000).optional(),
+});
 
 export async function GET(
   req: NextRequest,
@@ -19,6 +48,35 @@ export async function GET(
   } catch (error) {
     return noStoreJson(
       { error: error instanceof Error ? error.message : 'Unable to load note.' },
+      { status: 500 },
+    );
+  }
+}
+
+export async function PATCH(
+  req: NextRequest,
+  { params }: { params: { id: string } },
+) {
+  const denied = requireNotesToken(req);
+  if (denied) return denied;
+
+  try {
+    const parsed = updateSchema.safeParse(await req.json());
+    if (!parsed.success) {
+      return noStoreJson(
+        { error: 'Invalid note details.', issues: parsed.error.issues },
+        { status: 400 },
+      );
+    }
+    const note = await updateAiNote(params.id, {
+      ...parsed.data,
+      sourceType: parsed.data.sourceType as NoteSourceType | undefined,
+    });
+    if (!note) return noStoreJson({ error: 'Note not found.' }, { status: 404 });
+    return noStoreJson({ note });
+  } catch (error) {
+    return noStoreJson(
+      { error: error instanceof Error ? error.message : 'Unable to update note.' },
       { status: 500 },
     );
   }

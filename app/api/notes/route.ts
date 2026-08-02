@@ -1,6 +1,11 @@
 import { NextRequest } from 'next/server';
 import { z } from 'zod';
-import { createAiNote, listAiNotes, type NoteSourceType } from '@/lib/aiNotes';
+import {
+  createAiNote,
+  listAiNotes,
+  searchAiNotes,
+  type NoteSourceType,
+} from '@/lib/aiNotes';
 import { noStoreJson, requireNotesToken } from '@/lib/actionAuth';
 
 export const dynamic = 'force-dynamic';
@@ -9,9 +14,38 @@ export const runtime = 'nodejs';
 const MAX_FILE_BYTES = 12 * 1024 * 1024;
 const MAX_TEXT_CHARS = 2_000_000;
 
-function parseTopics(value: FormDataEntryValue | null): string[] {
+const sourceTypes = [
+  'class-notes',
+  'reading-notes',
+  'case-brief',
+  'outline',
+  'professor-material',
+  'other',
+] as const;
+
+const noteSchema = z.object({
+  title: z.string().trim().min(1).max(250).default('Untitled Page'),
+  notebookId: z.string().trim().max(200).nullable().optional(),
+  course: z.string().trim().max(200).nullable().optional(),
+  semester: z.string().trim().max(100).nullable().optional(),
+  section: z.string().trim().max(120).nullable().optional(),
+  classDate: z.string().trim().regex(/^\d{4}-\d{2}-\d{2}$/).nullable().optional(),
+  sourceType: z.enum(sourceTypes).optional(),
+  topics: z.array(z.string().trim().max(100)).max(50).optional(),
+  pinned: z.boolean().optional(),
+  content: z.string().max(MAX_TEXT_CHARS).optional(),
+});
+
+function parseTopics(value: unknown): string[] {
+  if (Array.isArray(value)) {
+    return value.map(item => String(item).trim()).filter(Boolean).slice(0, 50);
+  }
   if (typeof value !== 'string') return [];
   return value.split(',').map(item => item.trim()).filter(Boolean).slice(0, 50);
+}
+
+function nullableString(value: FormDataEntryValue | null): string | null {
+  return typeof value === 'string' && value.trim() ? value.trim() : null;
 }
 
 async function extractText(file: File): Promise<string> {
@@ -57,13 +91,20 @@ export async function GET(req: NextRequest) {
 
   try {
     const params = req.nextUrl.searchParams;
-    const notes = await listAiNotes({
+    const filters = {
+      notebookId: params.get('notebookId'),
       course: params.get('course'),
       semester: params.get('semester'),
+      section: params.get('section'),
       from: params.get('from'),
       to: params.get('to'),
-      limit: Number(params.get('limit') || 100),
-    });
+      archived: params.get('archived') === 'true',
+      limit: Number(params.get('limit') || 500),
+    };
+    const query = params.get('q')?.trim() || '';
+    const notes = query
+      ? await searchAiNotes(query, filters)
+      : await listAiNotes(filters);
     return noStoreJson({ notes });
   } catch (error) {
     return noStoreJson(
@@ -78,16 +119,39 @@ export async function POST(req: NextRequest) {
   if (denied) return denied;
 
   try {
+    const contentType = req.headers.get('content-type') || '';
+
+    if (contentType.includes('application/json')) {
+      const body = await req.json();
+      const parsed = noteSchema.safeParse({
+        ...body,
+        topics: parseTopics(body?.topics),
+      });
+      if (!parsed.success) {
+        return noStoreJson(
+          { error: 'Invalid note details.', issues: parsed.error.issues },
+          { status: 400 },
+        );
+      }
+      const note = await createAiNote({
+        ...parsed.data,
+        sourceType: parsed.data.sourceType as NoteSourceType | undefined,
+      });
+      return noStoreJson({ note }, { status: 201 });
+    }
+
     const form = await req.formData();
     const fileEntry = form.get('file');
     const file = fileEntry instanceof File && fileEntry.size > 0 ? fileEntry : null;
-    const contentEntry = form.get('content');
-    const pastedText = typeof contentEntry === 'string' ? contentEntry : '';
+    const pastedText = typeof form.get('content') === 'string' ? String(form.get('content')) : '';
     const extracted = file ? await extractText(file) : pastedText;
-    const content = extracted.replace(/\u0000/g, '').trim();
+    const content = extracted.replace(/\u0000/g, '');
 
-    if (!content) {
-      return noStoreJson({ error: 'The uploaded file did not contain readable text.' }, { status: 400 });
+    if (file && !content.trim()) {
+      return noStoreJson(
+        { error: 'The uploaded file did not contain readable text.' },
+        { status: 400 },
+      );
     }
     if (content.length > MAX_TEXT_CHARS) {
       return noStoreJson(
@@ -96,39 +160,30 @@ export async function POST(req: NextRequest) {
       );
     }
 
-    const schema = z.object({
-      title: z.string().trim().min(1).max(250),
-      course: z.string().trim().max(200).nullable().optional(),
-      semester: z.string().trim().max(100).nullable().optional(),
-      classDate: z.string().trim().regex(/^\d{4}-\d{2}-\d{2}$/).nullable().optional(),
-      sourceType: z.enum([
-        'class-notes',
-        'reading-notes',
-        'case-brief',
-        'outline',
-        'professor-material',
-        'other',
-      ]).optional(),
-    });
-
-    const parsed = schema.safeParse({
-      title: form.get('title'),
-      course: form.get('course') || null,
-      semester: form.get('semester') || null,
-      classDate: form.get('classDate') || null,
-      sourceType: form.get('sourceType') || 'class-notes',
+    const parsed = noteSchema.safeParse({
+      title: nullableString(form.get('title')) || file?.name.replace(/\.[^.]+$/, '') || 'Untitled Page',
+      notebookId: nullableString(form.get('notebookId')),
+      course: nullableString(form.get('course')),
+      semester: nullableString(form.get('semester')),
+      section: nullableString(form.get('section')),
+      classDate: nullableString(form.get('classDate')),
+      sourceType: nullableString(form.get('sourceType')) || 'class-notes',
+      topics: parseTopics(form.get('topics')),
+      pinned: form.get('pinned') === 'true',
+      content,
     });
     if (!parsed.success) {
-      return noStoreJson({ error: 'Invalid note details.', issues: parsed.error.issues }, { status: 400 });
+      return noStoreJson(
+        { error: 'Invalid note details.', issues: parsed.error.issues },
+        { status: 400 },
+      );
     }
 
     const note = await createAiNote({
       ...parsed.data,
       sourceType: parsed.data.sourceType as NoteSourceType,
-      topics: parseTopics(form.get('topics')),
       originalFilename: file?.name || null,
       mimeType: file?.type || (file ? 'application/octet-stream' : 'text/plain'),
-      content,
     });
 
     return noStoreJson({ note }, { status: 201 });
