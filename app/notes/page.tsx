@@ -74,6 +74,10 @@ export default function NotesPage() {
 
   const [searchQuery, setSearchQuery] = useState('');
   const [searchResults, setSearchResults] = useState<PageSummary[] | null>(null);
+  /** Assignments, for linking a page to the reading it was written for. */
+  const [assignments, setAssignments] = useState<{ id: string; title: string; course: string | null; status: string }[]>([]);
+  /** Set when arriving from a task, so the rail shows just that task's pages. */
+  const [taskFilter, setTaskFilter] = useState<string>('');
   const [loadingPages, setLoadingPages] = useState(false);
   const [loadingPage, setLoadingPage] = useState(false);
   const [booted, setBooted] = useState(false);
@@ -113,6 +117,61 @@ export default function NotesPage() {
   const retryTimerRef = useRef<number | null>(null);
 
   useEffect(() => { draftRef.current = draft; }, [draft]);
+
+  // Assignments, so a page can say which reading it belongs to.
+  useEffect(() => {
+    let cancelled = false;
+    void (async () => {
+      try {
+        const data = await api('/api/tasks');
+        if (cancelled) return;
+        const list = Array.isArray(data?.tasks) ? data.tasks : [];
+        setAssignments(list.map((task: any) => ({
+          id: String(task.id),
+          title: String(task.title || 'Untitled'),
+          course: task.course ?? null,
+          status: String(task.status || 'todo'),
+        })));
+      } catch {
+        // Linking is a convenience; the notes workspace works without it.
+      }
+    })();
+    return () => { cancelled = true; };
+  }, []);
+
+  /**
+   * Outstanding assignments first, but always including the one this page is
+   * already linked to - otherwise finishing the reading would drop the link
+   * out of the picker and look like it had been lost.
+   */
+  const assignmentChoices = useMemo(() => {
+    const linked = draft?.taskId || '';
+    return assignments
+      .filter(task => task.status !== 'done' || task.id === linked)
+      .slice(0, 200);
+  }, [assignments, draft?.taskId]);
+
+  // Arriving from a task's "Notes" link: show that assignment's pages.
+  useEffect(() => {
+    const wanted = new URLSearchParams(window.location.search).get('taskId');
+    if (!wanted) return;
+    let cancelled = false;
+    void (async () => {
+      try {
+        const data = await api(`/api/notes?taskId=${encodeURIComponent(wanted)}&limit=200`);
+        if (cancelled) return;
+        const found: PageSummary[] = Array.isArray(data?.notes) ? data.notes : [];
+        setSearchResults(found);
+        setTaskFilter(wanted);
+        if (found.length === 1) await openPage(found[0].id);
+      } catch (err) {
+        setError(err instanceof Error ? err.message : 'Unable to load notes for that assignment.');
+      }
+    })();
+    return () => { cancelled = true; };
+    // Runs once: the link is read from the URL the page was opened with.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
   useEffect(() => { dirtyRef.current = dirty; }, [dirty]);
 
   const activeNotebook = useMemo(
@@ -752,7 +811,13 @@ export default function NotesPage() {
     await openPage(id);
   }
 
-  async function createPage(targetNotebook = notebookId, targetSection = sectionName, targetSectionId = sectionId) {
+  async function createPage(
+    targetNotebook = notebookId,
+    targetSection = sectionName,
+    targetSectionId = sectionId,
+    /** Set when the page is being started from an assignment. */
+    forTaskId: string | null = null,
+  ) {
     if (!targetNotebook) {
       setError('Create a notebook first.');
       return;
@@ -782,6 +847,7 @@ export default function NotesPage() {
           sectionId: targetSectionId || undefined,
           sourceType: 'class-notes',
           contentHtml: '<p><br></p>',
+          taskId: forTaskId || undefined,
         }),
       });
       const page = data.note as Page;
@@ -1125,6 +1191,25 @@ export default function NotesPage() {
               aria-label="Search all notes"
             />
           </div>
+          {taskFilter && (
+            <div className="nb-rail-filter">
+              <div>
+                <span className="nb-rail-filter-label">Notes for</span>
+                <strong>{assignments.find(t => t.id === taskFilter)?.title || 'this assignment'}</strong>
+              </div>
+              <div className="nb-rail-filter-actions">
+                <button
+                  type="button"
+                  onClick={() => void createPage(notebookId, sectionName, sectionId, taskFilter)}
+                >
+                  New page for it
+                </button>
+                <button type="button" onClick={() => { setTaskFilter(''); setSearchResults(null); }}>
+                  Show all
+                </button>
+              </div>
+            </div>
+          )}
           <div className="nb-rail-scroll">
             <NotesTree
               notebooks={notebooks}
@@ -1287,6 +1372,22 @@ export default function NotesPage() {
                           value={draft.classDate || ''}
                           onChange={event => patchDraft({ classDate: event.target.value || null })}
                         />
+                      </label>
+                      <label>
+                        <span>For assignment</span>
+                        <select
+                          value={draft.taskId || ''}
+                          onChange={event => patchDraft({ taskId: event.target.value || null })}
+                        >
+                          <option value="">Not linked</option>
+                          {/* The page's own task stays listed even once the
+                              assignment is done and off the shortlist. */}
+                          {assignmentChoices.map(task => (
+                            <option key={task.id} value={task.id}>
+                              {task.course ? `${task.course} — ` : ''}{task.title}
+                            </option>
+                          ))}
+                        </select>
                       </label>
                       <label className="nb-details-wide">
                         <span>Tags, separated by commas</span>

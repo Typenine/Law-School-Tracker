@@ -155,6 +155,12 @@ async function applyNotesSchema(): Promise<void> {
   await run(`ALTER TABLE ai_notes ADD COLUMN IF NOT EXISTS deleted_at TIMESTAMPTZ`);
   await run(`CREATE INDEX IF NOT EXISTS ai_notes_deleted_idx ON ai_notes (deleted_at)`);
   await run(`CREATE INDEX IF NOT EXISTS ai_notes_section_id_idx ON ai_notes (section_id)`);
+  // Which reading assignment a page was written for, so you can get from the
+  // task to your notes on it and back. Deliberately not a foreign key: tasks
+  // live in a different store when Postgres is not configured, and losing a
+  // task should not take the notes with it.
+  await run(`ALTER TABLE ai_notes ADD COLUMN IF NOT EXISTS task_id TEXT`);
+  await run(`CREATE INDEX IF NOT EXISTS ai_notes_task_id_idx ON ai_notes (task_id)`);
   await run(`CREATE INDEX IF NOT EXISTS ai_notes_course_idx ON ai_notes (LOWER(course))`);
   await run(`CREATE INDEX IF NOT EXISTS ai_notes_notebook_idx ON ai_notes (notebook_id)`);
   await run(`CREATE INDEX IF NOT EXISTS ai_notes_section_idx ON ai_notes (notebook_id, LOWER(section))`);
@@ -428,6 +434,7 @@ export function toNoteSummary(row: any): AiNoteSummary {
     semester: row.semester ?? null,
     section: row.section || 'Notes',
     sectionId: row.section_id ?? null,
+    taskId: row.task_id ?? null,
     position: Number(row.position) || 0,
     classDate: row.class_date ? iso(row.class_date).slice(0, 10) : null,
     sourceType: row.source_type as NoteSourceType,
@@ -490,6 +497,10 @@ export function addNoteFilters(input: NoteFilters, clauses: string[], values: un
   if (input.sectionId?.trim()) {
     values.push(input.sectionId.trim());
     clauses.push(`${alias}.section_id = $${values.length}`);
+  }
+  if (input.taskId?.trim()) {
+    values.push(input.taskId.trim());
+    clauses.push(`${alias}.task_id = $${values.length}`);
   }
   if (input.section?.trim()) {
     values.push(input.section.trim());

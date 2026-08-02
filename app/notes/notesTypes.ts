@@ -34,6 +34,8 @@ export type PageSummary = {
   semester: string | null;
   section: string;
   sectionId: string | null;
+  /** The reading assignment these notes were written for, if any. */
+  taskId: string | null;
   position: number;
   classDate: string | null;
   sourceType: string;

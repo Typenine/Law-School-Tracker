@@ -81,6 +81,77 @@ describe('the notebook hierarchy', () => {
   });
 });
 
+describe('notes linked to an assignment', () => {
+  it('remembers which reading a page was written for', async () => {
+    const fall = await notebook('Fall 2026', 'Fall 2026');
+    const week = await section(fall.id, 'Week 1');
+    const created = await app.api('POST', '/api/notes', {
+      notebookId: fall.id, sectionId: week.id, title: 'Palsgraf brief', taskId: 'task-123',
+    });
+    assert.equal(created.body.note.taskId, 'task-123');
+    assert.equal((await app.api('GET', `/api/notes/${created.body.note.id}`)).body.note.taskId, 'task-123');
+  });
+
+  it('finds the pages for one assignment', async () => {
+    const fall = await notebook('Fall 2026', 'Fall 2026');
+    const week = await section(fall.id, 'Week 1');
+    await app.api('POST', '/api/notes', { notebookId: fall.id, sectionId: week.id, title: 'Reading', taskId: 'task-a' });
+    await app.api('POST', '/api/notes', { notebookId: fall.id, sectionId: week.id, title: 'Brief', taskId: 'task-a' });
+    await app.api('POST', '/api/notes', { notebookId: fall.id, sectionId: week.id, title: 'Unrelated' });
+
+    const { body } = await app.api('GET', '/api/notes?taskId=task-a');
+    assert.deepEqual(body.notes.map(n => n.title).sort(), ['Brief', 'Reading']);
+  });
+
+  it('can be linked and unlinked after the fact', async () => {
+    const fall = await notebook('Fall 2026', 'Fall 2026');
+    const week = await section(fall.id, 'Week 1');
+    const brief = await page(fall.id, week.id, 'Palsgraf');
+
+    const linked = await app.api('PATCH', `/api/notes/${brief.id}`, { taskId: 'task-x' });
+    assert.equal(linked.body.note.taskId, 'task-x');
+    const unlinked = await app.api('PATCH', `/api/notes/${brief.id}`, { taskId: null });
+    assert.equal(unlinked.body.note.taskId, null);
+  });
+
+  it('does not drop the link when the page is edited', async () => {
+    const fall = await notebook('Fall 2026', 'Fall 2026');
+    const week = await section(fall.id, 'Week 1');
+    const created = await app.api('POST', '/api/notes', {
+      notebookId: fall.id, sectionId: week.id, title: 'Palsgraf', taskId: 'task-keep',
+    });
+    await app.api('PATCH', `/api/notes/${created.body.note.id}`, { contentHtml: '<p>typing</p>' });
+    assert.equal((await app.api('GET', `/api/notes/${created.body.note.id}`)).body.note.taskId, 'task-keep');
+  });
+
+  it('counts the pages per assignment for the task list', async () => {
+    const fall = await notebook('Fall 2026', 'Fall 2026');
+    const week = await section(fall.id, 'Week 1');
+    await app.api('POST', '/api/notes', { notebookId: fall.id, sectionId: week.id, title: 'One', taskId: 'task-a' });
+    const second = await app.api('POST', '/api/notes', { notebookId: fall.id, sectionId: week.id, title: 'Two', taskId: 'task-a' });
+    await app.api('POST', '/api/notes', { notebookId: fall.id, sectionId: week.id, title: 'Other', taskId: 'task-b' });
+
+    const { body } = await app.api('GET', '/api/notes/by-task');
+    assert.equal(body.counts['task-a'], 2);
+    assert.equal(body.counts['task-b'], 1);
+
+    // A page in the trash is not a page you have.
+    await app.api('DELETE', `/api/notes/${second.body.note.id}`);
+    assert.equal((await app.api('GET', '/api/notes/by-task')).body.counts['task-a'], 1);
+  });
+
+  it('keeps the notes when the assignment id no longer matches anything', async () => {
+    const fall = await notebook('Fall 2026', 'Fall 2026');
+    const week = await section(fall.id, 'Week 1');
+    const created = await app.api('POST', '/api/notes', {
+      notebookId: fall.id, sectionId: week.id, title: 'Orphan', taskId: 'deleted-task',
+    });
+    // Notes outlive the assignments they were written for.
+    const { body } = await app.api('GET', `/api/notes?notebookId=${fall.id}`);
+    assert.ok(body.notes.some(n => n.id === created.body.note.id));
+  });
+});
+
 describe('moving a section', () => {
   it('files a section under a different parent', async () => {
     const fall = await notebook('Fall 2026', 'Fall 2026');

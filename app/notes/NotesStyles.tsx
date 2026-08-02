@@ -66,6 +66,12 @@ export default function NotesStyles() {
       .nb-node-page.is-active { background: var(--active); color: var(--text); box-shadow: inset 2px 0 var(--tab); }
       .nb-node-empty { font-style: italic; opacity: .6; }
 
+      .nb-rail-filter { margin: 0 8px 8px; padding: 9px 10px; border: 1px solid var(--accent-line, var(--line2)); border-radius: 8px; background: var(--s2); display: grid; gap: 7px; }
+      .nb-rail-filter-label { display: block; color: var(--label); font: 500 10px/1 'IBM Plex Mono', monospace; letter-spacing: .1em; text-transform: uppercase; padding-bottom: 4px; }
+      .nb-rail-filter strong { font-size: 12.5px; font-weight: 500; }
+      .nb-rail-filter-actions { display: flex; gap: 6px; }
+      .nb-rail-filter-actions button { flex: 1; padding: 5px 8px; border: 1px solid var(--line2); border-radius: 6px; background: var(--s3); color: var(--text2); font-size: 11px; cursor: pointer; }
+      .nb-rail-filter-actions button:hover { color: var(--text); background: var(--s1); }
       .nb-rail-foot-row { display: grid; gap: 6px; }
       .nb-rail-foot { margin: 0 8px 10px; padding: 8px; border: 1px solid var(--line2); border-radius: 7px; background: var(--s2); color: var(--muted); font-size: 11.5px; cursor: pointer; }
       .nb-rail-foot-row .nb-rail-foot { margin-bottom: 0; }

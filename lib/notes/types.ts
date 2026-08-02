@@ -45,6 +45,8 @@ export interface AiNoteSummary {
   section: string;
   /** The section a page belongs to. Names repeat across branches, ids do not. */
   sectionId: string | null;
+  /** The reading assignment these notes were written for, if any. */
+  taskId: string | null;
   position: number;
   classDate: string | null;
   sourceType: NoteSourceType;
@@ -79,6 +81,7 @@ export interface NoteFilters {
   semester?: string | null;
   section?: string | null;
   sectionId?: string | null;
+  taskId?: string | null;
   from?: string | null;
   to?: string | null;
   archived?: boolean;
