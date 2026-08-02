@@ -140,6 +140,13 @@ export default function NotesStyles() {
       /* Page list -------------------------------------------------------- */
       .nb-pages { display: flex; flex-direction: column; min-height: 0; border-left: 1px solid var(--line); background: var(--s2); }
       .nb-pages-head { display: grid; gap: 7px; padding: 12px; border-bottom: 1px solid var(--line); }
+      .nb-pages-title { display: flex; align-items: center; justify-content: space-between; color: var(--label); font: 500 10px/1 'IBM Plex Mono', monospace; letter-spacing: .12em; text-transform: uppercase; }
+      .nb-collapse { width: 22px; height: 22px; display: grid; place-items: center; border: 1px solid var(--btn); border-radius: 5px; background: var(--s1); color: var(--text3); font-size: 13px; cursor: pointer; }
+      .nb-collapse:hover { background: var(--hover); color: var(--text); }
+      /* Slim tab that brings the collapsed page list back. */
+      .nb-pages-reopen { position: absolute; top: 12px; right: 0; z-index: 5; padding: 7px 9px; border: 1px solid var(--line2); border-right: 0; border-radius: 7px 0 0 7px; background: var(--s2); color: var(--text3); font-size: 11.5px; cursor: pointer; }
+      .nb-pages-reopen:hover { background: var(--s3); color: var(--text); }
+      .nb-workspace { position: relative; }
       .nb-block { width: 100%; }
       .nb-search { width: 100%; padding: 7px 10px !important; font-size: 12.5px; }
       .nb-pages-list { flex: 1; overflow-y: auto; }

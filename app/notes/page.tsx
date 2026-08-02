@@ -3,6 +3,7 @@
 import { FormEvent, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import RichEditor from './RichEditor';
 import { useTerm } from '@/lib/useTerm';
+import { termOptions, termSortKey } from '@/lib/semester';
 import NotesStyles from './NotesStyles';
 import {
   Notebook,
@@ -103,11 +104,20 @@ export default function NotesPage() {
       const key = notebook.semester || 'Unsorted';
       groups.set(key, [...(groups.get(key) || []), notebook]);
     }
+    // Newest semester first, in real calendar order rather than alphabetical.
     return Array.from(groups.entries()).sort(([a], [b]) => {
       if (a === 'Unsorted') return 1;
       if (b === 'Unsorted') return -1;
-      return b.localeCompare(a);
+      const diff = termSortKey(b) - termSortKey(a);
+      return diff !== 0 ? diff : b.localeCompare(a);
     });
+  }, [notebooks]);
+
+  /** Semester choices: the usual terms, plus any already in use. */
+  const semesterChoices = useMemo(() => {
+    const used = notebooks.map(n => n.semester).filter((s): s is string => Boolean(s));
+    const all = Array.from(new Set([...termOptions(), ...used]));
+    return all.sort((a, b) => termSortKey(b) - termSortKey(a));
   }, [notebooks]);
 
   const visiblePages = searchResults ?? pages;
@@ -333,24 +343,37 @@ export default function NotesPage() {
   }
 
   async function createPage() {
-    if (!notebookId || !sectionName) {
-      setError('Create a notebook and a section first.');
+    if (!notebookId) {
+      setError('Create a notebook first.');
       return;
     }
     if (dirtyRef.current) await savePage(true);
     try {
+      // A notebook can end up with no section tabs (for instance if creating
+      // its default one failed). Rather than refusing to make a page, give the
+      // notebook the section it should have had.
+      let section = sectionName;
+      if (!section) {
+        const created = await api('/api/notes/sections', {
+          method: 'POST',
+          body: JSON.stringify({ notebookId, name: 'Notes' }),
+        });
+        section = created?.section?.name || 'Notes';
+        await loadSections();
+        setSectionName(section);
+      }
       const data = await api('/api/notes', {
         method: 'POST',
         body: JSON.stringify({
           title: 'Untitled Page',
           notebookId,
-          section: sectionName,
+          section,
           sourceType: 'class-notes',
           contentHtml: '<p><br></p>',
         }),
       });
       const page = data.note as Page;
-      await Promise.all([loadNotebooks(), loadPages(notebookId, sectionName)]);
+      await Promise.all([loadNotebooks(), loadPages(notebookId, section)]);
       htmlRef.current = page.contentHtml;
       setPageId(page.id);
       setDraft(page);
@@ -610,6 +633,7 @@ export default function NotesPage() {
           <NotebookModal
             form={notebookModal}
             saving={savingModal}
+            semesterChoices={semesterChoices}
             onChange={setNotebookModal}
             onSubmit={saveNotebook}
             onClose={() => setNotebookModal(null)}
@@ -845,8 +869,31 @@ export default function NotesPage() {
               )}
             </section>
 
+            {!pageListOpen && (
+              <button
+                type="button"
+                className="nb-pages-reopen"
+                title="Show the page list"
+                onClick={() => setPageListOpen(true)}
+              >
+                ‹ Pages
+              </button>
+            )}
+
             <aside className="nb-pages">
               <div className="nb-pages-head">
+                <div className="nb-pages-title">
+                  <span>Pages</span>
+                  <button
+                    type="button"
+                    className="nb-collapse"
+                    title="Collapse the page list"
+                    aria-label="Collapse the page list"
+                    onClick={() => setPageListOpen(false)}
+                  >
+                    ›
+                  </button>
+                </div>
                 <button type="button" className="nb-primary nb-block" onClick={() => void createPage()}>
                   + New page
                 </button>
@@ -909,6 +956,7 @@ export default function NotesPage() {
         <NotebookModal
           form={notebookModal}
           saving={savingModal}
+          semesterChoices={semesterChoices}
           onChange={setNotebookModal}
           onSubmit={saveNotebook}
           onClose={() => setNotebookModal(null)}
@@ -1042,9 +1090,10 @@ export default function NotesPage() {
   );
 }
 
-function NotebookModal({ form, saving, onChange, onSubmit, onClose, onDelete }: {
+function NotebookModal({ form, saving, semesterChoices, onChange, onSubmit, onClose, onDelete }: {
   form: NotebookForm;
   saving: boolean;
+  semesterChoices: string[];
   onChange: (next: NotebookForm) => void;
   onSubmit: (event: FormEvent) => void;
   onClose: () => void;
@@ -1072,11 +1121,13 @@ function NotebookModal({ form, saving, onChange, onSubmit, onClose, onDelete }: 
         </label>
         <label className="nb-field">
           <span>Semester</span>
-          <input
+          <select
             value={form.semester}
             onChange={event => onChange({ ...form, semester: event.target.value })}
-            placeholder="Fall 2026"
-          />
+          >
+            <option value="">Unsorted</option>
+            {semesterChoices.map(option => <option key={option} value={option}>{option}</option>)}
+          </select>
         </label>
         <div className="nb-field">
           <span>Colour</span>

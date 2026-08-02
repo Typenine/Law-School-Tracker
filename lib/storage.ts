@@ -553,6 +553,10 @@ async function applySchema(): Promise<void> {
     try {
       await p.query(statement);
     } catch (e) {
+      // `CREATE ... IF NOT EXISTS` is not atomic against a concurrent creator:
+      // two instances warming up together both see the object missing, and the
+      // loser fails with a duplicate key on the pg_class catalog. Harmless.
+      if (isBenignSchemaRace(e)) continue;
       console.warn(
         'ensureSchema: statement failed, continuing:',
         statement.replace(/\s+/g, ' ').slice(0, 120),
@@ -560,6 +564,13 @@ async function applySchema(): Promise<void> {
       );
     }
   }
+}
+
+function isBenignSchemaRace(error: any): boolean {
+  const code = String(error?.code || '');
+  if (['42P07', '42710', '23505', '42P16'].includes(code)) return true;
+  const message = String(error?.message || '');
+  return /already exists|pg_class_relname_nsp_index|pg_type_typname_nsp_index/i.test(message);
 }
 
 function uuid() {

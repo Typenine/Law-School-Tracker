@@ -37,9 +37,60 @@ export async function ensureNotesSchema(): Promise<void> {
   return notesSchemaReady;
 }
 
+/**
+ * Postgres error codes for "this object already exists".
+ *
+ * `CREATE TABLE/INDEX IF NOT EXISTS` is not atomic against a concurrent
+ * creator: two serverless instances warming up at the same time both see the
+ * object missing and both try to create it, and the loser fails with a
+ * duplicate key on the pg_class catalog index. That surfaced in the UI as
+ * `duplicate key value violates unique constraint "pg_class_relname_nsp_index"`.
+ * These races are harmless - the object exists either way - so they are
+ * ignored.
+ */
+const ALREADY_EXISTS = new Set([
+  '42P07', // duplicate_table (covers indexes too)
+  '42710', // duplicate_object
+  '23505', // unique_violation, which is how the catalog race reports itself
+  '42P16', // invalid_table_definition, raised by some concurrent DDL paths
+]);
+
+function isBenignSchemaRace(error: any): boolean {
+  const code = String(error?.code || '');
+  if (ALREADY_EXISTS.has(code)) return true;
+  const message = String(error?.message || '');
+  return /already exists|pg_class_relname_nsp_index|pg_type_typname_nsp_index/i.test(message);
+}
+
+/** Arbitrary but stable key so all instances contend on the same lock. */
+const NOTES_SCHEMA_LOCK = 4021977;
+
 async function applyNotesSchema(): Promise<void> {
-  const db = notesDb();
-  await db.query(`
+  // The advisory lock is session-scoped, so it has to be taken, held and
+  // released on one connection - going through the pool would unlock a
+  // different session than the one holding it.
+  const client = await notesDb().connect();
+
+  /** Run a schema statement, tolerating a concurrent instance winning the race. */
+  const run = async (sql: string) => {
+    try {
+      await client.query(sql);
+    } catch (error) {
+      if (isBenignSchemaRace(error)) return;
+      console.warn('ensureNotesSchema: statement failed, continuing:', sql.replace(/\s+/g, ' ').slice(0, 110), (error as any)?.message || error);
+    }
+  };
+
+  // Serialise migrations across instances. Best effort: if the lock cannot be
+  // taken the statements below still tolerate losing the race.
+  let locked = false;
+  try {
+    await client.query('SELECT pg_advisory_lock($1)', [NOTES_SCHEMA_LOCK]);
+    locked = true;
+  } catch {}
+
+  try {
+  await run(`
     CREATE TABLE IF NOT EXISTS ai_note_notebooks (
       id TEXT PRIMARY KEY,
       name TEXT NOT NULL,
@@ -51,7 +102,7 @@ async function applyNotesSchema(): Promise<void> {
       updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
     )
   `);
-  await db.query(`
+  await run(`
     CREATE TABLE IF NOT EXISTS ai_notes (
       id TEXT PRIMARY KEY,
       title TEXT NOT NULL,
@@ -68,16 +119,16 @@ async function applyNotesSchema(): Promise<void> {
       updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
     )
   `);
-  await db.query(`ALTER TABLE ai_notes ADD COLUMN IF NOT EXISTS notebook_id TEXT`);
-  await db.query(`ALTER TABLE ai_notes ADD COLUMN IF NOT EXISTS section TEXT NOT NULL DEFAULT 'Notes'`);
-  await db.query(`ALTER TABLE ai_notes ADD COLUMN IF NOT EXISTS pinned BOOLEAN NOT NULL DEFAULT FALSE`);
-  await db.query(`ALTER TABLE ai_notes ADD COLUMN IF NOT EXISTS archived BOOLEAN NOT NULL DEFAULT FALSE`);
+  await run(`ALTER TABLE ai_notes ADD COLUMN IF NOT EXISTS notebook_id TEXT`);
+  await run(`ALTER TABLE ai_notes ADD COLUMN IF NOT EXISTS section TEXT NOT NULL DEFAULT 'Notes'`);
+  await run(`ALTER TABLE ai_notes ADD COLUMN IF NOT EXISTS pinned BOOLEAN NOT NULL DEFAULT FALSE`);
+  await run(`ALTER TABLE ai_notes ADD COLUMN IF NOT EXISTS archived BOOLEAN NOT NULL DEFAULT FALSE`);
   // Rich text for the editor. `content` stays plain text so search, previews
   // and the GPT endpoints keep working unchanged.
-  await db.query(`ALTER TABLE ai_notes ADD COLUMN IF NOT EXISTS content_html TEXT`);
-  await db.query(`ALTER TABLE ai_notes ADD COLUMN IF NOT EXISTS position INTEGER NOT NULL DEFAULT 0`);
-  await db.query(`ALTER TABLE ai_note_notebooks ADD COLUMN IF NOT EXISTS position INTEGER NOT NULL DEFAULT 0`);
-  await db.query(`
+  await run(`ALTER TABLE ai_notes ADD COLUMN IF NOT EXISTS content_html TEXT`);
+  await run(`ALTER TABLE ai_notes ADD COLUMN IF NOT EXISTS position INTEGER NOT NULL DEFAULT 0`);
+  await run(`ALTER TABLE ai_note_notebooks ADD COLUMN IF NOT EXISTS position INTEGER NOT NULL DEFAULT 0`);
+  await run(`
     CREATE TABLE IF NOT EXISTS ai_note_sections (
       id TEXT PRIMARY KEY,
       notebook_id TEXT NOT NULL,
@@ -88,23 +139,23 @@ async function applyNotesSchema(): Promise<void> {
       updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
     )
   `);
-  await db.query(`
+  await run(`
     CREATE UNIQUE INDEX IF NOT EXISTS ai_note_sections_unique_idx
     ON ai_note_sections (notebook_id, LOWER(name))
   `);
-  await db.query(`CREATE INDEX IF NOT EXISTS ai_notes_course_idx ON ai_notes (LOWER(course))`);
-  await db.query(`CREATE INDEX IF NOT EXISTS ai_notes_notebook_idx ON ai_notes (notebook_id)`);
-  await db.query(`CREATE INDEX IF NOT EXISTS ai_notes_section_idx ON ai_notes (notebook_id, LOWER(section))`);
-  await db.query(`CREATE INDEX IF NOT EXISTS ai_notes_class_date_idx ON ai_notes (class_date)`);
-  await db.query(`CREATE INDEX IF NOT EXISTS ai_note_notebooks_semester_idx ON ai_note_notebooks (LOWER(semester))`);
-  await db.query(`
+  await run(`CREATE INDEX IF NOT EXISTS ai_notes_course_idx ON ai_notes (LOWER(course))`);
+  await run(`CREATE INDEX IF NOT EXISTS ai_notes_notebook_idx ON ai_notes (notebook_id)`);
+  await run(`CREATE INDEX IF NOT EXISTS ai_notes_section_idx ON ai_notes (notebook_id, LOWER(section))`);
+  await run(`CREATE INDEX IF NOT EXISTS ai_notes_class_date_idx ON ai_notes (class_date)`);
+  await run(`CREATE INDEX IF NOT EXISTS ai_note_notebooks_semester_idx ON ai_note_notebooks (LOWER(semester))`);
+  await run(`
     CREATE INDEX IF NOT EXISTS ai_notes_search_idx
     ON ai_notes USING GIN (
       to_tsvector('english', COALESCE(title, '') || ' ' || COALESCE(content, ''))
     )
   `);
 
-  await db.query(`
+  await run(`
     INSERT INTO ai_note_notebooks (id, name, course, semester)
     SELECT DISTINCT
       'legacy-' || md5(
@@ -122,7 +173,7 @@ async function applyNotesSchema(): Promise<void> {
       AND source.notebook_id IS NULL
     ON CONFLICT (id) DO NOTHING
   `);
-  await db.query(`
+  await run(`
     UPDATE ai_notes note
     SET notebook_id = notebook.id
     FROM ai_note_notebooks notebook
@@ -135,7 +186,7 @@ async function applyNotesSchema(): Promise<void> {
 
   // Promote the section names already stored on pages into real section rows
   // so they can be ordered, recoloured and renamed like OneNote tabs.
-  await db.query(`
+  await run(`
     INSERT INTO ai_note_sections (id, notebook_id, name)
     SELECT DISTINCT ON (note.notebook_id, LOWER(TRIM(note.section)))
       'section-' || md5(note.notebook_id || '|' || LOWER(TRIM(note.section))),
@@ -147,7 +198,7 @@ async function applyNotesSchema(): Promise<void> {
     ON CONFLICT DO NOTHING
   `);
   // Every notebook gets at least one tab to write on.
-  await db.query(`
+  await run(`
     INSERT INTO ai_note_sections (id, notebook_id, name)
     SELECT 'section-' || md5(notebook.id || '|notes'), notebook.id, 'Notes'
     FROM ai_note_notebooks notebook
@@ -156,6 +207,10 @@ async function applyNotesSchema(): Promise<void> {
     )
     ON CONFLICT DO NOTHING
   `);
+  } finally {
+    if (locked) { try { await client.query('SELECT pg_advisory_unlock($1)', [NOTES_SCHEMA_LOCK]); } catch {} }
+    client.release();
+  }
 }
 
 const HTML_ENTITIES: Record<string, string> = {

@@ -192,6 +192,37 @@ export function termLabel(term: ResolvedTerm): string {
   return `${term.name} · between semesters`;
 }
 
+const SEASON_ORDER: Record<string, number> = { Spring: 0, Summer: 1, Fall: 2, Winter: 3 };
+
+/**
+ * Sortable key for a "Season Year" label. Sorting these as plain strings puts
+ * Spring after Fall within the same year, which is not the order they happen
+ * in; this keeps notebook and course groupings chronological.
+ */
+export function termSortKey(label: string): number {
+  const match = /^(Spring|Summer|Fall|Winter)\s+(\d{4})$/.exec((label || '').trim());
+  if (!match) return -1; // unrecognised labels sort last
+  return parseInt(match[2], 10) * 10 + (SEASON_ORDER[match[1]] ?? 0);
+}
+
+/**
+ * Term labels to offer when filing something under a semester: a couple of
+ * past terms for backfilling, the current one, and the next few ahead.
+ */
+export function termOptions(now: Date = new Date(), back = 2, forward = 3): string[] {
+  const { base } = deriveTermForDate(now);
+  const seasons: Semester[] = ['Spring', 'Fall'];
+  const startIndex = seasons.indexOf(base.season as Semester);
+  const options: string[] = [];
+  for (let step = -back; step <= forward; step++) {
+    const raw = startIndex + step;
+    const year = base.year + Math.floor(raw / seasons.length);
+    const season = seasons[((raw % seasons.length) + seasons.length) % seasons.length];
+    options.push(`${season} ${year}`);
+  }
+  return options;
+}
+
 /** Does a course belong to the given term? */
 export function courseInTerm(
   course: { semester?: string | null; year?: number | null },
