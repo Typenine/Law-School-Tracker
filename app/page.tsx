@@ -4,9 +4,12 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import type { CalendarEvent, Course, StudySession, Task } from "@/lib/types";
 import { apiFetch } from "@/lib/apiClient";
 import LogModal, { type LogSubmitData } from "@/components/LogModal";
-import { countPages, parsePageRanges } from "@/lib/pageRanges";
-import { notifyTasksChanged } from "@/lib/taskBus";
+import { countPages, formatPageRanges, parsePageRanges, subtractPages } from "@/lib/pageRanges";
+import { notifyTasksChanged, onTasksChanged } from "@/lib/taskBus";
 import { notifySessionsChanged } from "@/lib/sessionsBus";
+import { notifyScheduleChanged, onScheduleChanged } from "@/lib/scheduleBus";
+import { clearScheduleDirty, markScheduleDirty, writeLocalSchedule } from "@/lib/useSchedule";
+import { setPageSubtitle } from "@/lib/chromeBus";
 
 type PlanItem = { id: string; title: string; course: string; minutes: number; guessed?: boolean };
 type TodayPlan = { dateKey: string; locked?: boolean; items: PlanItem[] };
@@ -191,18 +194,25 @@ export default function TodayPage() {
   const refresh = useCallback(async () => {
     setLoading(true);
     try {
-      const [taskResult, courseResult, sessionResult, eventResult, settingsResult] = await Promise.all([
+      const [taskResult, courseResult, sessionResult, eventResult, settingsResult, scheduleResult] = await Promise.all([
         apiFetch<{ tasks: Task[] }>("/api/tasks"),
         apiFetch<{ courses: Course[] }>("/api/courses"),
         apiFetch<{ sessions: StudySession[] }>("/api/sessions"),
         apiFetch<{ events: CalendarEvent[] }>("/api/events"),
         apiFetch<{ settings: SettingsMap }>("/api/settings"),
+        apiFetch<{ blocks: ScheduledBlock[] }>("/api/schedule").catch(() => ({ blocks: [] as ScheduledBlock[] })),
       ]);
       setTasks(Array.isArray(taskResult.tasks) ? taskResult.tasks : []);
       setCourses(Array.isArray(courseResult.courses) ? courseResult.courses : []);
       setSessions(Array.isArray(sessionResult.sessions) ? sessionResult.sessions : []);
       setEvents(Array.isArray(eventResult.events) ? eventResult.events : []);
       setSettings(settingsResult.settings || {});
+      // Take the week plan from the server so Today matches the plan built on
+      // any device, rather than only this browser's cached copy.
+      if (Array.isArray(scheduleResult.blocks)) {
+        setSchedule(scheduleResult.blocks);
+        writeLocalSchedule(scheduleResult.blocks as any);
+      }
       const serverTimers = settingsResult.settings?.taskTimersV1;
       setTimers(serverTimers && typeof serverTimers === "object" ? serverTimers : readLocalJson(LS_TIMERS, {}));
     } finally {
@@ -214,6 +224,12 @@ export default function TodayPage() {
     setTodayPlan(readLocalJson<TodayPlan | null>(LS_TODAY, null));
     setSchedule(readLocalJson<ScheduledBlock[]>(LS_SCHEDULE, []));
     void refresh();
+    // Reflect task and schedule edits made elsewhere in the app straight away.
+    const offTasks = onTasksChanged(() => { void refresh(); });
+    const offSchedule = onScheduleChanged(() => {
+      setSchedule(readLocalJson<ScheduledBlock[]>(LS_SCHEDULE, []));
+    });
+    return () => { offTasks(); offSchedule(); };
   }, [refresh]);
 
   useEffect(() => {
@@ -379,32 +395,12 @@ export default function TodayPage() {
     };
   }, [courses, events, today]);
 
-  const weekCount = useMemo(() => {
-    const start = startOfWeekYmd(today);
-    const end = addDays(start, 6);
-    return tasks.filter(task => task.status === "todo" && chicagoYmd(task.dueDate) >= start && chicagoYmd(task.dueDate) <= end).length;
-  }, [tasks, today]);
-
+  // Publish the day's summary to the app header. Writing into the header's DOM
+  // directly used to fight React's own rendering of the shell.
   useEffect(() => {
-    const subtitle = document.getElementById("page-sub");
-    if (subtitle) subtitle.textContent = `${dateHeading} · ${compactMinutes(plannedToday)} planned, ${compactMinutes(leftToday)} left`;
-
-    const ensureCount = (href: string, value: number) => {
-      const link = document.querySelector<HTMLAnchorElement>(`.lst-nav[href="${href}"]`);
-      if (!link) return;
-      let count = link.querySelector<HTMLElement>(".lst-count");
-      if (!count) {
-        count = document.createElement("span");
-        count.className = "lst-count";
-        link.appendChild(count);
-      }
-      count.textContent = String(value);
-    };
-    ensureCount("/", plannedTasks.length);
-    ensureCount("/week-plan", weekCount);
-    ensureCount("/tasks", tasks.filter(task => task.status === "todo").length);
-    ensureCount("/courses", courses.length);
-  }, [courses.length, dateHeading, leftToday, plannedTasks.length, plannedToday, tasks, weekCount]);
+    setPageSubtitle(`${dateHeading} · ${compactMinutes(plannedToday)} planned, ${compactMinutes(leftToday)} left`);
+    return () => setPageSubtitle(null);
+  }, [dateHeading, leftToday, plannedToday]);
 
   function elapsedMs(taskId: string): number {
     void timerTick;
@@ -452,10 +448,20 @@ export default function TodayPage() {
       },
     });
     if (data.isPartial) {
-      await apiFetch(`/api/tasks/${logTask.id}`, {
-        method: "PATCH",
-        body: { estimatedMinutes: Math.max(0, (logTask.estimatedMinutes || 0) - data.minutes) },
-      });
+      const patch: Record<string, unknown> = {
+        estimatedMinutes: Math.max(0, (logTask.estimatedMinutes || 0) - data.minutes),
+      };
+      // Narrow the outstanding page range so the Up Next card counts down.
+      const assigned = logTask.originalPageRanges || titlePageRanges(logTask);
+      if (assigned && data.pagesCompleted) {
+        try {
+          const current = logTask.remainingPageRanges || assigned;
+          const remaining = subtractPages(parsePageRanges(current), data.pagesCompleted);
+          patch.originalPageRanges = logTask.originalPageRanges || assigned;
+          patch.remainingPageRanges = formatPageRanges(remaining) || null;
+        } catch {}
+      }
+      await apiFetch(`/api/tasks/${logTask.id}`, { method: "PATCH", body: patch });
     } else {
       await apiFetch(`/api/tasks/${logTask.id}`, {
         method: "PATCH",
@@ -479,9 +485,10 @@ export default function TodayPage() {
 
   async function moveToTomorrow(task: Task) {
     const tomorrow = addDays(today, 1);
-    const nextSchedule = schedule.map(block => block.taskId === task.id && block.day === today ? { ...block, day: tomorrow } : block);
-    let changed = nextSchedule.some((block, index) => block.day !== schedule[index]?.day);
-    if (!changed) {
+    const movedExisting = schedule.some(block => block.taskId === task.id && block.day === today);
+    const nextSchedule = schedule.map(block =>
+      block.taskId === task.id && block.day === today ? { ...block, day: tomorrow } : block);
+    if (!movedExisting) {
       nextSchedule.push({
         id: `moved-${task.id}-${Date.now()}`,
         taskId: task.id,
@@ -491,12 +498,21 @@ export default function TodayPage() {
         course: task.course || "",
         priority: task.priority || null,
       });
-      changed = true;
     }
-    if (changed) {
-      setSchedule(nextSchedule);
-      window.localStorage.setItem(LS_SCHEDULE, JSON.stringify(nextSchedule));
+    setSchedule(nextSchedule);
+    writeLocalSchedule(nextSchedule as any);
+    markScheduleDirty();
+    notifyScheduleChanged();
+    // Persist to the server too, otherwise the move only lived in this tab's
+    // localStorage and the block reappeared on today the next time the week
+    // plan loaded from the server.
+    try {
+      await apiFetch("/api/schedule", { method: "PUT", body: { blocks: nextSchedule } });
+      clearScheduleDirty();
+    } catch {
+      // The dirty flag makes the week plan retry this on its next load.
     }
+
     if (todayPlan?.dateKey === today) {
       const nextPlan = { ...todayPlan, items: todayPlan.items.filter(item => item.id !== task.id) };
       setTodayPlan(nextPlan);

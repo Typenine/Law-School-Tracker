@@ -16,6 +16,13 @@ export async function GET(req: NextRequest) {
     const matches = await searchAiNotes(query, {
       course: params.get('course'),
       semester: params.get('semester'),
+      // The hierarchy the workspace uses, so the assistant can be asked for
+      // "the Evidence case briefs from week 3" rather than just a course.
+      notebookId: params.get('notebookId'),
+      section: params.get('section'),
+      sectionId: params.get('sectionId'),
+      // Lets the assistant go from a reading assignment to the notes on it.
+      taskId: params.get('taskId'),
       from: params.get('from'),
       to: params.get('to'),
       limit: Number.isFinite(requestedLimit) ? requestedLimit : 12,

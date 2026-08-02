@@ -6,6 +6,8 @@ import AddCourseWizard from '@/components/AddCourseWizard';
 import TaskBacklogEntry from '@/components/TaskBacklogEntry';
 import EditCourseModal from '@/components/EditCourseModal';
 import { extractCourseFromNotes } from '@/lib/courseMatching';
+import { useTerm } from '@/lib/useTerm';
+import { courseInTerm, coursePastTerm } from '@/lib/semester';
 
 export const dynamic = 'force-dynamic';
 
@@ -31,8 +33,12 @@ function normCourseKey(s: string): string { return (s || '').toLowerCase().trim(
 export default function CoursesPage() {
   const [courses, setCourses] = useState<Course[]>([]);
   const [loading, setLoading] = useState(true);
+  // 'current' scopes the list to the term the calendar says we are in, so
+  // finished semesters drop out of the way instead of piling up forever.
+  const [termFilter, setTermFilter] = useState<'current' | 'archived' | 'all'>('current');
   const [yearFilter, setYearFilter] = useState<number | 'all'>('all');
   const [semFilter, setSemFilter] = useState<Semester | 'all'>('all');
+  const { term } = useTerm();
   const [showWizard, setShowWizard] = useState(false);
   const [showBacklog, setShowBacklog] = useState(false);
   const [editCourse, setEditCourse] = useState<Course | null>(null);
@@ -107,13 +113,32 @@ export default function CoursesPage() {
     return Array.from(yearSet).sort((a, b) => b - a);
   }, [courses]);
 
+  const archivedCount = useMemo(
+    () => (term ? courses.filter(c => coursePastTerm(c, term)).length : 0),
+    [courses, term],
+  );
+  const currentCount = useMemo(
+    () => (term ? courses.filter(c => courseInTerm(c, term)).length : 0),
+    [courses, term],
+  );
+  /** Courses with no semester/year set at all; they'd otherwise vanish. */
+  const unassignedCount = useMemo(
+    () => courses.filter(c => !c.semester || !c.year).length,
+    [courses],
+  );
+
   const filtered = useMemo(() => {
     return courses.filter(c => {
+      if (term) {
+        const unassigned = !c.semester || !c.year;
+        if (termFilter === 'current' && !(courseInTerm(c, term) || unassigned)) return false;
+        if (termFilter === 'archived' && !coursePastTerm(c, term)) return false;
+      }
       if (yearFilter !== 'all' && c.year !== yearFilter) return false;
       if (semFilter !== 'all' && c.semester !== semFilter) return false;
       return true;
     });
-  }, [courses, yearFilter, semFilter]);
+  }, [courses, term, termFilter, yearFilter, semFilter]);
 
   // Per-course logged minutes this week (uses normalized keys for consistent matching)
   const weekKeys = useMemo(() => weekKeysChicago(new Date()), []);
@@ -205,6 +230,32 @@ export default function CoursesPage() {
         </div>
       </div>
 
+      {term && (
+        <div className="mb-4 rounded-lg border border-[#1b2344] bg-[#0b1020] px-4 py-3 flex flex-wrap items-center justify-between gap-3">
+          <div className="text-sm">
+            <span className="font-medium">{term.name}</span>
+            <span className="opacity-60">
+              {term.phase === 'in-session' && term.weekNumber ? ` · week ${term.weekNumber} of ${term.totalWeeks}`
+                : term.phase === 'upcoming' ? ` · starts ${new Date(`${term.startDate}T12:00:00`).toLocaleDateString(undefined, { month: 'long', day: 'numeric' })}`
+                : ' · between semesters'}
+            </span>
+            <span className="opacity-60"> · {currentCount} course{currentCount === 1 ? '' : 's'}</span>
+            {archivedCount > 0 && <span className="opacity-60"> · {archivedCount} archived</span>}
+          </div>
+          <div className="flex gap-1 text-xs">
+            {([['current', 'This semester'], ['archived', `Archived${archivedCount ? ` (${archivedCount})` : ''}`], ['all', 'All']] as const).map(([value, label]) => (
+              <button
+                key={value}
+                onClick={() => setTermFilter(value)}
+                className={`px-3 py-1.5 rounded border ${termFilter === value ? 'border-blue-500 bg-blue-900/30' : 'border-[#1b2344] hover:bg-[#1b2344]'}`}
+              >
+                {label}
+              </button>
+            ))}
+          </div>
+        </div>
+      )}
+
       <div className="grid grid-cols-1 md:grid-cols-3 gap-2 mb-4">
         <div>
           <label className="block text-xs text-slate-300/70 mb-1">Year</label>
@@ -225,11 +276,31 @@ export default function CoursesPage() {
       {loading ? (
         <div className="text-sm text-slate-400">Loading courses...</div>
       ) : filtered.length === 0 ? (
-        <div className="text-center py-8">
-          <div className="text-slate-400 mb-4">No courses yet</div>
-          <button onClick={() => setShowWizard(true)} className="px-4 py-2 rounded bg-blue-600 hover:bg-blue-500 text-white">
-            Add Your First Course
-          </button>
+        <div className="text-center py-10">
+          {termFilter === 'current' && term ? (
+            <>
+              <div className="text-slate-300 mb-1">No courses set up for {term.name} yet</div>
+              <div className="text-slate-400 text-sm mb-4">
+                {archivedCount > 0
+                  ? `Your ${archivedCount} course${archivedCount === 1 ? '' : 's'} from earlier semesters ${archivedCount === 1 ? 'is' : 'are'} archived. Add this semester's classes to start planning.`
+                  : 'Add this semester’s classes to start planning.'}
+              </div>
+            </>
+          ) : (
+            <div className="text-slate-400 mb-4">
+              {termFilter === 'archived' ? 'No archived courses.' : 'No courses yet'}
+            </div>
+          )}
+          <div className="flex justify-center gap-2">
+            <button onClick={() => setShowWizard(true)} className="px-4 py-2 rounded bg-blue-600 hover:bg-blue-500 text-white">
+              {termFilter === 'current' && term ? `Add ${term.name} course` : 'Add Your First Course'}
+            </button>
+            {termFilter === 'current' && archivedCount > 0 && (
+              <button onClick={() => setTermFilter('archived')} className="px-4 py-2 rounded border border-[#1b2344] hover:bg-[#1b2344]">
+                View archived
+              </button>
+            )}
+          </div>
         </div>
       ) : (
         <div className="overflow-x-auto">

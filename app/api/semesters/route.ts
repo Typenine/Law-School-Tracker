@@ -1,104 +1,90 @@
 import { NextRequest, NextResponse } from 'next/server';
 import type { SemesterInfo, NewSemesterInput } from '@/lib/types';
+import { mutateSemesters, readSemesters, uid } from '@/lib/collections';
 
-const SETTING_KEY = 'semestersV1';
-
-async function getSemesters(): Promise<SemesterInfo[]> {
-  try {
-    const baseUrl = process.env.VERCEL_URL 
-      ? `https://${process.env.VERCEL_URL}` 
-      : 'http://localhost:3000';
-    const res = await fetch(`${baseUrl}/api/settings?keys=${SETTING_KEY}`, { cache: 'no-store' });
-    if (!res.ok) return [];
-    const data = await res.json();
-    const semesters = data?.settings?.[SETTING_KEY];
-    return Array.isArray(semesters) ? semesters : [];
-  } catch {
-    return [];
-  }
-}
-
-async function saveSemesters(semesters: SemesterInfo[]): Promise<void> {
-  try {
-    const baseUrl = process.env.VERCEL_URL 
-      ? `https://${process.env.VERCEL_URL}` 
-      : 'http://localhost:3000';
-    await fetch(`${baseUrl}/api/settings`, {
-      method: 'PATCH',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ [SETTING_KEY]: semesters }),
-    });
-  } catch {}
-}
-
-function uid(): string {
-  return Math.random().toString(36).slice(2) + Date.now().toString(36);
-}
+export const dynamic = 'force-dynamic';
+export const runtime = 'nodejs';
 
 export async function GET(req: NextRequest) {
   const url = new URL(req.url);
   const active = url.searchParams.get('active');
-  
-  let semesters = await getSemesters();
-  
-  if (active === 'true') {
-    semesters = semesters.filter(s => s.isActive);
+
+  try {
+    let semesters = await readSemesters();
+    if (active === 'true') semesters = semesters.filter(s => s.isActive);
+    semesters.sort((a, b) => b.startDate.localeCompare(a.startDate));
+    return NextResponse.json({ semesters });
+  } catch (e) {
+    return NextResponse.json(
+      { error: e instanceof Error ? e.message : 'Unable to load semesters.' },
+      { status: 500 },
+    );
   }
-  
-  // Sort by start date descending (most recent first)
-  semesters.sort((a, b) => b.startDate.localeCompare(a.startDate));
-  
-  return NextResponse.json({ semesters });
 }
 
 export async function POST(req: NextRequest) {
+  let body: NewSemesterInput;
   try {
-    const body: NewSemesterInput = await req.json();
-    if (!body.name || !body.season || !body.year || !body.startDate || !body.endDate) {
-      return NextResponse.json({ error: 'name, season, year, startDate, and endDate are required' }, { status: 400 });
-    }
-    
-    const semester: SemesterInfo = {
-      id: uid(),
-      name: body.name,
-      season: body.season,
-      year: body.year,
-      startDate: body.startDate,
-      endDate: body.endDate,
-      isActive: body.isActive ?? false,
-      windowsByDow: body.windowsByDow ?? null,
-      breaksByDow: body.breaksByDow ?? null,
-      createdAt: new Date().toISOString(),
-    };
-    
-    const semesters = await getSemesters();
-    
-    // If setting as active, deactivate others
-    if (semester.isActive) {
-      for (const s of semesters) {
-        s.isActive = false;
-      }
-    }
-    
-    semesters.push(semester);
-    await saveSemesters(semesters);
-    
+    body = await req.json();
+  } catch {
+    return NextResponse.json({ error: 'Invalid request' }, { status: 400 });
+  }
+  if (!body?.name || !body?.season || !body?.year || !body?.startDate || !body?.endDate) {
+    return NextResponse.json(
+      { error: 'name, season, year, startDate, and endDate are required' },
+      { status: 400 },
+    );
+  }
+
+  const semester: SemesterInfo = {
+    id: uid(),
+    name: body.name,
+    season: body.season,
+    year: body.year,
+    startDate: body.startDate,
+    endDate: body.endDate,
+    isActive: body.isActive ?? false,
+    windowsByDow: body.windowsByDow ?? null,
+    breaksByDow: body.breaksByDow ?? null,
+    createdAt: new Date().toISOString(),
+  };
+
+  try {
+    await mutateSemesters(semesters => {
+      // Only one semester can be active at a time.
+      const next = semester.isActive
+        ? semesters.map(s => ({ ...s, isActive: false }))
+        : semesters.slice();
+      next.push(semester);
+      return { semesters: next, result: null };
+    });
     return NextResponse.json({ semester }, { status: 201 });
   } catch (e) {
-    return NextResponse.json({ error: 'Invalid request' }, { status: 400 });
+    return NextResponse.json(
+      { error: e instanceof Error ? e.message : 'Unable to save the semester.' },
+      { status: 500 },
+    );
   }
 }
 
 export async function PUT(req: NextRequest) {
   // Bulk replace all semesters
+  let body: any;
   try {
-    const body = await req.json();
-    if (!Array.isArray(body.semesters)) {
-      return NextResponse.json({ error: 'semesters array required' }, { status: 400 });
-    }
-    await saveSemesters(body.semesters);
-    return NextResponse.json({ success: true });
+    body = await req.json();
   } catch {
     return NextResponse.json({ error: 'Invalid request' }, { status: 400 });
+  }
+  if (!Array.isArray(body?.semesters)) {
+    return NextResponse.json({ error: 'semesters array required' }, { status: 400 });
+  }
+  try {
+    await mutateSemesters(() => ({ semesters: body.semesters as SemesterInfo[], result: null }));
+    return NextResponse.json({ success: true });
+  } catch (e) {
+    return NextResponse.json(
+      { error: e instanceof Error ? e.message : 'Unable to save semesters.' },
+      { status: 500 },
+    );
   }
 }

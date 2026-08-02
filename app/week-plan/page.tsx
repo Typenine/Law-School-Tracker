@@ -5,7 +5,7 @@ import { useTasks } from "@/lib/useTasks";
 import { estimateMinutesForTask } from "@/lib/taskEstimate";
 import { useSessions } from "@/lib/useSessions";
 import { useCourses } from "@/lib/useCourses";
-import { useSchedule, useAvailability } from "@/lib/useSchedule";
+import { useSchedule, useAvailability, clearScheduleDirty, isScheduleDirty } from "@/lib/useSchedule";
 import { apiFetch } from "@/lib/apiClient";
 import { notifyToast } from "@/lib/toastBus";
 type BacklogItem = {
@@ -52,6 +52,27 @@ function mondayOfChicago(d: Date): Date { const ymd = chicagoYmd(d); const [yy,m
 function weekKeysChicago(d: Date): string[] { const start = mondayOfChicago(d); return Array.from({length:7},(_,i)=>{const x=new Date(start); x.setDate(x.getDate()+i); return chicagoYmd(x);}); }
 function startOfDay(d: Date) { const x = new Date(d); x.setHours(0,0,0,0); return x; }
 function saturdayOf(d: Date) { const x = startOfDay(d); const dow = x.getDay(); const delta = (dow - 6 + 7) % 7; x.setDate(x.getDate() - delta); return x; }
+/**
+ * Calendar date of a local Date, in local terms.
+ *
+ * The selected week is built from local Date arithmetic and read back with
+ * `new Date(year, month, day)`, so it has to be written the same way. It used
+ * to be stored with `ymd()`, which formats in America/Chicago: for any browser
+ * running ahead of Chicago that rendered the previous day, so each visit
+ * restored a date one day earlier, `saturdayOf` snapped it back another week,
+ * and the planner walked steadily into the past - taking the week's plan out
+ * of view with it.
+ */
+function localYmd(d: Date): string {
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+}
+/** Restore a saved week only when it is not already behind us. */
+function restorableWeek(stored: string): Date | null {
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(stored)) return null;
+  const [y, m, da] = stored.split('-').map(x => parseInt(x, 10));
+  const candidate = saturdayOf(new Date(y, m - 1, da));
+  return candidate >= saturdayOf(new Date()) ? candidate : null;
+}
 function ymd(d: Date) { return chicagoYmd(d); }
 function dayLabel(d: Date) { return d.toLocaleDateString(undefined, { weekday: 'short', month: 'short', day: 'numeric' }); }
 function endOfDayIso(ymdStr: string) { const [y,m,da]=ymdStr.split('-').map(n=>parseInt(n,10)); const x=new Date(y,(m as number)-1,da,23,59,59,999); return x.toISOString(); }
@@ -97,7 +118,15 @@ function loadAvailability(): AvailabilityTemplate {
 }
 function saveAvailability(t: AvailabilityTemplate) { if (typeof window!=='undefined') window.localStorage.setItem(LS_AVAIL, JSON.stringify(t)); }
 function loadSchedule(): ScheduledBlock[] { if (typeof window==='undefined') return []; try { const raw=window.localStorage.getItem(LS_SCHEDULE); const arr=raw?JSON.parse(raw):[]; return Array.isArray(arr)?arr:[]; } catch { return []; } }
-function saveSchedule(blocks: ScheduledBlock[]) { if (typeof window!=='undefined') window.localStorage.setItem(LS_SCHEDULE, JSON.stringify(blocks)); }
+function blockFingerprint(blocks: ScheduledBlock[]): string {
+  return blocks
+    .map(b => `${b.id}|${b.day}|${b.plannedMinutes}|${b.taskId}`)
+    .sort()
+    .join('\n');
+}
+function hasUnsyncedEdits(local: ScheduledBlock[], remote: ScheduledBlock[]): boolean {
+  return blockFingerprint(local) !== blockFingerprint(remote);
+}
 
 // Use shared helper for estimate calculations
 function estimateMinutesFor(item: BacklogItem): { minutes: number; guessed: boolean } {
@@ -107,19 +136,20 @@ function estimateMinutesFor(item: BacklogItem): { minutes: number; guessed: bool
 export default function WeekPlanPage() {
   const [sortBy, setSortBy] = useState<'due'|'course'|'priority'|'estimate'>('due');
   const [sortDir, setSortDir] = useState<'asc'|'desc'>('asc');
+  // Read on the client only. Deriving this during render made the server and
+  // the browser disagree about which week to show, so hydration failed and
+  // React re-rendered the whole document - which is why the planner could come
+  // back showing a different week than the one the blocks were placed in.
+  const [mounted, setMounted] = useState(false);
   const [weekStart, setWeekStart] = useState<Date>(() => {
     if (typeof window === 'undefined') return saturdayOf(new Date());
     try {
-      const s = window.localStorage.getItem(LS_WEEK_START);
-      if (s) {
-        const [y,m,da] = s.split('-').map(x=>parseInt(x,10));
-        const dt = new Date(y,(m as number)-1,da);
-        return saturdayOf(dt);
-      }
+      const stored = window.localStorage.getItem(LS_WEEK_START);
+      if (stored) return restorableWeek(stored) || saturdayOf(new Date());
     } catch {}
     return saturdayOf(new Date());
   });
-  const { blocks, setBlocks } = useSchedule();
+  const { blocks, setBlocks, hydrate } = useSchedule();
   const { availability, setAvailability } = useAvailability();
   const [backlog, setBacklog] = useState<BacklogItem[]>([]);
   const { tasks } = useTasks();
@@ -140,10 +170,13 @@ export default function WeekPlanPage() {
     unschedulable: Array<{ taskId: string; title: string; remaining: number; dueYmd: string }>;
   } | null>(null);
 
-  // Initial load: server/setting backups and migration while keeping localStorage as the source of truth
+  // Initial load. The server is the durable copy of the schedule; localStorage
+  // is a cache that only wins when it holds edits the server has not confirmed
+  // yet (tracked by the dirty flag). Blindly re-pushing localStorage on every
+  // load is what used to bring deleted and moved blocks back.
+  useEffect(() => { setMounted(true); }, []);
+
   useEffect(() => {
-    const localBlocks = loadSchedule(); // for server sync decisions only
-    console.log('[WeekPlan] Initial load from localStorage (hook will hydrate separately):', localBlocks.length, 'blocks');
     setBacklog(loadBacklog());
     // Load windows and breaks from localStorage
     try {
@@ -155,26 +188,24 @@ export default function WeekPlanPage() {
       }
     } catch {}
     let canceled = false;
-    let settingsCache: Record<string, any> = {};
     (async () => {
       try {
         const [bj, sj] = await Promise.all([
           apiFetch<{ blocks: any[] }>("/api/schedule"),
-          apiFetch<{ settings: Record<string, any> }>("/api/settings?keys=availabilityTemplateV1,weeklyGoalsV1,weekPlanShowConflicts,weekPlanWeekStartYmd,weekPlanTwoWeeksOnly,internshipColor,sportsLawReviewColor,availabilityBreaksV1,availabilityWindowsV1,weekScheduleV1")
+          apiFetch<{ settings: Record<string, any> }>("/api/settings?keys=availabilityTemplateV1,weeklyGoalsV1,weekPlanShowConflicts,weekPlanWeekStartYmd,weekPlanTwoWeeksOnly,internshipColor,sportsLawReviewColor,availabilityBreaksV1,availabilityWindowsV1")
         ]);
         if (canceled) return;
         {
           const settings = (sj?.settings || {}) as Record<string, any>;
-          settingsCache = settings;
           if (settings.availabilityTemplateV1 && typeof settings.availabilityTemplateV1 === 'object') {
             setAvailability(settings.availabilityTemplateV1 as any);
           }
           if (Array.isArray(settings.weeklyGoalsV1)) setGoals(settings.weeklyGoalsV1 as any[]);
           if (typeof settings.weekPlanTwoWeeksOnly === 'boolean') setTwoWeeksOnly(settings.weekPlanTwoWeeksOnly as boolean);
           const wk = settings.weekPlanWeekStartYmd;
-          if (typeof wk === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(wk)) {
-            const [y,m,da] = wk.split('-').map(x=>parseInt(x,10));
-            setWeekStart(saturdayOf(new Date(y,(m as number)-1,da)));
+          if (typeof wk === 'string') {
+            const restored = restorableWeek(wk);
+            if (restored) setWeekStart(restored);
           }
           // Load windows and breaks from server settings
           const readLocalJson = (key: string) => { try { if (typeof window!=='undefined') { const raw = window.localStorage.getItem(key); return raw?JSON.parse(raw):null; } } catch {} return null; };
@@ -190,33 +221,23 @@ export default function WeekPlanPage() {
           setSettingsReady(true);
         }
         {
-          const remote = Array.isArray(bj?.blocks) ? bj.blocks : [];
-          // Re-read localStorage in case it was updated since initial load
+          const remote = (Array.isArray(bj?.blocks) ? bj.blocks : []) as ScheduledBlock[];
           const local = loadSchedule();
-          console.log('[WeekPlan] API:', remote.length, 'blocks | localStorage:', local.length, 'blocks');
-          
-          // CRITICAL: localStorage is ALWAYS the source of truth
-          // The server is just a backup - we NEVER overwrite localStorage with server data
-          // unless localStorage is completely empty
-          if (local.length > 0) {
-            // localStorage has data - this is our truth, sync it to server
-            console.log('[WeekPlan] Keeping localStorage data (source of truth)');
-            // Always sync to server to ensure it matches
-            apiFetch('/api/schedule', { method: 'PUT', body: { blocks: local } }).catch(() => {});
-          } else if (remote.length > 0) {
-            // localStorage is empty, restore from server
-            console.log('[WeekPlan] Restoring from server (localStorage was empty)');
-            setBlocks(remote as any);
-            saveSchedule(remote as any);
-          } else {
-            // Both empty - check settings backup
-            const fromSettings = (settingsCache as any)?.weekScheduleV1;
-            if (Array.isArray(fromSettings) && fromSettings.length > 0) {
-              console.log('[WeekPlan] Restoring from settings backup');
-              setBlocks(fromSettings as any);
-              saveSchedule(fromSettings as any);
-              apiFetch('/api/schedule', { method: 'PUT', body: { blocks: fromSettings } }).catch(() => {});
+          if (isScheduleDirty() && local.length >= 0 && hasUnsyncedEdits(local, remote)) {
+            // We have local edits the server never acknowledged (offline, or the
+            // tab closed before the save landed). Push them, then trust the
+            // server again.
+            try {
+              await apiFetch('/api/schedule', { method: 'PUT', body: { blocks: local } });
+              clearScheduleDirty();
+            } catch {
+              // Keep the flag so the next load retries.
             }
+          } else {
+            // Normal path: the server copy wins, so deletions and moves made
+            // anywhere stay deleted and moved.
+            clearScheduleDirty();
+            hydrate(remote);
           }
         }
         // Mark blocks as loaded AFTER all loading logic is complete
@@ -235,16 +256,21 @@ export default function WeekPlanPage() {
   useEffect(() => {
     if (!blocksLoaded) return;
     const id = setTimeout(() => {
-      console.log('[WeekPlan] Debounced API save:', blocks.length, 'blocks');
-      // Save to schedule API
       apiFetch('/api/schedule', { method: 'PUT', body: { blocks } })
-        .then(() => { const now = Date.now(); if (now - (lastSavedToastRef.current || 0) > 5000) { try { notifyToast({ kind: 'success', message: 'Schedule saved.' }); } catch {} lastSavedToastRef.current = now; } })
-        .catch(e => console.error('[WeekPlan] API save failed:', e));
-      
-      // Also save to settings as backup (survives database resets)
-      if (blocks.length > 0) {
-        apiFetch('/api/settings', { method: 'POST', body: { key: 'weekScheduleV1', value: blocks } }).catch(() => {});
-      }
+        .then(() => {
+          // The server now matches what is on screen, so a later load can
+          // safely take the server copy.
+          clearScheduleDirty();
+          const now = Date.now();
+          if (now - (lastSavedToastRef.current || 0) > 5000) {
+            try { notifyToast({ kind: 'success', message: 'Schedule saved.' }); } catch {}
+            lastSavedToastRef.current = now;
+          }
+        })
+        .catch(() => {
+          // Leave the dirty flag set: the next load re-pushes these blocks.
+          try { notifyToast({ kind: 'error', message: 'Schedule could not be saved. It will retry.' }); } catch {}
+        });
     }, 300);
     return () => clearTimeout(id);
   }, [blocks, blocksLoaded]);
@@ -258,32 +284,23 @@ export default function WeekPlanPage() {
   // Immediate save function for page unload/navigation
   const saveBlocksNow = useCallback(() => {
     const currentBlocks = blocksRef.current;
-    console.log('[WeekPlan] saveBlocksNow called with', currentBlocks.length, 'blocks');
-    
+
     // Always save to localStorage first (most reliable)
-    try { 
-      window.localStorage.setItem(LS_SCHEDULE, JSON.stringify(currentBlocks)); 
-      console.log('[WeekPlan] Saved to localStorage on unload');
-    } catch (e) { 
-      console.error('[WeekPlan] localStorage save failed:', e); 
-    }
-    
-    // Then try to save to API
-    if (currentBlocks.length > 0) {
-      const data = JSON.stringify({ blocks: currentBlocks });
-      // Try sendBeacon first (works on page unload)
-      if (navigator.sendBeacon) {
-        const sent = navigator.sendBeacon('/api/schedule', new Blob([data], { type: 'application/json' }));
-        console.log('[WeekPlan] sendBeacon result:', sent);
-      } else {
-        // Fallback to fetch with keepalive
-        fetch('/api/schedule', { 
-          method: 'POST', // Use POST for keepalive compatibility
-          headers: { 'Content-Type': 'application/json' }, 
-          body: data,
-          keepalive: true 
-        }).catch(e => console.error('[WeekPlan] Unload fetch failed:', e));
-      }
+    try { window.localStorage.setItem(LS_SCHEDULE, JSON.stringify(currentBlocks)); } catch {}
+
+    // Then flush to the API. This runs even for an empty week: skipping the
+    // empty case meant "clear this week" never reached the server, so the
+    // cleared blocks came straight back on the next load.
+    const data = JSON.stringify({ blocks: currentBlocks });
+    if (navigator.sendBeacon) {
+      navigator.sendBeacon('/api/schedule', new Blob([data], { type: 'application/json' }));
+    } else {
+      fetch('/api/schedule', {
+        method: 'POST', // Use POST for keepalive compatibility
+        headers: { 'Content-Type': 'application/json' },
+        body: data,
+        keepalive: true,
+      }).catch(() => {});
     }
   }, []);
   
@@ -309,7 +326,11 @@ export default function WeekPlanPage() {
     };
   }, [saveBlocksNow]);
   
-  useEffect(() => { try { if (typeof window !== 'undefined') window.localStorage.setItem(LS_WEEK_START, ymd(weekStart)); } catch {} try { void apiFetch('/api/settings', { method: 'PATCH', body: { weekPlanWeekStartYmd: ymd(weekStart) } }); } catch {} }, [weekStart]);
+  useEffect(() => {
+    const stored = localYmd(weekStart);
+    try { if (typeof window !== 'undefined') window.localStorage.setItem(LS_WEEK_START, stored); } catch {}
+    try { void apiFetch('/api/settings', { method: 'PATCH', body: { weekPlanWeekStartYmd: stored } }); } catch {}
+  }, [weekStart]);
   useEffect(() => { try { void apiFetch('/api/settings', { method: 'PATCH', body: { availabilityTemplateV1: availability } }); } catch {} }, [availability]);
   useEffect(() => { try { void apiFetch('/api/settings', { method: 'PATCH', body: { weeklyGoalsV1: goals } }); } catch {} }, [goals]);
   // Persist windows and breaks
@@ -795,6 +816,19 @@ function shiftWeek(delta: number) {
   }
 
   const noTasksToPlan = unscheduledSorted.length === 0;
+
+  // The planner is entirely driven by browser state (the stored week, the
+  // availability template, the cached schedule). Rendering it on the server
+  // would produce markup the client immediately disagrees with.
+  if (!mounted) {
+    return (
+      <main className="flex flex-col space-y-6">
+        <section className="card p-6">
+          <div className="text-sm opacity-60">Loading your week…</div>
+        </section>
+      </main>
+    );
+  }
 
   return (
     <main className="flex flex-col space-y-6">

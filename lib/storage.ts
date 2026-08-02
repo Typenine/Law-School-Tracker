@@ -21,6 +21,35 @@ function resolveDbUrl(): string | null {
   }
   return null;
 }
+// ---------------------------------------------------------------------------
+// Write serialization
+//
+// The JSON/Blob store is a single document: every mutation is a read-modify-
+// write of the whole file. Without serialization two overlapping requests both
+// read the same snapshot and the second one writes back a document that still
+// contains whatever the first one removed - which is how deleted tasks,
+// sessions and courses used to reappear. Every JSON-mode mutation now runs
+// inside `mutateJson`, which re-reads the document inside the lock so it always
+// builds on the most recent state.
+// ---------------------------------------------------------------------------
+let storeLock: Promise<unknown> = Promise.resolve();
+
+function withStoreLock<T>(fn: () => Promise<T>): Promise<T> {
+  const run = storeLock.then(fn, fn);
+  // Keep the chain alive even when a caller rejects.
+  storeLock = run.catch(() => undefined);
+  return run;
+}
+
+async function mutateJson<T>(fn: (db: JsonStore) => T | Promise<T>): Promise<T> {
+  return withStoreLock(async () => {
+    const db = await readJson();
+    const result = await fn(db);
+    await writeJson(db);
+    return result;
+  });
+}
+
 export async function updateSession(id: string, patch: Partial<Pick<StudySession, 'when'|'minutes'|'focus'|'notes'|'pagesRead'|'outlinePages'|'practiceQs'|'activity'>>): Promise<StudySession | null> {
   if (DB_URL) {
     const p = getPool();
@@ -47,14 +76,13 @@ export async function updateSession(id: string, patch: Partial<Pick<StudySession
     const r = res.rows[0];
     return { id: r.id, taskId: r.task_id, when: new Date(r.when_ts).toISOString(), minutes: r.minutes, focus: r.focus, notes: r.notes, pagesRead: r.pages_read, outlinePages: r.outline_pages, practiceQs: r.practice_qs, activity: r.activity, createdAt: new Date(r.created_at).toISOString() };
   }
-  const db = await readJson();
-  const i = db.sessions.findIndex(s => s.id === id);
-  if (i === -1) return null;
-  const cur = db.sessions[i];
-  const updated: StudySession = { ...cur, ...patch } as any;
-  db.sessions[i] = updated;
-  await writeJson(db);
-  return updated;
+  return mutateJson(db => {
+    const i = db.sessions.findIndex(s => s.id === id);
+    if (i === -1) return null;
+    const updated: StudySession = { ...db.sessions[i], ...patch } as any;
+    db.sessions[i] = updated;
+    return updated;
+  });
 }
 
 export async function deleteSession(id: string): Promise<boolean> {
@@ -63,11 +91,11 @@ export async function deleteSession(id: string): Promise<boolean> {
     const res = await p.query(`DELETE FROM sessions WHERE id=$1`, [id]);
     return res.rowCount > 0;
   }
-  const db = await readJson();
-  const before = db.sessions.length;
-  db.sessions = db.sessions.filter(s => s.id !== id);
-  await writeJson(db);
-  return db.sessions.length < before;
+  return mutateJson(db => {
+    const before = db.sessions.length;
+    db.sessions = db.sessions.filter(s => s.id !== id);
+    return db.sessions.length < before;
+  });
 }
  
 const DB_URL = resolveDbUrl();
@@ -86,6 +114,8 @@ export function storageMode(): 'db' | 'blob' | 'file' {
 }
 
 let pool: Pool | null = null;
+/** ensureSchema runs on nearly every request; only do the work once per process. */
+let schemaReady: Promise<void> | null = null;
 function getPool(): Pool {
   if (!DB_URL) throw new Error('No DATABASE_URL');
   if (!pool) {
@@ -199,10 +229,8 @@ export async function createCourse(input: NewCourseInput): Promise<Course> {
       throw e;
     }
   }
-  const db = await readJson();
   const c: Course = { id: uuid(), code: input.code ?? null, title: input.title, instructor: input.instructor ?? null, instructorEmail: input.instructorEmail ?? null, room: input.room ?? null, location: input.location ?? null, color: (input as any).color ?? null, meetingDays: input.meetingDays ?? null, meetingStart: input.meetingStart ?? null, meetingEnd: input.meetingEnd ?? null, meetingBlocks: input.meetingBlocks ?? null, startDate: input.startDate ?? null, endDate: input.endDate ?? null, semester: input.semester ?? null, year: input.year ?? null, createdAt: now };
-  db.courses.push(c);
-  await writeJson(db);
+  await mutateJson(db => { db.courses.push(c); });
   return c;
 }
 
@@ -250,13 +278,13 @@ export async function updateCourse(id: string, patch: UpdateCourseInput): Promis
       throw e;
     }
   }
-  const db = await readJson();
-  const i = db.courses.findIndex(c => c.id === id);
-  if (i === -1) return null;
-  const updated: Course = { ...db.courses[i], ...patch } as Course;
-  db.courses[i] = updated;
-  await writeJson(db);
-  return updated;
+  return mutateJson(db => {
+    const i = db.courses.findIndex(c => c.id === id);
+    if (i === -1) return null;
+    const updated: Course = { ...db.courses[i], ...patch } as Course;
+    db.courses[i] = updated;
+    return updated;
+  });
 }
 
 export async function deleteCourse(id: string): Promise<boolean> {
@@ -270,11 +298,11 @@ export async function deleteCourse(id: string): Promise<boolean> {
       throw e;
     }
   }
-  const db = await readJson();
-  const before = db.courses.length;
-  db.courses = db.courses.filter(c => c.id !== id);
-  await writeJson(db);
-  return db.courses.length < before;
+  return mutateJson(db => {
+    const before = db.courses.length;
+    db.courses = db.courses.filter(c => c.id !== id);
+    return db.courses.length < before;
+  });
 }
 
 // One-time helper to migrate JSON/Blob courses into DB if DB is empty
@@ -367,7 +395,7 @@ async function recomputeLearnedMppForCourse(courseTitle: string): Promise<void> 
     return;
   }
   // JSON/Blob mode
-  const db = await readJson();
+  await mutateJson(db => {
   const tasks = db.tasks.filter(t => (t.course || '') === courseTitle);
   const taskIds = new Set(tasks.map(t => t.id));
   let mpps = db.sessions
@@ -389,105 +417,160 @@ async function recomputeLearnedMppForCourse(courseTitle: string): Promise<void> 
     (db.courses[i] as any).learnedMpp = learned;
     (db.courses[i] as any).learnedSample = sample || null;
     (db.courses[i] as any).learnedUpdatedAt = new Date().toISOString();
-    await writeJson(db);
   }
+  });
 }
 
 export async function ensureSchema() {
   if (!DB_URL) return; // JSON mode doesn't need schema
-  try {
-    const p = getPool();
-    await p.query(`
-      CREATE TABLE IF NOT EXISTS tasks (
-        id uuid PRIMARY KEY,
-        title text NOT NULL,
-        course text,
-        due_date timestamptz NOT NULL,
-        status text NOT NULL DEFAULT 'todo',
-        created_at timestamptz NOT NULL DEFAULT now()
+  if (schemaReady) return schemaReady;
+  // Clear the cache on failure so a transient outage doesn't leave the process
+  // permanently convinced the schema can never be applied.
+  schemaReady = applySchema().catch(e => { schemaReady = null; throw e; });
+  return schemaReady;
+}
+
+/**
+ * Statements are applied one at a time on purpose.
+ *
+ * Postgres runs a multi-statement query as a single implicit transaction, so
+ * when this was one big string a single failing statement rolled back every
+ * other change - and the error was swallowed. The result was a database that
+ * silently never migrated, and then every query failed with "column does not
+ * exist", which is what filled pages with red error toasts. Applied
+ * individually, one problem statement no longer blocks the rest, and it is
+ * logged with the statement that caused it.
+ */
+async function applySchema(): Promise<void> {
+  const p = getPool();
+  const statements: string[] = [
+    `CREATE TABLE IF NOT EXISTS tasks (
+       id uuid PRIMARY KEY,
+       title text NOT NULL,
+       course text,
+       due_date timestamptz NOT NULL,
+       status text NOT NULL DEFAULT 'todo',
+       created_at timestamptz NOT NULL DEFAULT now()
+     )`,
+    `ALTER TABLE tasks ADD COLUMN IF NOT EXISTS estimated_minutes integer`,
+    `ALTER TABLE tasks ADD COLUMN IF NOT EXISTS estimate_origin text`,
+    `ALTER TABLE tasks ADD COLUMN IF NOT EXISTS actual_minutes integer`,
+    `ALTER TABLE tasks ADD COLUMN IF NOT EXISTS priority integer`,
+    `ALTER TABLE tasks ADD COLUMN IF NOT EXISTS notes text`,
+    `ALTER TABLE tasks ADD COLUMN IF NOT EXISTS attachments jsonb`,
+    `ALTER TABLE tasks ADD COLUMN IF NOT EXISTS depends_on uuid[]`,
+    `ALTER TABLE tasks ADD COLUMN IF NOT EXISTS tags jsonb`,
+    `ALTER TABLE tasks ADD COLUMN IF NOT EXISTS term text`,
+    `ALTER TABLE tasks ADD COLUMN IF NOT EXISTS completed_at timestamptz`,
+    `ALTER TABLE tasks ADD COLUMN IF NOT EXISTS focus integer`,
+    `ALTER TABLE tasks ADD COLUMN IF NOT EXISTS pages_read integer`,
+    `ALTER TABLE tasks ADD COLUMN IF NOT EXISTS activity text`,
+    `ALTER TABLE tasks ADD COLUMN IF NOT EXISTS start_time text`,
+    `ALTER TABLE tasks ADD COLUMN IF NOT EXISTS end_time text`,
+    // Partial-completion page tracking. The Task type and the Today card have
+    // always read these, but there was nowhere to store them.
+    `ALTER TABLE tasks ADD COLUMN IF NOT EXISTS original_page_ranges text`,
+    `ALTER TABLE tasks ADD COLUMN IF NOT EXISTS remaining_page_ranges text`,
+    `CREATE TABLE IF NOT EXISTS courses (
+       id uuid PRIMARY KEY,
+       code text,
+       title text NOT NULL,
+       instructor text,
+       instructor_email text,
+       room text,
+       location text,
+       color text,
+       meeting_days integer[],
+       meeting_start text,
+       meeting_end text,
+       meeting_blocks jsonb,
+       start_date date,
+       end_date date,
+       semester text,
+       year integer,
+       created_at timestamptz NOT NULL DEFAULT now()
+     )`,
+    `ALTER TABLE courses ADD COLUMN IF NOT EXISTS meeting_blocks jsonb`,
+    `ALTER TABLE courses ADD COLUMN IF NOT EXISTS color text`,
+    `ALTER TABLE courses ADD COLUMN IF NOT EXISTS learned_mpp double precision`,
+    `ALTER TABLE courses ADD COLUMN IF NOT EXISTS learned_sample integer`,
+    `ALTER TABLE courses ADD COLUMN IF NOT EXISTS learned_updated_at timestamptz`,
+    `ALTER TABLE courses ADD COLUMN IF NOT EXISTS override_enabled boolean`,
+    `ALTER TABLE courses ADD COLUMN IF NOT EXISTS override_mpp double precision`,
+    `ALTER TABLE courses ADD COLUMN IF NOT EXISTS default_activity text`,
+    // Settings key/value store (single-user)
+    `CREATE TABLE IF NOT EXISTS settings (
+       key text PRIMARY KEY,
+       value jsonb NOT NULL
+     )`,
+    // Week Plan schedule blocks.
+    // ids are text, not uuid: the week planner mints its own block ids and a
+    // block can also point at a backlog item that is not a task row. When
+    // these columns were uuid with a foreign key, every save of a hand-placed
+    // block failed on "invalid input syntax for type uuid" and the whole
+    // schedule silently never reached the server.
+    `CREATE TABLE IF NOT EXISTS schedule_blocks (
+       id text PRIMARY KEY,
+       task_id text,
+       day date NOT NULL,
+       planned_minutes integer NOT NULL,
+       guessed boolean,
+       title text NOT NULL,
+       course text,
+       pages integer,
+       priority integer,
+       catchup boolean,
+       created_at timestamptz NOT NULL DEFAULT now()
+     )`,
+    // Migrate installations created with the original uuid columns.
+    `ALTER TABLE schedule_blocks DROP CONSTRAINT IF EXISTS schedule_blocks_task_id_fkey`,
+    `DO $$ BEGIN
+       ALTER TABLE schedule_blocks ALTER COLUMN id TYPE text USING id::text;
+     EXCEPTION WHEN others THEN NULL; END $$`,
+    `DO $$ BEGIN
+       ALTER TABLE schedule_blocks ALTER COLUMN task_id TYPE text USING task_id::text;
+     EXCEPTION WHEN others THEN NULL; END $$`,
+    `CREATE TABLE IF NOT EXISTS sessions (
+       id uuid PRIMARY KEY,
+       task_id uuid REFERENCES tasks(id) ON DELETE SET NULL,
+       when_ts timestamptz NOT NULL DEFAULT now(),
+       minutes integer NOT NULL,
+       focus double precision,
+       notes text,
+       pages_read integer,
+       outline_pages integer,
+       practice_qs integer,
+       activity text,
+       created_at timestamptz NOT NULL DEFAULT now()
+     )`,
+    // Ensure focus supports decimals
+    `DO $$ BEGIN
+       ALTER TABLE sessions ALTER COLUMN focus TYPE double precision USING focus::double precision;
+     EXCEPTION WHEN others THEN NULL; END $$`,
+  ];
+
+  for (const statement of statements) {
+    try {
+      await p.query(statement);
+    } catch (e) {
+      // `CREATE ... IF NOT EXISTS` is not atomic against a concurrent creator:
+      // two instances warming up together both see the object missing, and the
+      // loser fails with a duplicate key on the pg_class catalog. Harmless.
+      if (isBenignSchemaRace(e)) continue;
+      console.warn(
+        'ensureSchema: statement failed, continuing:',
+        statement.replace(/\s+/g, ' ').slice(0, 120),
+        (e as any)?.message || e,
       );
-      ALTER TABLE tasks ADD COLUMN IF NOT EXISTS estimated_minutes integer;
-      ALTER TABLE tasks ADD COLUMN IF NOT EXISTS estimate_origin text;
-      ALTER TABLE tasks ADD COLUMN IF NOT EXISTS actual_minutes integer;
-      ALTER TABLE tasks ADD COLUMN IF NOT EXISTS priority integer;
-      ALTER TABLE tasks ADD COLUMN IF NOT EXISTS notes text;
-      ALTER TABLE tasks ADD COLUMN IF NOT EXISTS attachments jsonb;
-      ALTER TABLE tasks ADD COLUMN IF NOT EXISTS depends_on uuid[];
-      ALTER TABLE tasks ADD COLUMN IF NOT EXISTS tags jsonb;
-      ALTER TABLE tasks ADD COLUMN IF NOT EXISTS term text;
-      ALTER TABLE tasks ADD COLUMN IF NOT EXISTS completed_at timestamptz;
-      ALTER TABLE tasks ADD COLUMN IF NOT EXISTS focus integer;
-      ALTER TABLE tasks ADD COLUMN IF NOT EXISTS pages_read integer;
-      ALTER TABLE tasks ADD COLUMN IF NOT EXISTS activity text;
-      ALTER TABLE tasks ADD COLUMN IF NOT EXISTS start_time text;
-      ALTER TABLE tasks ADD COLUMN IF NOT EXISTS end_time text;
-      CREATE TABLE IF NOT EXISTS courses (
-        id uuid PRIMARY KEY,
-        code text,
-        title text NOT NULL,
-        instructor text,
-        instructor_email text,
-        room text,
-        location text,
-        color text,
-        meeting_days integer[],
-        meeting_start text,
-        meeting_end text,
-        meeting_blocks jsonb,
-        start_date date,
-        end_date date,
-        semester text,
-        year integer,
-        created_at timestamptz NOT NULL DEFAULT now()
-      );
-      ALTER TABLE courses ADD COLUMN IF NOT EXISTS meeting_blocks jsonb;
-      ALTER TABLE courses ADD COLUMN IF NOT EXISTS color text;
-      ALTER TABLE courses ADD COLUMN IF NOT EXISTS learned_mpp double precision;
-      ALTER TABLE courses ADD COLUMN IF NOT EXISTS learned_sample integer;
-      ALTER TABLE courses ADD COLUMN IF NOT EXISTS learned_updated_at timestamptz;
-      ALTER TABLE courses ADD COLUMN IF NOT EXISTS override_enabled boolean;
-      ALTER TABLE courses ADD COLUMN IF NOT EXISTS override_mpp double precision;
-      ALTER TABLE courses ADD COLUMN IF NOT EXISTS default_activity text;
-      -- Settings key/value store (single-user)
-      CREATE TABLE IF NOT EXISTS settings (
-        key text PRIMARY KEY,
-        value jsonb NOT NULL
-      );
-      -- Week Plan schedule blocks
-      CREATE TABLE IF NOT EXISTS schedule_blocks (
-        id uuid PRIMARY KEY,
-        task_id uuid REFERENCES tasks(id) ON DELETE SET NULL,
-        day date NOT NULL,
-        planned_minutes integer NOT NULL,
-        guessed boolean,
-        title text NOT NULL,
-        course text,
-        pages integer,
-        priority integer,
-        catchup boolean,
-        created_at timestamptz NOT NULL DEFAULT now()
-      );
-      CREATE TABLE IF NOT EXISTS sessions (
-        id uuid PRIMARY KEY,
-        task_id uuid REFERENCES tasks(id) ON DELETE SET NULL,
-        when_ts timestamptz NOT NULL DEFAULT now(),
-        minutes integer NOT NULL,
-        focus double precision,
-        notes text,
-        pages_read integer,
-        outline_pages integer,
-        practice_qs integer,
-        activity text,
-        created_at timestamptz NOT NULL DEFAULT now()
-      );
-      -- Ensure focus supports decimals
-      DO $$ BEGIN
-        ALTER TABLE sessions ALTER COLUMN focus TYPE double precision USING focus::double precision;
-      EXCEPTION WHEN others THEN NULL; END $$;
-    `);
-  } catch (e) {
-    console.warn('ensureSchema: Postgres unavailable, continuing with JSON store:', (e as any)?.message || e);
+    }
   }
+}
+
+function isBenignSchemaRace(error: any): boolean {
+  const code = String(error?.code || '');
+  if (['42P07', '42710', '23505', '42P16'].includes(code)) return true;
+  const message = String(error?.message || '');
+  return /already exists|pg_class_relname_nsp_index|pg_type_typname_nsp_index/i.test(message);
 }
 
 function uuid() {
@@ -660,9 +743,47 @@ export async function patchSettings(patch: Record<string, any>): Promise<void> {
     }
     return;
   }
-  const db = await readJson();
-  db.settings = { ...(db.settings || {}), ...patch };
-  await writeJson(db);
+  await mutateJson(db => { db.settings = { ...(db.settings || {}), ...patch }; });
+}
+
+/**
+ * Read-modify-write a single settings key without losing concurrent updates.
+ * In Postgres the row is locked for the duration of the transaction; in JSON
+ * mode the whole document is locked. Callers get the stored value, return the
+ * next value, and the result they want handed back.
+ */
+export async function mutateSetting<T>(
+  key: string,
+  mutator: (current: any) => { value: any; result: T },
+): Promise<T> {
+  if (DB_URL) {
+    const p = getPool();
+    const client = await p.connect();
+    try {
+      await client.query('BEGIN');
+      await client.query(
+        `INSERT INTO settings(key, value) VALUES ($1, 'null'::jsonb) ON CONFLICT (key) DO NOTHING`,
+        [key],
+      );
+      const res = await client.query(`SELECT value FROM settings WHERE key = $1 FOR UPDATE`, [key]);
+      const current = res.rows?.[0]?.value ?? null;
+      const { value, result } = mutator(current);
+      await client.query(`UPDATE settings SET value = $2::jsonb WHERE key = $1`, [key, JSON.stringify(value ?? null)]);
+      await client.query('COMMIT');
+      return result;
+    } catch (e) {
+      await client.query('ROLLBACK').catch(() => undefined);
+      throw e;
+    } finally {
+      client.release();
+    }
+  }
+  return mutateJson(db => {
+    const settings = db.settings || (db.settings = {});
+    const { value, result } = mutator(settings[key] ?? null);
+    settings[key] = value;
+    return result;
+  });
 }
 
 // Week Plan schedule blocks helpers
@@ -678,62 +799,97 @@ export async function listScheduleBlocks(): Promise<ScheduleBlockRow[]> {
   return (db.scheduleBlocks || []) as ScheduleBlockRow[];
 }
 
-export async function replaceAllScheduleBlocks(blocks: ScheduleBlockRow[]): Promise<void> {
+/** Drop rows the store cannot represent so one bad block can't fail the save. */
+function sanitizeScheduleBlocks(blocks: ScheduleBlockRow[]): ScheduleBlockRow[] {
+  const seen = new Set<string>();
+  const out: ScheduleBlockRow[] = [];
+  for (const b of (blocks || [])) {
+    if (!b || typeof b.id !== 'string' || !b.id) continue;
+    if (typeof b.day !== 'string' || !/^\d{4}-\d{2}-\d{2}$/.test(b.day)) continue;
+    if (seen.has(b.id)) continue;
+    seen.add(b.id);
+    out.push({
+      ...b,
+      taskId: typeof b.taskId === 'string' && b.taskId ? b.taskId : '',
+      title: String(b.title ?? '').slice(0, 500) || 'Untitled block',
+      course: String(b.course ?? ''),
+      plannedMinutes: Math.max(0, Math.round(Number(b.plannedMinutes) || 0)),
+    });
+  }
+  return out;
+}
+
+export async function replaceAllScheduleBlocks(input: ScheduleBlockRow[]): Promise<void> {
+  const blocks = sanitizeScheduleBlocks(input);
   if (DB_URL) {
-    const p = getPool();
-    await p.query('BEGIN');
+    // A pool-level BEGIN/COMMIT can land on different connections, which left
+    // the delete uncommitted and readers seeing a half-written week. Pin the
+    // whole replacement to one client.
+    const client = await getPool().connect();
     try {
-      await p.query('DELETE FROM schedule_blocks');
+      await client.query('BEGIN');
+      await client.query('DELETE FROM schedule_blocks');
       for (const b of (blocks || [])) {
-        await p.query(
+        await client.query(
           `INSERT INTO schedule_blocks (id, task_id, day, planned_minutes, guessed, title, course, pages, priority, catchup, created_at)
            VALUES ($1,$2,$3::date,$4,$5,$6,$7,$8,$9,$10, now())
            ON CONFLICT (id) DO UPDATE SET task_id=EXCLUDED.task_id, day=EXCLUDED.day, planned_minutes=EXCLUDED.planned_minutes, guessed=EXCLUDED.guessed, title=EXCLUDED.title, course=EXCLUDED.course, pages=EXCLUDED.pages, priority=EXCLUDED.priority, catchup=EXCLUDED.catchup`,
           [b.id, b.taskId || null, b.day, b.plannedMinutes, b.guessed ?? null, b.title, b.course || null, b.pages ?? null, b.priority ?? null, b.catchup ?? null]
         );
       }
-      await p.query('COMMIT');
+      await client.query('COMMIT');
     } catch (e) {
-      await p.query('ROLLBACK');
+      await client.query('ROLLBACK').catch(() => undefined);
       throw e;
+    } finally {
+      client.release();
     }
     return;
   }
-  const db = await readJson();
-  db.scheduleBlocks = (blocks || []).slice();
-  await writeJson(db);
+  await mutateJson(db => { db.scheduleBlocks = (blocks || []).slice(); });
 }
 
 // Tasks
+
+/**
+ * One place that turns a tasks row into a Task. The mapping used to be
+ * copy-pasted at every call site, which is how actual_minutes, completed_at
+ * and focus ended up missing from several of them.
+ */
+function rowToTask(r: any): Task {
+  return {
+    id: r.id,
+    title: r.title,
+    course: r.course,
+    dueDate: new Date(r.due_date).toISOString(),
+    status: r.status,
+    createdAt: new Date(r.created_at).toISOString(),
+    startTime: r.start_time ?? null,
+    endTime: r.end_time ?? null,
+    estimatedMinutes: r.estimated_minutes ?? null,
+    estimateOrigin: (r.estimate_origin as any) ?? null,
+    actualMinutes: r.actual_minutes ?? null,
+    priority: r.priority ?? null,
+    notes: r.notes ?? null,
+    attachments: (r.attachments as any) ?? null,
+    dependsOn: (r.depends_on as any) ?? null,
+    tags: (r.tags as any) ?? null,
+    term: r.term ?? null,
+    completedAt: r.completed_at ? new Date(r.completed_at).toISOString() : null,
+    focus: r.focus ?? null,
+    pagesRead: r.pages_read ?? null,
+    activity: r.activity ?? null,
+    originalPageRanges: r.original_page_ranges ?? null,
+    remainingPageRanges: r.remaining_page_ranges ?? null,
+  };
+}
+
 export async function listTasks(): Promise<Task[]> {
   if (DB_URL) {
     const p = getPool();
     type TaskRow = { id: string; title: string; course: string | null; due_date: Date | string; status: 'todo' | 'done'; created_at: Date | string; estimated_minutes: number | null; estimate_origin: string | null; actual_minutes: number | null; priority: number | null; notes: string | null; attachments: string[] | null; depends_on: string[] | null; tags: string[] | null; term: string | null; completed_at: Date | string | null; focus: number | null; pages_read: number | null; activity: string | null; start_time: string | null; end_time: string | null };
-    const res = await p.query(`SELECT id, title, course, due_date, status, created_at, estimated_minutes, estimate_origin, actual_minutes, priority, notes, attachments, depends_on, tags, term, completed_at, focus, pages_read, activity, start_time, end_time FROM tasks ORDER BY due_date ASC, COALESCE(start_time,'99:99') ASC`);
-    const rows = res.rows as unknown as TaskRow[];
-    return rows.map(r => ({
-      id: r.id,
-      title: r.title,
-      course: r.course,
-      dueDate: new Date(r.due_date).toISOString(),
-      status: r.status,
-      createdAt: new Date(r.created_at).toISOString(),
-      startTime: r.start_time ?? null,
-      endTime: r.end_time ?? null,
-      estimatedMinutes: r.estimated_minutes ?? null,
-      estimateOrigin: (r.estimate_origin as any) ?? null,
-      actualMinutes: r.actual_minutes ?? null,
-      priority: r.priority ?? null,
-      notes: r.notes ?? null,
-      attachments: (r.attachments as any) ?? null,
-      dependsOn: (r.depends_on as any) ?? null,
-      tags: (r.tags as any) ?? null,
-      term: r.term ?? null,
-      completedAt: r.completed_at ? new Date(r.completed_at).toISOString() : null,
-      focus: r.focus ?? null,
-      pagesRead: r.pages_read ?? null,
-      activity: r.activity ?? null,
-    }));
+    const res = await p.query(`SELECT id, title, course, due_date, status, created_at, estimated_minutes, estimate_origin, actual_minutes, priority, notes, attachments, depends_on, tags, term, completed_at, focus, pages_read, activity, start_time, end_time, original_page_ranges, remaining_page_ranges FROM tasks ORDER BY due_date ASC, COALESCE(start_time,'99:99') ASC`);
+    return (res.rows as any[]).map(rowToTask);
   }
   const db = await readJson();
   return db.tasks.sort((a, b) => a.dueDate.localeCompare(b.dueDate));
@@ -745,18 +901,15 @@ export async function createTask(input: NewTaskInput): Promise<Task> {
     const p = getPool();
     const id = uuid();
     const res = await p.query(
-      `INSERT INTO tasks (id, title, course, due_date, status, created_at, estimated_minutes, estimate_origin, priority, notes, attachments, depends_on, tags, term, start_time, end_time, pages_read, activity)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18)
-       RETURNING id, title, course, due_date, status, created_at, estimated_minutes, estimate_origin, priority, notes, attachments, depends_on, tags, term, start_time, end_time, pages_read, activity`,
-      [id, input.title, input.course ?? null, new Date(input.dueDate), input.status ?? 'todo', new Date(now), input.estimatedMinutes ?? null, (input as any).estimateOrigin ?? null, input.priority ?? null, input.notes ?? null, input.attachments ?? null, input.dependsOn ?? null, input.tags ?? null, input.term ?? null, (input as any).startTime ?? null, (input as any).endTime ?? null, (input as any).pagesRead ?? null, (input as any).activity ?? null]
+      `INSERT INTO tasks (id, title, course, due_date, status, created_at, estimated_minutes, estimate_origin, priority, notes, attachments, depends_on, tags, term, start_time, end_time, pages_read, activity, original_page_ranges, remaining_page_ranges)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20)
+       RETURNING id, title, course, due_date, status, created_at, estimated_minutes, estimate_origin, actual_minutes, completed_at, focus, priority, notes, attachments, depends_on, tags, term, start_time, end_time, pages_read, activity, original_page_ranges, remaining_page_ranges`,
+      [id, input.title, input.course ?? null, new Date(input.dueDate), input.status ?? 'todo', new Date(now), input.estimatedMinutes ?? null, (input as any).estimateOrigin ?? null, input.priority ?? null, input.notes ?? null, input.attachments ?? null, input.dependsOn ?? null, input.tags ?? null, input.term ?? null, (input as any).startTime ?? null, (input as any).endTime ?? null, (input as any).pagesRead ?? null, (input as any).activity ?? null, input.originalPageRanges ?? null, input.remainingPageRanges ?? null]
     );
-    const r = res.rows[0];
-    return { id: r.id, title: r.title, course: r.course, dueDate: new Date(r.due_date).toISOString(), status: r.status, createdAt: new Date(r.created_at).toISOString(), startTime: r.start_time ?? null, endTime: r.end_time ?? null, estimatedMinutes: r.estimated_minutes ?? null, estimateOrigin: (r.estimate_origin as any) ?? null, priority: r.priority ?? null, notes: r.notes ?? null, attachments: r.attachments ?? null, dependsOn: r.depends_on ?? null, tags: r.tags ?? null, term: r.term ?? null, pagesRead: r.pages_read ?? null, activity: r.activity ?? null };
+    return rowToTask(res.rows[0]);
   }
-  const db = await readJson();
-  const task: Task = { id: uuid(), title: input.title, course: input.course ?? null, dueDate: input.dueDate, status: input.status ?? 'todo', createdAt: now, startTime: (input as any).startTime ?? null, endTime: (input as any).endTime ?? null, estimatedMinutes: input.estimatedMinutes ?? null, estimateOrigin: (input as any).estimateOrigin ?? null, priority: input.priority ?? null, notes: input.notes ?? null, attachments: input.attachments ?? null, dependsOn: input.dependsOn ?? null, tags: input.tags ?? null, term: input.term ?? null, pagesRead: (input as any).pagesRead ?? null, activity: (input as any).activity ?? null };
-  db.tasks.push(task);
-  await writeJson(db);
+  const task: Task = { id: uuid(), title: input.title, course: input.course ?? null, dueDate: input.dueDate, status: input.status ?? 'todo', createdAt: now, startTime: (input as any).startTime ?? null, endTime: (input as any).endTime ?? null, estimatedMinutes: input.estimatedMinutes ?? null, estimateOrigin: (input as any).estimateOrigin ?? null, priority: input.priority ?? null, notes: input.notes ?? null, attachments: input.attachments ?? null, dependsOn: input.dependsOn ?? null, tags: input.tags ?? null, term: input.term ?? null, pagesRead: (input as any).pagesRead ?? null, activity: (input as any).activity ?? null, originalPageRanges: input.originalPageRanges ?? null, remainingPageRanges: input.remainingPageRanges ?? null };
+  await mutateJson(db => { db.tasks.push(task); });
   return task;
 }
 
@@ -779,43 +932,56 @@ export async function updateTask(id: string, patch: UpdateTaskInput): Promise<Ta
     if (patch.dependsOn !== undefined) { fields.push(`depends_on = $${idx++}`); values.push(patch.dependsOn); }
     if (patch.tags !== undefined) { fields.push(`tags = $${idx++}`); values.push(patch.tags); }
     if (patch.term !== undefined) { fields.push(`term = $${idx++}`); values.push(patch.term); }
+    // These were accepted by the API and silently discarded here, so finishing
+    // a task never recorded how long it actually took, how focused it was, or
+    // when it was completed - which also left the predictive timing card with
+    // nothing to learn from.
+    if (patch.actualMinutes !== undefined) { fields.push(`actual_minutes = $${idx++}`); values.push(patch.actualMinutes); }
+    if (patch.completedAt !== undefined) { fields.push(`completed_at = $${idx++}`); values.push(patch.completedAt ? new Date(patch.completedAt) : null); }
+    if (patch.focus !== undefined) { fields.push(`focus = $${idx++}`); values.push(patch.focus); }
+    if (patch.originalPageRanges !== undefined) { fields.push(`original_page_ranges = $${idx++}`); values.push(patch.originalPageRanges); }
+    if (patch.remainingPageRanges !== undefined) { fields.push(`remaining_page_ranges = $${idx++}`); values.push(patch.remainingPageRanges); }
     if ((patch as any).pagesRead !== undefined) { fields.push(`pages_read = $${idx++}`); values.push((patch as any).pagesRead); }
     if ((patch as any).activity !== undefined) { fields.push(`activity = $${idx++}`); values.push((patch as any).activity); }
     if ((patch as any).startTime !== undefined) { fields.push(`start_time = $${idx++}`); values.push((patch as any).startTime); }
     if ((patch as any).endTime !== undefined) { fields.push(`end_time = $${idx++}`); values.push((patch as any).endTime); }
     if (!fields.length) {
-      const cur = await p.query(`SELECT id, title, course, due_date, status, created_at, estimated_minutes, estimate_origin, priority, notes, attachments, depends_on, tags, term, start_time, end_time, pages_read, activity FROM tasks WHERE id=$1`, [id]);
+      const cur = await p.query(`SELECT id, title, course, due_date, status, created_at, estimated_minutes, estimate_origin, actual_minutes, completed_at, focus, priority, notes, attachments, depends_on, tags, term, start_time, end_time, pages_read, activity, original_page_ranges, remaining_page_ranges FROM tasks WHERE id=$1`, [id]);
       if (!cur.rowCount) return null;
       const r = cur.rows[0];
-      return { id: r.id, title: r.title, course: r.course, dueDate: new Date(r.due_date).toISOString(), status: r.status, createdAt: new Date(r.created_at).toISOString(), startTime: r.start_time ?? null, endTime: r.end_time ?? null, estimatedMinutes: r.estimated_minutes ?? null, estimateOrigin: (r.estimate_origin as any) ?? null, priority: r.priority ?? null, notes: r.notes ?? null, attachments: r.attachments ?? null, dependsOn: r.depends_on ?? null, tags: r.tags ?? null, term: r.term ?? null, pagesRead: r.pages_read ?? null, activity: r.activity ?? null };
+      return rowToTask(r);
     }
-    const q = `UPDATE tasks SET ${fields.join(', ')} WHERE id = $${idx} RETURNING id, title, course, due_date, status, created_at, estimated_minutes, estimate_origin, priority, notes, attachments, depends_on, tags, term, start_time, end_time, pages_read, activity`;
+    const q = `UPDATE tasks SET ${fields.join(', ')} WHERE id = $${idx} RETURNING id, title, course, due_date, status, created_at, estimated_minutes, estimate_origin, actual_minutes, completed_at, focus, priority, notes, attachments, depends_on, tags, term, start_time, end_time, pages_read, activity, original_page_ranges, remaining_page_ranges`;
     values.push(id);
     const res = await p.query(q, values);
     if (!res.rowCount) return null;
     const r = res.rows[0];
-    return { id: r.id, title: r.title, course: r.course, dueDate: new Date(r.due_date).toISOString(), status: r.status, createdAt: new Date(r.created_at).toISOString(), startTime: r.start_time ?? null, endTime: r.end_time ?? null, estimatedMinutes: r.estimated_minutes ?? null, estimateOrigin: (r.estimate_origin as any) ?? null, priority: r.priority ?? null, notes: r.notes ?? null, attachments: r.attachments ?? null, dependsOn: r.depends_on ?? null, tags: r.tags ?? null, term: r.term ?? null, pagesRead: r.pages_read ?? null, activity: r.activity ?? null };
+    return rowToTask(r);
   }
-  const db = await readJson();
-  const i = db.tasks.findIndex(t => t.id === id);
-  if (i === -1) return null;
-  const updated: Task = { ...db.tasks[i], ...patch } as Task;
-  db.tasks[i] = updated;
-  await writeJson(db);
-  return updated;
+  return mutateJson(db => {
+    const i = db.tasks.findIndex(t => t.id === id);
+    if (i === -1) return null;
+    const updated: Task = { ...db.tasks[i], ...patch } as Task;
+    db.tasks[i] = updated;
+    return updated;
+  });
 }
 
 export async function deleteTask(id: string): Promise<boolean> {
   if (DB_URL) {
     const p = getPool();
+    await p.query(`DELETE FROM schedule_blocks WHERE task_id=$1`, [id]).catch(() => undefined);
     const res = await p.query(`DELETE FROM tasks WHERE id=$1`, [id]);
     return res.rowCount > 0;
   }
-  const db = await readJson();
-  const before = db.tasks.length;
-  db.tasks = db.tasks.filter(t => t.id !== id);
-  await writeJson(db);
-  return db.tasks.length < before;
+  return mutateJson(db => {
+    const before = db.tasks.length;
+    db.tasks = db.tasks.filter(t => t.id !== id);
+    // Drop schedule blocks that pointed at the task so a deleted task cannot
+    // be re-planned onto the week grid.
+    db.scheduleBlocks = (db.scheduleBlocks || []).filter(b => b.taskId !== id);
+    return db.tasks.length < before;
+  });
 }
 
 // Sessions
@@ -854,8 +1020,8 @@ export async function createSession(input: NewSessionInput): Promise<StudySessio
     } catch {}
     return created;
   }
-  const db = await readJson();
   const s: StudySession = { id: uuid(), taskId: input.taskId ?? null, when: whenISO, minutes: input.minutes, focus: input.focus ?? null, notes: input.notes ?? null, pagesRead: input.pagesRead ?? null, outlinePages: input.outlinePages ?? null, practiceQs: input.practiceQs ?? null, activity: input.activity ?? null, createdAt: now };
+  await mutateJson(db => {
   db.sessions.unshift(s);
   // Recompute learned MPP for the affected course (if any)
   try {
@@ -887,7 +1053,7 @@ export async function createSession(input: NewSessionInput): Promise<StudySessio
       }
     }
   } catch {}
-  await writeJson(db);
+  });
   return s;
 }
 
@@ -899,11 +1065,11 @@ export async function resetAllSessions(): Promise<number> {
     // rowCount may be undefined for some drivers; treat as 0
     return (res as any)?.rowCount ?? 0;
   }
-  const db = await readJson();
-  const n = db.sessions.length;
-  db.sessions = [];
-  await writeJson(db);
-  return n;
+  return mutateJson(db => {
+    const n = db.sessions.length;
+    db.sessions = [];
+    return n;
+  });
 }
 
 export async function statsNow() {

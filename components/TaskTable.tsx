@@ -108,6 +108,7 @@ export default function TaskTable() {
   const [tplStart, setTplStart] = useState<string>(''); // yyyy-mm-dd
   const [tplStepDays, setTplStepDays] = useState<string>('1');
   const [sessions, setSessions] = useState<any[]>([]);
+  const [noteCounts, setNoteCounts] = useState<Record<string, number>>({});
   const [qaInput, setQaInput] = useState('');
   const [qaError, setQaError] = useState('');
   const [backlogCount, setBacklogCount] = useState<number>(0);
@@ -161,9 +162,20 @@ export default function TaskTable() {
     } catch {}
   }
 
+  /** How many note pages each assignment has, for the Notes link on each row. */
+  async function refreshNoteCounts() {
+    try {
+      const j = await apiFetch<{ counts: Record<string, number> }>('/api/notes/by-task');
+      setNoteCounts(j?.counts && typeof j.counts === 'object' ? j.counts : {});
+    } catch {
+      // The table is perfectly usable without the counts.
+    }
+  }
+
   useEffect(() => {
     refresh();
     refreshSessions();
+    refreshNoteCounts();
   }, []);
 
   useEffect(() => {
@@ -370,15 +382,21 @@ export default function TaskTable() {
     const sessionWhen = data.completionDate 
       ? new Date(data.completionDate + 'T12:00:00').toISOString()
       : new Date().toISOString();
+    // Pages read were collected by the modal but never sent, so per-course
+    // reading pace never learned anything from sessions logged here.
+    let pagesRead: number | null = null;
+    if (data.pagesCompleted) {
+      try { pagesRead = countPages(parsePageRanges(data.pagesCompleted)) || null; } catch {}
+    }
     try {
       await apiFetch('/api/sessions', { method: 'POST', body: {
         taskId: t.id,
-        taskTitle: t.title,
-        course: t.course || null,
         minutes: data.minutes,
         focus: data.focus,
         notes: data.notes || null,
         when: sessionWhen,
+        pagesRead,
+        activity: t.activity || null,
       }});
       try { notifySessionsChanged(); } catch {}
       try { notifyToast({ kind: 'success', message: 'Session logged.' }); } catch {}
@@ -391,7 +409,14 @@ export default function TaskTable() {
       try { await apiFetch(`/api/tasks/${t.id}`, { method: 'PATCH', body: { estimatedMinutes: newEst } }); try { notifyToast({ kind: 'success', message: 'Task updated.' }); } catch {} } catch {}
     } else {
       // Finish: mark as done
-      try { await apiFetch(`/api/tasks/${t.id}`, { method: 'PATCH', body: { status: 'done', actualMinutes: data.minutes } }); try { notifyToast({ kind: 'success', message: 'Task completed.' }); } catch {} } catch {}
+      try {
+        await apiFetch(`/api/tasks/${t.id}`, { method: 'PATCH', body: {
+          status: 'done',
+          actualMinutes: data.minutes,
+          focus: Math.round(data.focus),
+        } });
+        try { notifyToast({ kind: 'success', message: 'Task completed.' }); } catch {}
+      } catch {}
       clearTimerFor(t.id);
     }
 
@@ -1177,6 +1202,13 @@ export default function TaskTable() {
                           <button onClick={() => startEdit(t)} className="px-2 py-1 rounded border border-[#1b2344] text-xs hover:bg-white/5">Edit</button>
                           <button onClick={() => toggleDone(t)} className={`px-2 py-1 rounded text-xs ${t.status === 'done' ? 'bg-amber-600 hover:bg-amber-500' : 'bg-emerald-600 hover:bg-emerald-500'}`}>{t.status === 'done' ? 'Undo' : 'Done'}</button>
                           <button onClick={() => remove(t.id)} className="px-2 py-1 rounded bg-rose-600/80 hover:bg-rose-500 text-xs">Del</button>
+                          <a
+                            href={`/notes?taskId=${encodeURIComponent(t.id)}`}
+                            className="px-2 py-1 rounded border border-[#1b2344] text-xs hover:bg-white/5"
+                            title={noteCounts[t.id] ? 'Open your notes on this assignment' : 'Start notes on this assignment'}
+                          >
+                            Notes{noteCounts[t.id] ? ` · ${noteCounts[t.id]}` : ''}
+                          </a>
                         </div>
                         <div className="flex items-center gap-1 text-xs text-slate-300/70">
                           <span>{fmtHM(Math.round(elapsedMs(t.id)/60000))}</span>
