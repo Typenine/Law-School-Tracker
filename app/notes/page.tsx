@@ -49,17 +49,51 @@ class ApiError extends Error {
   }
 }
 
+/**
+ * No request may hang forever.
+ *
+ * `fetch` has no timeout of its own, so a server that accepts a connection and
+ * never answers leaves the promise pending for good. Every caller here awaits
+ * that promise before refreshing the tree or reporting a problem, so a single
+ * unanswered request means the button appears to do nothing at all - no new
+ * page, no deletion, no error, nothing to retry.
+ */
+const REQUEST_TIMEOUT_MS = 15_000;
+
 async function api(path: string, init: RequestInit = {}) {
   const headers = new Headers(init.headers || {});
   if (init.body && !(init.body instanceof FormData) && !headers.has('Content-Type')) {
     headers.set('Content-Type', 'application/json');
   }
-  const response = await fetch(path, { ...init, headers, cache: 'no-store' });
-  const data = await response.json().catch(() => ({}));
-  if (!response.ok) {
-    throw new ApiError(data?.error || `Request failed (${response.status})`, response.status, data);
+
+  const controller = new AbortController();
+  const timer = window.setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS);
+  // Callers may bring their own signal; honour both.
+  const caller = init.signal;
+  if (caller) {
+    if (caller.aborted) controller.abort();
+    else caller.addEventListener('abort', () => controller.abort(), { once: true });
   }
-  return data;
+
+  try {
+    const response = await fetch(path, { ...init, headers, cache: 'no-store', signal: controller.signal });
+    const data = await response.json().catch(() => ({}));
+    if (!response.ok) {
+      throw new ApiError(data?.error || `Request failed (${response.status})`, response.status, data);
+    }
+    return data;
+  } catch (error) {
+    if (error instanceof DOMException && error.name === 'AbortError' && !caller?.aborted) {
+      throw new ApiError(
+        'The server did not answer. Nothing was lost — wait a moment and try again.',
+        504,
+        {},
+      );
+    }
+    throw error;
+  } finally {
+    window.clearTimeout(timer);
+  }
 }
 
 export default function NotesPage() {
