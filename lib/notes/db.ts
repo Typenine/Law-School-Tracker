@@ -202,43 +202,104 @@ async function applyNotesSchema(): Promise<void> {
           COALESCE(LOWER(NULLIF(TRIM(note.semester), '')), '')
   `);
 
-  // Promote the section names already stored on pages into real section rows
-  // so they can be ordered, recoloured and renamed like OneNote tabs.
-  //
-  // Only pages that have never been filed qualify. Pages keep a denormalised
-  // copy of their section name, so without the section_id guard this would run
-  // on every boot and resurrect a top-level tab for every section anyone had
-  // ever deleted. Pages in the trash are skipped for the same reason.
+  // Migrations that must happen once and never again are recorded here.
   await run(`
-    INSERT INTO ai_note_sections (id, notebook_id, name)
-    SELECT DISTINCT ON (note.notebook_id, LOWER(TRIM(note.section)))
-      'section-' || md5(note.notebook_id || '|' || LOWER(TRIM(note.section))),
-      note.notebook_id,
-      TRIM(note.section)
-    FROM ai_notes note
-    WHERE note.notebook_id IS NOT NULL
-      AND note.section_id IS NULL
-      AND note.deleted_at IS NULL
-      AND NULLIF(TRIM(note.section), '') IS NOT NULL
-    ON CONFLICT DO NOTHING
+    CREATE TABLE IF NOT EXISTS ai_note_migrations (
+      key TEXT PRIMARY KEY,
+      applied_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    )
   `);
-  // Attach existing pages to the section row matching their stored name.
+
+  /**
+   * Promote the section names stored on pages into real section rows, so they
+   * can be ordered, recoloured and renamed like OneNote tabs.
+   *
+   * This is a one-time conversion of data that predates sections having their
+   * own rows, and it has to stay one-time. Pages keep a denormalised copy of
+   * their section name, so re-running it turns any page whose section has since
+   * been deleted back into a brand-new top-level tab. That is what used to
+   * resurrect deleted sections on every boot.
+   *
+   * A database that already has sections has been through this, so it is
+   * marked as done without running anything.
+   */
+  const alreadyPromoted = await client
+    .query(`SELECT 1 FROM ai_note_migrations WHERE key = 'promote-section-names'`)
+    .then(result => (result.rowCount || 0) > 0)
+    .catch(() => true);
+
+  if (!alreadyPromoted) {
+    const hasSections = await client
+      .query(`SELECT 1 FROM ai_note_sections LIMIT 1`)
+      .then(result => (result.rowCount || 0) > 0)
+      .catch(() => true);
+
+    if (!hasSections) {
+      await run(`
+        INSERT INTO ai_note_sections (id, notebook_id, name)
+        SELECT DISTINCT ON (note.notebook_id, LOWER(TRIM(note.section)))
+          'section-' || md5(note.notebook_id || '|' || LOWER(TRIM(note.section))),
+          note.notebook_id,
+          TRIM(note.section)
+        FROM ai_notes note
+        WHERE note.notebook_id IS NOT NULL
+          AND note.section_id IS NULL
+          AND note.deleted_at IS NULL
+          AND NULLIF(TRIM(note.section), '') IS NOT NULL
+        ON CONFLICT DO NOTHING
+      `);
+      await run(`
+        UPDATE ai_notes note
+        SET section_id = section.id
+        FROM ai_note_sections section
+        WHERE note.section_id IS NULL
+          AND note.deleted_at IS NULL
+          AND section.notebook_id = note.notebook_id
+          AND section.parent_id IS NULL
+          AND LOWER(section.name) = LOWER(TRIM(note.section))
+      `);
+    }
+    await run(`INSERT INTO ai_note_migrations (key) VALUES ('promote-section-names') ON CONFLICT DO NOTHING`);
+  }
+
+  /**
+   * Clear out the tabs the old resurrection bug left behind.
+   *
+   * Every section it invented has an id of the form `section-<md5>`, which
+   * nothing else mints, so they can be told apart from sections the user made.
+   * Only ones that are provably unused go: no pages, no child sections, and
+   * only where the notebook still has another section to fall back on. They are
+   * not merely clutter - an empty duplicate holds a name, so renaming a real
+   * section onto it fails with a clash against something the user cannot see.
+   */
   await run(`
-    UPDATE ai_notes note
-    SET section_id = section.id
-    FROM ai_note_sections section
-    WHERE note.section_id IS NULL
-      AND note.deleted_at IS NULL
-      AND section.notebook_id = note.notebook_id
-      AND section.parent_id IS NULL
-      AND LOWER(section.name) = LOWER(TRIM(note.section))
+    DELETE FROM ai_note_sections ghost
+    WHERE ghost.id LIKE 'section-%'
+      AND NOT EXISTS (SELECT 1 FROM ai_notes note WHERE note.section_id = ghost.id)
+      AND NOT EXISTS (SELECT 1 FROM ai_note_sections child WHERE child.parent_id = ghost.id)
+      AND EXISTS (
+        SELECT 1 FROM ai_note_sections sibling
+        WHERE sibling.notebook_id = ghost.notebook_id AND sibling.id <> ghost.id
+      )
   `);
 
   // A page whose section was deleted out from under it would otherwise be
-  // invisible: it is filed under an id that no longer resolves to anything.
+  // invisible: filed under an id that no longer resolves to anything. Put it
+  // back in the notebook's first real section rather than leaving it nowhere.
   await run(`
     UPDATE ai_notes note
-    SET section_id = NULL
+    SET section_id = (
+          SELECT section.id FROM ai_note_sections section
+          WHERE section.notebook_id = note.notebook_id
+          ORDER BY COALESCE(section.parent_id, ''), section.position, LOWER(section.name)
+          LIMIT 1
+        ),
+        section = COALESCE((
+          SELECT section.name FROM ai_note_sections section
+          WHERE section.notebook_id = note.notebook_id
+          ORDER BY COALESCE(section.parent_id, ''), section.position, LOWER(section.name)
+          LIMIT 1
+        ), note.section)
     WHERE note.section_id IS NOT NULL
       AND NOT EXISTS (
         SELECT 1 FROM ai_note_sections section WHERE section.id = note.section_id

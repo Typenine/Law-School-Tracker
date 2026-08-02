@@ -318,6 +318,106 @@ describe('what survives a restart', () => {
     assert.ok(!after.some(s => s.name === 'Week 2'));
   });
 
+  it('clears out the tabs the old resurrection bug left behind', async () => {
+    const book = await notebook();
+    const briefs = await section(book.id, 'Case briefs');
+    const week = await section(book.id, 'Week 1', briefs.id);
+    await page(book.id, week.id, 'Palsgraf');
+
+    // Exactly what the old migration used to insert: a top-level tab named
+    // after whatever each page still says its section is called.
+    await app.db.query(
+      `INSERT INTO ai_note_sections (id, notebook_id, name)
+       SELECT DISTINCT ON (note.notebook_id, LOWER(TRIM(note.section)))
+         'section-' || md5(note.notebook_id || '|' || LOWER(TRIM(note.section))),
+         note.notebook_id, TRIM(note.section)
+       FROM ai_notes note
+       WHERE note.notebook_id IS NOT NULL AND NULLIF(TRIM(note.section), '') IS NOT NULL
+       ON CONFLICT DO NOTHING`,
+    );
+    const { rows: before } = await app.db.query(
+      `SELECT COUNT(*)::int AS ghosts FROM ai_note_sections WHERE id LIKE 'section-%'`,
+    );
+    assert.ok(before[0].ghosts > 0, 'the polluted state was set up');
+
+    await app.restart();
+
+    const { rows: after } = await app.db.query(
+      `SELECT COUNT(*)::int AS ghosts FROM ai_note_sections WHERE id LIKE 'section-%'`,
+    );
+    assert.equal(after[0].ghosts, 0, 'the unused duplicates are gone');
+    const live = (await app.api('GET', `/api/notes/sections?notebookId=${book.id}`)).body.sections;
+    assert.ok(live.some(s => s.id === week.id), 'the real sections are untouched');
+    assert.ok(live.some(s => s.id === briefs.id));
+  });
+
+  it('lets a section be renamed onto a name only a leftover held', async () => {
+    const book = await notebook();
+    const briefs = await section(book.id, 'Case briefs');
+    const week = await section(book.id, 'Week 1', briefs.id);
+    await page(book.id, week.id, 'Palsgraf');
+    await app.db.query(
+      `INSERT INTO ai_note_sections (id, notebook_id, name)
+       VALUES ('section-' || md5($1 || '|week 1'), $1, 'Week 1') ON CONFLICT DO NOTHING`,
+      [book.id],
+    );
+
+    // Before the cleanup this failed: the name was taken by a tab holding
+    // nothing, which the user had no way to see or remove.
+    await app.restart();
+    const renamed = await app.api('PATCH', `/api/notes/sections/${briefs.id}`, { name: 'Week 1' });
+    assert.equal(renamed.status, 200, JSON.stringify(renamed.body));
+    assert.equal(renamed.body.section.name, 'Week 1');
+  });
+
+  it('never wipes a leftover tab that is actually holding pages', async () => {
+    const book = await notebook();
+    await section(book.id, 'Somewhere else');
+    const { rows } = await app.db.query(
+      `INSERT INTO ai_note_sections (id, notebook_id, name)
+       VALUES ('section-' || md5($1 || '|legacy'), $1, 'Legacy') RETURNING id`,
+      [book.id],
+    );
+    const legacy = rows[0].id;
+    const kept = await page(book.id, null, 'Old page');
+    await app.db.query(`UPDATE ai_notes SET section_id = $2 WHERE id = $1`, [kept.id, legacy]);
+
+    await app.restart();
+    const live = (await app.api('GET', `/api/notes/sections?notebookId=${book.id}`)).body.sections;
+    assert.ok(live.some(s => s.id === legacy), 'a legacy tab in use survives');
+    assert.equal((await app.api('GET', `/api/notes/${kept.id}`)).body.note.sectionId, legacy);
+  });
+
+  it('re-files a page whose section vanished instead of hiding it', async () => {
+    const book = await notebook();
+    const home = await section(book.id, 'Case briefs');
+    const doomed = await section(book.id, 'Week 1', home.id);
+    const stranded = await page(book.id, doomed.id, 'Palsgraf');
+    // Cut the section out from under it the way the old code could.
+    await app.db.query(`DELETE FROM ai_note_sections WHERE id = $1`, [doomed.id]);
+
+    await app.restart();
+    const note = (await app.api('GET', `/api/notes/${stranded.id}`)).body.note;
+    const live = (await app.api('GET', `/api/notes/sections?notebookId=${book.id}`)).body.sections;
+    assert.ok(note.sectionId, 'it is filed somewhere');
+    assert.ok(live.some(s => s.id === note.sectionId), 'and that somewhere exists');
+    assert.equal(note.section, live.find(s => s.id === note.sectionId).name, 'the stored name agrees');
+  });
+
+  it('does not conjure a "Notes" tab back after it has been renamed', async () => {
+    const book = await notebook();
+    const only = (await app.api('GET', `/api/notes/sections?notebookId=${book.id}`)).body.sections[0];
+    assert.equal(only.name, 'Notes', 'a new notebook opens with one tab');
+    await app.api('PATCH', `/api/notes/sections/${only.id}`, { name: 'Evidence' });
+
+    // A page created without naming a section used to invent one called
+    // "Notes", which read as the rename having been undone.
+    await app.api('POST', '/api/notes', { notebookId: book.id, title: 'Fresh page', content: 'x' });
+
+    const live = (await app.api('GET', `/api/notes/sections?notebookId=${book.id}`)).body.sections;
+    assert.deepEqual(live.map(s => s.name), ['Evidence']);
+  });
+
   it('keeps deleted pages deleted', async () => {
     const book = await notebook();
     const week = await section(book.id, 'Week 1');
