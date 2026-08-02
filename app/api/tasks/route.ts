@@ -1,5 +1,6 @@
 import { NextRequest } from 'next/server';
 import { createTask, ensureSchema, listTasks } from '@/lib/storage';
+import { activeSemesterId } from '@/lib/collections';
 import { NewTaskInput } from '@/lib/types';
 import { z } from 'zod';
 
@@ -14,18 +15,6 @@ export async function GET() {
 
 export async function POST(req: NextRequest) {
   await ensureSchema();
-  async function getActiveSemesterId(): Promise<string | null> {
-    try {
-      const baseUrl = process.env.VERCEL_URL ? `https://${process.env.VERCEL_URL}` : 'http://localhost:3000';
-      const res = await fetch(`${baseUrl}/api/semesters?active=true`, { cache: 'no-store' });
-      if (!res.ok) return null;
-      const data = await res.json();
-      const arr = Array.isArray(data?.semesters) ? data.semesters : [];
-      return arr[0]?.id || null;
-    } catch {
-      return null;
-    }
-  }
   const schema = z.object({
     title: z.string().min(1),
     course: z.string().trim().min(1).nullable().optional(),
@@ -47,7 +36,7 @@ export async function POST(req: NextRequest) {
   const parsed = schema.safeParse(await req.json());
   if (!parsed.success) return new Response('Invalid task body', { status: 400 });
   const body = parsed.data as NewTaskInput;
-  const defaultTerm = body.term ?? await getActiveSemesterId();
+  const defaultTerm = body.term ?? await activeSemesterId();
   const t = await createTask({
     title: body.title,
     dueDate: body.dueDate,

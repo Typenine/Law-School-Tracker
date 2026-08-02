@@ -5,8 +5,10 @@ import type { CalendarEvent, Course, StudySession, Task } from "@/lib/types";
 import { apiFetch } from "@/lib/apiClient";
 import LogModal, { type LogSubmitData } from "@/components/LogModal";
 import { countPages, parsePageRanges } from "@/lib/pageRanges";
-import { notifyTasksChanged } from "@/lib/taskBus";
+import { notifyTasksChanged, onTasksChanged } from "@/lib/taskBus";
 import { notifySessionsChanged } from "@/lib/sessionsBus";
+import { notifyScheduleChanged, onScheduleChanged } from "@/lib/scheduleBus";
+import { clearScheduleDirty, markScheduleDirty, writeLocalSchedule } from "@/lib/useSchedule";
 
 type PlanItem = { id: string; title: string; course: string; minutes: number; guessed?: boolean };
 type TodayPlan = { dateKey: string; locked?: boolean; items: PlanItem[] };
@@ -191,18 +193,25 @@ export default function TodayPage() {
   const refresh = useCallback(async () => {
     setLoading(true);
     try {
-      const [taskResult, courseResult, sessionResult, eventResult, settingsResult] = await Promise.all([
+      const [taskResult, courseResult, sessionResult, eventResult, settingsResult, scheduleResult] = await Promise.all([
         apiFetch<{ tasks: Task[] }>("/api/tasks"),
         apiFetch<{ courses: Course[] }>("/api/courses"),
         apiFetch<{ sessions: StudySession[] }>("/api/sessions"),
         apiFetch<{ events: CalendarEvent[] }>("/api/events"),
         apiFetch<{ settings: SettingsMap }>("/api/settings"),
+        apiFetch<{ blocks: ScheduledBlock[] }>("/api/schedule").catch(() => ({ blocks: [] as ScheduledBlock[] })),
       ]);
       setTasks(Array.isArray(taskResult.tasks) ? taskResult.tasks : []);
       setCourses(Array.isArray(courseResult.courses) ? courseResult.courses : []);
       setSessions(Array.isArray(sessionResult.sessions) ? sessionResult.sessions : []);
       setEvents(Array.isArray(eventResult.events) ? eventResult.events : []);
       setSettings(settingsResult.settings || {});
+      // Take the week plan from the server so Today matches the plan built on
+      // any device, rather than only this browser's cached copy.
+      if (Array.isArray(scheduleResult.blocks)) {
+        setSchedule(scheduleResult.blocks);
+        writeLocalSchedule(scheduleResult.blocks as any);
+      }
       const serverTimers = settingsResult.settings?.taskTimersV1;
       setTimers(serverTimers && typeof serverTimers === "object" ? serverTimers : readLocalJson(LS_TIMERS, {}));
     } finally {
@@ -214,6 +223,12 @@ export default function TodayPage() {
     setTodayPlan(readLocalJson<TodayPlan | null>(LS_TODAY, null));
     setSchedule(readLocalJson<ScheduledBlock[]>(LS_SCHEDULE, []));
     void refresh();
+    // Reflect task and schedule edits made elsewhere in the app straight away.
+    const offTasks = onTasksChanged(() => { void refresh(); });
+    const offSchedule = onScheduleChanged(() => {
+      setSchedule(readLocalJson<ScheduledBlock[]>(LS_SCHEDULE, []));
+    });
+    return () => { offTasks(); offSchedule(); };
   }, [refresh]);
 
   useEffect(() => {
@@ -479,9 +494,10 @@ export default function TodayPage() {
 
   async function moveToTomorrow(task: Task) {
     const tomorrow = addDays(today, 1);
-    const nextSchedule = schedule.map(block => block.taskId === task.id && block.day === today ? { ...block, day: tomorrow } : block);
-    let changed = nextSchedule.some((block, index) => block.day !== schedule[index]?.day);
-    if (!changed) {
+    const movedExisting = schedule.some(block => block.taskId === task.id && block.day === today);
+    const nextSchedule = schedule.map(block =>
+      block.taskId === task.id && block.day === today ? { ...block, day: tomorrow } : block);
+    if (!movedExisting) {
       nextSchedule.push({
         id: `moved-${task.id}-${Date.now()}`,
         taskId: task.id,
@@ -491,12 +507,21 @@ export default function TodayPage() {
         course: task.course || "",
         priority: task.priority || null,
       });
-      changed = true;
     }
-    if (changed) {
-      setSchedule(nextSchedule);
-      window.localStorage.setItem(LS_SCHEDULE, JSON.stringify(nextSchedule));
+    setSchedule(nextSchedule);
+    writeLocalSchedule(nextSchedule as any);
+    markScheduleDirty();
+    notifyScheduleChanged();
+    // Persist to the server too, otherwise the move only lived in this tab's
+    // localStorage and the block reappeared on today the next time the week
+    // plan loaded from the server.
+    try {
+      await apiFetch("/api/schedule", { method: "PUT", body: { blocks: nextSchedule } });
+      clearScheduleDirty();
+    } catch {
+      // The dirty flag makes the week plan retry this on its next load.
     }
+
     if (todayPlan?.dateKey === today) {
       const nextPlan = { ...todayPlan, items: todayPlan.items.filter(item => item.id !== task.id) };
       setTodayPlan(nextPlan);

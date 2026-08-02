@@ -21,6 +21,35 @@ function resolveDbUrl(): string | null {
   }
   return null;
 }
+// ---------------------------------------------------------------------------
+// Write serialization
+//
+// The JSON/Blob store is a single document: every mutation is a read-modify-
+// write of the whole file. Without serialization two overlapping requests both
+// read the same snapshot and the second one writes back a document that still
+// contains whatever the first one removed - which is how deleted tasks,
+// sessions and courses used to reappear. Every JSON-mode mutation now runs
+// inside `mutateJson`, which re-reads the document inside the lock so it always
+// builds on the most recent state.
+// ---------------------------------------------------------------------------
+let storeLock: Promise<unknown> = Promise.resolve();
+
+function withStoreLock<T>(fn: () => Promise<T>): Promise<T> {
+  const run = storeLock.then(fn, fn);
+  // Keep the chain alive even when a caller rejects.
+  storeLock = run.catch(() => undefined);
+  return run;
+}
+
+async function mutateJson<T>(fn: (db: JsonStore) => T | Promise<T>): Promise<T> {
+  return withStoreLock(async () => {
+    const db = await readJson();
+    const result = await fn(db);
+    await writeJson(db);
+    return result;
+  });
+}
+
 export async function updateSession(id: string, patch: Partial<Pick<StudySession, 'when'|'minutes'|'focus'|'notes'|'pagesRead'|'outlinePages'|'practiceQs'|'activity'>>): Promise<StudySession | null> {
   if (DB_URL) {
     const p = getPool();
@@ -47,14 +76,13 @@ export async function updateSession(id: string, patch: Partial<Pick<StudySession
     const r = res.rows[0];
     return { id: r.id, taskId: r.task_id, when: new Date(r.when_ts).toISOString(), minutes: r.minutes, focus: r.focus, notes: r.notes, pagesRead: r.pages_read, outlinePages: r.outline_pages, practiceQs: r.practice_qs, activity: r.activity, createdAt: new Date(r.created_at).toISOString() };
   }
-  const db = await readJson();
-  const i = db.sessions.findIndex(s => s.id === id);
-  if (i === -1) return null;
-  const cur = db.sessions[i];
-  const updated: StudySession = { ...cur, ...patch } as any;
-  db.sessions[i] = updated;
-  await writeJson(db);
-  return updated;
+  return mutateJson(db => {
+    const i = db.sessions.findIndex(s => s.id === id);
+    if (i === -1) return null;
+    const updated: StudySession = { ...db.sessions[i], ...patch } as any;
+    db.sessions[i] = updated;
+    return updated;
+  });
 }
 
 export async function deleteSession(id: string): Promise<boolean> {
@@ -63,11 +91,11 @@ export async function deleteSession(id: string): Promise<boolean> {
     const res = await p.query(`DELETE FROM sessions WHERE id=$1`, [id]);
     return res.rowCount > 0;
   }
-  const db = await readJson();
-  const before = db.sessions.length;
-  db.sessions = db.sessions.filter(s => s.id !== id);
-  await writeJson(db);
-  return db.sessions.length < before;
+  return mutateJson(db => {
+    const before = db.sessions.length;
+    db.sessions = db.sessions.filter(s => s.id !== id);
+    return db.sessions.length < before;
+  });
 }
  
 const DB_URL = resolveDbUrl();
@@ -199,10 +227,8 @@ export async function createCourse(input: NewCourseInput): Promise<Course> {
       throw e;
     }
   }
-  const db = await readJson();
   const c: Course = { id: uuid(), code: input.code ?? null, title: input.title, instructor: input.instructor ?? null, instructorEmail: input.instructorEmail ?? null, room: input.room ?? null, location: input.location ?? null, color: (input as any).color ?? null, meetingDays: input.meetingDays ?? null, meetingStart: input.meetingStart ?? null, meetingEnd: input.meetingEnd ?? null, meetingBlocks: input.meetingBlocks ?? null, startDate: input.startDate ?? null, endDate: input.endDate ?? null, semester: input.semester ?? null, year: input.year ?? null, createdAt: now };
-  db.courses.push(c);
-  await writeJson(db);
+  await mutateJson(db => { db.courses.push(c); });
   return c;
 }
 
@@ -250,13 +276,13 @@ export async function updateCourse(id: string, patch: UpdateCourseInput): Promis
       throw e;
     }
   }
-  const db = await readJson();
-  const i = db.courses.findIndex(c => c.id === id);
-  if (i === -1) return null;
-  const updated: Course = { ...db.courses[i], ...patch } as Course;
-  db.courses[i] = updated;
-  await writeJson(db);
-  return updated;
+  return mutateJson(db => {
+    const i = db.courses.findIndex(c => c.id === id);
+    if (i === -1) return null;
+    const updated: Course = { ...db.courses[i], ...patch } as Course;
+    db.courses[i] = updated;
+    return updated;
+  });
 }
 
 export async function deleteCourse(id: string): Promise<boolean> {
@@ -270,11 +296,11 @@ export async function deleteCourse(id: string): Promise<boolean> {
       throw e;
     }
   }
-  const db = await readJson();
-  const before = db.courses.length;
-  db.courses = db.courses.filter(c => c.id !== id);
-  await writeJson(db);
-  return db.courses.length < before;
+  return mutateJson(db => {
+    const before = db.courses.length;
+    db.courses = db.courses.filter(c => c.id !== id);
+    return db.courses.length < before;
+  });
 }
 
 // One-time helper to migrate JSON/Blob courses into DB if DB is empty
@@ -367,7 +393,7 @@ async function recomputeLearnedMppForCourse(courseTitle: string): Promise<void> 
     return;
   }
   // JSON/Blob mode
-  const db = await readJson();
+  await mutateJson(db => {
   const tasks = db.tasks.filter(t => (t.course || '') === courseTitle);
   const taskIds = new Set(tasks.map(t => t.id));
   let mpps = db.sessions
@@ -389,8 +415,8 @@ async function recomputeLearnedMppForCourse(courseTitle: string): Promise<void> 
     (db.courses[i] as any).learnedMpp = learned;
     (db.courses[i] as any).learnedSample = sample || null;
     (db.courses[i] as any).learnedUpdatedAt = new Date().toISOString();
-    await writeJson(db);
   }
+  });
 }
 
 export async function ensureSchema() {
@@ -453,10 +479,15 @@ export async function ensureSchema() {
         key text PRIMARY KEY,
         value jsonb NOT NULL
       );
-      -- Week Plan schedule blocks
+      -- Week Plan schedule blocks.
+      -- ids are text, not uuid: the week planner mints its own block ids and a
+      -- block can also point at a backlog item that is not a task row. When
+      -- these columns were uuid with a foreign key, every save of a
+      -- hand-placed block failed on "invalid input syntax for type uuid" and
+      -- the whole schedule silently never reached the server.
       CREATE TABLE IF NOT EXISTS schedule_blocks (
-        id uuid PRIMARY KEY,
-        task_id uuid REFERENCES tasks(id) ON DELETE SET NULL,
+        id text PRIMARY KEY,
+        task_id text,
         day date NOT NULL,
         planned_minutes integer NOT NULL,
         guessed boolean,
@@ -467,6 +498,14 @@ export async function ensureSchema() {
         catchup boolean,
         created_at timestamptz NOT NULL DEFAULT now()
       );
+      -- Migrate installations created with the original uuid columns.
+      ALTER TABLE schedule_blocks DROP CONSTRAINT IF EXISTS schedule_blocks_task_id_fkey;
+      DO $$ BEGIN
+        ALTER TABLE schedule_blocks ALTER COLUMN id TYPE text USING id::text;
+      EXCEPTION WHEN others THEN NULL; END $$;
+      DO $$ BEGIN
+        ALTER TABLE schedule_blocks ALTER COLUMN task_id TYPE text USING task_id::text;
+      EXCEPTION WHEN others THEN NULL; END $$;
       CREATE TABLE IF NOT EXISTS sessions (
         id uuid PRIMARY KEY,
         task_id uuid REFERENCES tasks(id) ON DELETE SET NULL,
@@ -660,9 +699,47 @@ export async function patchSettings(patch: Record<string, any>): Promise<void> {
     }
     return;
   }
-  const db = await readJson();
-  db.settings = { ...(db.settings || {}), ...patch };
-  await writeJson(db);
+  await mutateJson(db => { db.settings = { ...(db.settings || {}), ...patch }; });
+}
+
+/**
+ * Read-modify-write a single settings key without losing concurrent updates.
+ * In Postgres the row is locked for the duration of the transaction; in JSON
+ * mode the whole document is locked. Callers get the stored value, return the
+ * next value, and the result they want handed back.
+ */
+export async function mutateSetting<T>(
+  key: string,
+  mutator: (current: any) => { value: any; result: T },
+): Promise<T> {
+  if (DB_URL) {
+    const p = getPool();
+    const client = await p.connect();
+    try {
+      await client.query('BEGIN');
+      await client.query(
+        `INSERT INTO settings(key, value) VALUES ($1, 'null'::jsonb) ON CONFLICT (key) DO NOTHING`,
+        [key],
+      );
+      const res = await client.query(`SELECT value FROM settings WHERE key = $1 FOR UPDATE`, [key]);
+      const current = res.rows?.[0]?.value ?? null;
+      const { value, result } = mutator(current);
+      await client.query(`UPDATE settings SET value = $2::jsonb WHERE key = $1`, [key, JSON.stringify(value ?? null)]);
+      await client.query('COMMIT');
+      return result;
+    } catch (e) {
+      await client.query('ROLLBACK').catch(() => undefined);
+      throw e;
+    } finally {
+      client.release();
+    }
+  }
+  return mutateJson(db => {
+    const settings = db.settings || (db.settings = {});
+    const { value, result } = mutator(settings[key] ?? null);
+    settings[key] = value;
+    return result;
+  });
 }
 
 // Week Plan schedule blocks helpers
@@ -678,30 +755,54 @@ export async function listScheduleBlocks(): Promise<ScheduleBlockRow[]> {
   return (db.scheduleBlocks || []) as ScheduleBlockRow[];
 }
 
-export async function replaceAllScheduleBlocks(blocks: ScheduleBlockRow[]): Promise<void> {
+/** Drop rows the store cannot represent so one bad block can't fail the save. */
+function sanitizeScheduleBlocks(blocks: ScheduleBlockRow[]): ScheduleBlockRow[] {
+  const seen = new Set<string>();
+  const out: ScheduleBlockRow[] = [];
+  for (const b of (blocks || [])) {
+    if (!b || typeof b.id !== 'string' || !b.id) continue;
+    if (typeof b.day !== 'string' || !/^\d{4}-\d{2}-\d{2}$/.test(b.day)) continue;
+    if (seen.has(b.id)) continue;
+    seen.add(b.id);
+    out.push({
+      ...b,
+      taskId: typeof b.taskId === 'string' && b.taskId ? b.taskId : '',
+      title: String(b.title ?? '').slice(0, 500) || 'Untitled block',
+      course: String(b.course ?? ''),
+      plannedMinutes: Math.max(0, Math.round(Number(b.plannedMinutes) || 0)),
+    });
+  }
+  return out;
+}
+
+export async function replaceAllScheduleBlocks(input: ScheduleBlockRow[]): Promise<void> {
+  const blocks = sanitizeScheduleBlocks(input);
   if (DB_URL) {
-    const p = getPool();
-    await p.query('BEGIN');
+    // A pool-level BEGIN/COMMIT can land on different connections, which left
+    // the delete uncommitted and readers seeing a half-written week. Pin the
+    // whole replacement to one client.
+    const client = await getPool().connect();
     try {
-      await p.query('DELETE FROM schedule_blocks');
+      await client.query('BEGIN');
+      await client.query('DELETE FROM schedule_blocks');
       for (const b of (blocks || [])) {
-        await p.query(
+        await client.query(
           `INSERT INTO schedule_blocks (id, task_id, day, planned_minutes, guessed, title, course, pages, priority, catchup, created_at)
            VALUES ($1,$2,$3::date,$4,$5,$6,$7,$8,$9,$10, now())
            ON CONFLICT (id) DO UPDATE SET task_id=EXCLUDED.task_id, day=EXCLUDED.day, planned_minutes=EXCLUDED.planned_minutes, guessed=EXCLUDED.guessed, title=EXCLUDED.title, course=EXCLUDED.course, pages=EXCLUDED.pages, priority=EXCLUDED.priority, catchup=EXCLUDED.catchup`,
           [b.id, b.taskId || null, b.day, b.plannedMinutes, b.guessed ?? null, b.title, b.course || null, b.pages ?? null, b.priority ?? null, b.catchup ?? null]
         );
       }
-      await p.query('COMMIT');
+      await client.query('COMMIT');
     } catch (e) {
-      await p.query('ROLLBACK');
+      await client.query('ROLLBACK').catch(() => undefined);
       throw e;
+    } finally {
+      client.release();
     }
     return;
   }
-  const db = await readJson();
-  db.scheduleBlocks = (blocks || []).slice();
-  await writeJson(db);
+  await mutateJson(db => { db.scheduleBlocks = (blocks || []).slice(); });
 }
 
 // Tasks
@@ -753,10 +854,8 @@ export async function createTask(input: NewTaskInput): Promise<Task> {
     const r = res.rows[0];
     return { id: r.id, title: r.title, course: r.course, dueDate: new Date(r.due_date).toISOString(), status: r.status, createdAt: new Date(r.created_at).toISOString(), startTime: r.start_time ?? null, endTime: r.end_time ?? null, estimatedMinutes: r.estimated_minutes ?? null, estimateOrigin: (r.estimate_origin as any) ?? null, priority: r.priority ?? null, notes: r.notes ?? null, attachments: r.attachments ?? null, dependsOn: r.depends_on ?? null, tags: r.tags ?? null, term: r.term ?? null, pagesRead: r.pages_read ?? null, activity: r.activity ?? null };
   }
-  const db = await readJson();
   const task: Task = { id: uuid(), title: input.title, course: input.course ?? null, dueDate: input.dueDate, status: input.status ?? 'todo', createdAt: now, startTime: (input as any).startTime ?? null, endTime: (input as any).endTime ?? null, estimatedMinutes: input.estimatedMinutes ?? null, estimateOrigin: (input as any).estimateOrigin ?? null, priority: input.priority ?? null, notes: input.notes ?? null, attachments: input.attachments ?? null, dependsOn: input.dependsOn ?? null, tags: input.tags ?? null, term: input.term ?? null, pagesRead: (input as any).pagesRead ?? null, activity: (input as any).activity ?? null };
-  db.tasks.push(task);
-  await writeJson(db);
+  await mutateJson(db => { db.tasks.push(task); });
   return task;
 }
 
@@ -796,26 +895,30 @@ export async function updateTask(id: string, patch: UpdateTaskInput): Promise<Ta
     const r = res.rows[0];
     return { id: r.id, title: r.title, course: r.course, dueDate: new Date(r.due_date).toISOString(), status: r.status, createdAt: new Date(r.created_at).toISOString(), startTime: r.start_time ?? null, endTime: r.end_time ?? null, estimatedMinutes: r.estimated_minutes ?? null, estimateOrigin: (r.estimate_origin as any) ?? null, priority: r.priority ?? null, notes: r.notes ?? null, attachments: r.attachments ?? null, dependsOn: r.depends_on ?? null, tags: r.tags ?? null, term: r.term ?? null, pagesRead: r.pages_read ?? null, activity: r.activity ?? null };
   }
-  const db = await readJson();
-  const i = db.tasks.findIndex(t => t.id === id);
-  if (i === -1) return null;
-  const updated: Task = { ...db.tasks[i], ...patch } as Task;
-  db.tasks[i] = updated;
-  await writeJson(db);
-  return updated;
+  return mutateJson(db => {
+    const i = db.tasks.findIndex(t => t.id === id);
+    if (i === -1) return null;
+    const updated: Task = { ...db.tasks[i], ...patch } as Task;
+    db.tasks[i] = updated;
+    return updated;
+  });
 }
 
 export async function deleteTask(id: string): Promise<boolean> {
   if (DB_URL) {
     const p = getPool();
+    await p.query(`DELETE FROM schedule_blocks WHERE task_id=$1`, [id]).catch(() => undefined);
     const res = await p.query(`DELETE FROM tasks WHERE id=$1`, [id]);
     return res.rowCount > 0;
   }
-  const db = await readJson();
-  const before = db.tasks.length;
-  db.tasks = db.tasks.filter(t => t.id !== id);
-  await writeJson(db);
-  return db.tasks.length < before;
+  return mutateJson(db => {
+    const before = db.tasks.length;
+    db.tasks = db.tasks.filter(t => t.id !== id);
+    // Drop schedule blocks that pointed at the task so a deleted task cannot
+    // be re-planned onto the week grid.
+    db.scheduleBlocks = (db.scheduleBlocks || []).filter(b => b.taskId !== id);
+    return db.tasks.length < before;
+  });
 }
 
 // Sessions
@@ -854,8 +957,8 @@ export async function createSession(input: NewSessionInput): Promise<StudySessio
     } catch {}
     return created;
   }
-  const db = await readJson();
   const s: StudySession = { id: uuid(), taskId: input.taskId ?? null, when: whenISO, minutes: input.minutes, focus: input.focus ?? null, notes: input.notes ?? null, pagesRead: input.pagesRead ?? null, outlinePages: input.outlinePages ?? null, practiceQs: input.practiceQs ?? null, activity: input.activity ?? null, createdAt: now };
+  await mutateJson(db => {
   db.sessions.unshift(s);
   // Recompute learned MPP for the affected course (if any)
   try {
@@ -887,7 +990,7 @@ export async function createSession(input: NewSessionInput): Promise<StudySessio
       }
     }
   } catch {}
-  await writeJson(db);
+  });
   return s;
 }
 
@@ -899,11 +1002,11 @@ export async function resetAllSessions(): Promise<number> {
     // rowCount may be undefined for some drivers; treat as 0
     return (res as any)?.rowCount ?? 0;
   }
-  const db = await readJson();
-  const n = db.sessions.length;
-  db.sessions = [];
-  await writeJson(db);
-  return n;
+  return mutateJson(db => {
+    const n = db.sessions.length;
+    db.sessions = [];
+    return n;
+  });
 }
 
 export async function statsNow() {
