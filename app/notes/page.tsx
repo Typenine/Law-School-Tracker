@@ -120,6 +120,34 @@ export default function NotesPage() {
   const [error, setError] = useState('');
   /** A save that was refused, holding both versions so either can be kept. */
   const [conflict, setConflict] = useState<{ theirs: Page; myHtml: string; myTitle: string } | null>(null);
+  /**
+   * Confirmation for anything destructive, asked inside the page.
+   *
+   * These used to be `window.confirm`. Browsers offer "prevent this page from
+   * creating additional dialogs" once a few have been shown, and from then on
+   * confirm() returns false instantly and silently - so every delete returned
+   * early and did nothing at all. No request, no error, no change on screen,
+   * and the more often you tried the more certain it became.
+   */
+  const [confirmAsk, setConfirmAsk] = useState<
+    { title: string; body: string; action: string } | null
+  >(null);
+  const confirmReply = useRef<((ok: boolean) => void) | null>(null);
+
+  const ask = useCallback((title: string, body: string, action: string): Promise<boolean> => {
+    // Anything still waiting is answered "no" rather than left hanging.
+    confirmReply.current?.(false);
+    setConfirmAsk({ title, body, action });
+    return new Promise<boolean>(resolve => { confirmReply.current = resolve; });
+  }, []);
+
+  const answerConfirm = useCallback((ok: boolean) => {
+    setConfirmAsk(null);
+    const reply = confirmReply.current;
+    confirmReply.current = null;
+    reply?.(ok);
+  }, []);
+
   const [setAside, setSetAside] = useState<
     { trashed: PageSummary[]; archived: PageSummary[]; retentionDays: number } | null
   >(null);
@@ -809,7 +837,7 @@ export default function NotesPage() {
     const count = setAside?.trashed.length || 0;
     if (!count) return;
     const plural = count === 1 ? 'page' : 'pages';
-    if (!window.confirm(`Delete ${count} ${plural} for good? This cannot be undone.`)) return;
+    if (!await ask('Empty the trash?', `${count} ${plural} will be deleted for good. This cannot be undone.`, 'Delete for good')) return;
     try {
       await api('/api/notes/deleted', { method: 'DELETE' });
       await loadSetAside();
@@ -829,7 +857,7 @@ export default function NotesPage() {
   }
 
   async function purgePage(id: string, title: string) {
-    if (!window.confirm(`Permanently delete “${title}”? This cannot be undone.`)) return;
+    if (!await ask('Delete for good?', `“${title}” will be gone for good. This cannot be undone.`, 'Delete for good')) return;
     try {
       await api(`/api/notes/${encodeURIComponent(id)}?purge=true`, { method: 'DELETE' });
       await loadSetAside();
@@ -971,7 +999,7 @@ export default function NotesPage() {
 
   async function deleteNotebook() {
     if (!notebookModal?.id) return;
-    if (!window.confirm('Delete this notebook? Its pages move to Unfiled rather than being deleted.')) return;
+    if (!await ask('Delete this notebook?', 'Its pages move to Unfiled rather than being deleted.', 'Delete notebook')) return;
     setSavingModal(true);
     try {
       await api(`/api/notes/notebooks/${encodeURIComponent(notebookModal.id)}`, { method: 'DELETE' });
@@ -1023,9 +1051,9 @@ export default function NotesPage() {
     if (!sectionModal?.id) return;
     const others = notebookSections.filter(section => section.id !== sectionModal.id);
     const message = others.length
-      ? `Delete the “${sectionModal.name}” section? Its pages move to “${others[0].name}”.`
-      : `Delete the “${sectionModal.name}” section? It is the last section, so its pages are deleted too.`;
-    if (!window.confirm(message)) return;
+      ? `“${sectionModal.name}” is removed and its pages move to “${others[0].name}”.`
+      : `“${sectionModal.name}” is the last section, so its pages go to the trash with it.`;
+    if (!await ask('Delete this section?', message, 'Delete section')) return;
     setSavingModal(true);
     try {
       await api(`/api/notes/sections/${encodeURIComponent(sectionModal.id)}`, { method: 'DELETE' });
@@ -1043,26 +1071,47 @@ export default function NotesPage() {
     }
   }
 
-  /** Take a page out of the flat result list the tree is replaced by. */
-  function dropFromResults(id: string) {
+  /**
+   * Take a page out of every list that can show it, at once.
+   *
+   * The tree reads from a per-notebook cache, the section panel from its own
+   * list, and a search replaces the tree with a third. Waiting on a refetch to
+   * clear them is both slow and fragile - the refetch targets the selected
+   * notebook, which is not necessarily the one the page lived in, and the
+   * cache used to refuse to reload a notebook it had already seen. So the page
+   * goes from all three immediately, and the refetch merely confirms it.
+   */
+  function removeFromView(id: string, ownerNotebookId: string | null) {
     setSearchResults(current => (current ? current.filter(item => item.id !== id) : current));
+    setPages(current => current.filter(item => item.id !== id));
+    setPagesByNotebook(current => {
+      const next: Record<string, PageSummary[]> = {};
+      // Drop it wherever it is cached: a page can appear under the notebook it
+      // belongs to and under whichever one happens to be selected.
+      for (const [key, list] of Object.entries(current)) {
+        next[key] = list.filter(item => item.id !== id);
+      }
+      if (ownerNotebookId && !next[ownerNotebookId]) next[ownerNotebookId] = [];
+      return next;
+    });
   }
 
   async function archivePage() {
     if (!draft) return;
-    if (!window.confirm(`Archive “${draft.title}”? It stays searchable by your GPT but leaves this section.`)) return;
+    if (!await ask('Archive this page?', `“${draft.title}” stays searchable by your assistant but leaves this section.`, 'Archive')) return;
     try {
       const removedId = draft.id;
+      const owner = draft.notebookId || notebookId;
       await api(`/api/notes/${encodeURIComponent(removedId)}`, {
         method: 'PATCH', body: JSON.stringify({ archived: true }),
       });
       setDirty(false);
       setDraft(null);
       setPageId('');
-      dropFromResults(removedId);
+      removeFromView(removedId, owner);
       await Promise.all([
         loadNotebooks(), loadSections(), loadPages(notebookId, sectionName),
-        refreshNotebookPages(notebookId),
+        refreshNotebookPages(owner),
       ]);
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Unable to archive the page.');
@@ -1071,23 +1120,25 @@ export default function NotesPage() {
 
   async function deletePage() {
     if (!draft) return;
-    if (!window.confirm(`Move “${draft.title}” to the trash? You can restore it from Set aside.`)) return;
+    if (!await ask('Move to trash?', `“${draft.title}” goes to the trash. You can restore it from Set aside.`, 'Move to trash')) return;
     try {
       const removedId = draft.id;
+      const owner = draft.notebookId || notebookId;
       await api(`/api/notes/${encodeURIComponent(removedId)}`, { method: 'DELETE' });
       // Clear the dirty flag first so the autosave effect cannot re-create the
       // page's content after it has been removed.
       setDirty(false);
       setDraft(null);
       setPageId('');
-      // Search results replace the tree entirely, and nothing else reloads
-      // them, so a page deleted from a result list used to sit there as if the
-      // delete had not happened.
-      dropFromResults(removedId);
+      removeFromView(removedId, owner);
       const remaining = await loadPages(notebookId, sectionName);
       // Sections carry a page count, so they have to be reloaded as well or
       // the number beside the section keeps counting the page just deleted.
-      await Promise.all([loadNotebooks(), loadSections(), refreshNotebookPages(notebookId)]);
+      await Promise.all([
+        loadNotebooks(), loadSections(),
+        refreshNotebookPages(owner),
+        owner === notebookId ? Promise.resolve() : refreshNotebookPages(notebookId),
+      ]);
       if (remaining[0]) void openPage(remaining[0].id);
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Unable to delete the page.');
@@ -1639,6 +1690,30 @@ export default function NotesPage() {
                   ))}
                 </section>
               ))}
+            </div>
+          </div>
+        </div>
+      )}
+
+      {confirmAsk && (
+        <div className="nb-modal-scrim" onMouseDown={event => event.target === event.currentTarget && answerConfirm(false)}>
+          <div className="nb-modal" role="alertdialog" aria-labelledby="nb-confirm-title">
+            <div className="nb-modal-head">
+              <div>
+                <h3 id="nb-confirm-title">{confirmAsk.title}</h3>
+                <p>{confirmAsk.body}</p>
+              </div>
+            </div>
+            <div className="nb-modal-foot">
+              <span />
+              <div>
+                <button type="button" className="nb-secondary" onClick={() => answerConfirm(false)}>
+                  Cancel
+                </button>
+                <button type="button" className="nb-primary" autoFocus onClick={() => answerConfirm(true)}>
+                  {confirmAsk.action}
+                </button>
+              </div>
             </div>
           </div>
         </div>
