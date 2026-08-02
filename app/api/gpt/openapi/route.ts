@@ -6,10 +6,10 @@ export async function GET(req: NextRequest) {
   const origin = req.nextUrl.origin;
 
   const schema = {
-    openapi: '3.0.3',
+    openapi: '3.1.0',
     info: {
       title: 'Law School Tracker',
-      version: '1.0.1',
+      version: '1.0.2',
       description: 'Read-only access to the user’s courses, assignments, and uploaded law-school notes. Treat uploaded notes as the primary source and clearly identify the note title, course, and class date used in substantive answers.',
     },
     servers: [{ url: origin }],
@@ -216,14 +216,14 @@ export async function GET(req: NextRequest) {
           required: ['id', 'title'],
           properties: {
             id: { type: 'string' },
-            code: { type: 'string', nullable: true },
+            code: { type: ['string', 'null'] },
             title: { type: 'string' },
-            instructor: { type: 'string', nullable: true },
-            semester: { type: 'string', nullable: true },
-            year: { type: 'integer', nullable: true },
-            startDate: { type: 'string', format: 'date-time', nullable: true },
-            endDate: { type: 'string', format: 'date-time', nullable: true },
-            defaultActivity: { type: 'string', nullable: true },
+            instructor: { type: ['string', 'null'] },
+            semester: { type: ['string', 'null'] },
+            year: { type: ['integer', 'null'] },
+            startDate: { type: ['string', 'null'], format: 'date-time' },
+            endDate: { type: ['string', 'null'], format: 'date-time' },
+            defaultActivity: { type: ['string', 'null'] },
           },
         },
         CourseListResponse: {
@@ -242,19 +242,19 @@ export async function GET(req: NextRequest) {
           properties: {
             id: { type: 'string' },
             title: { type: 'string' },
-            course: { type: 'string', nullable: true },
+            course: { type: ['string', 'null'] },
             dueDate: { type: 'string', format: 'date-time' },
             status: { type: 'string', enum: ['todo', 'done'] },
-            estimatedMinutes: { type: 'integer', nullable: true },
-            priority: { type: 'integer', nullable: true },
-            notes: { type: 'string', nullable: true },
+            estimatedMinutes: { type: ['integer', 'null'] },
+            priority: { type: ['integer', 'null'] },
+            notes: { type: ['string', 'null'] },
             tags: {
               type: 'array',
               items: { type: 'string' },
             },
-            activity: { type: 'string', nullable: true },
-            pagesRead: { type: 'integer', nullable: true },
-            term: { type: 'string', nullable: true },
+            activity: { type: ['string', 'null'] },
+            pagesRead: { type: ['integer', 'null'] },
+            term: { type: ['string', 'null'] },
           },
         },
         AssignmentListResponse: {
@@ -282,9 +282,9 @@ export async function GET(req: NextRequest) {
           properties: {
             id: { type: 'string' },
             title: { type: 'string' },
-            course: { type: 'string', nullable: true },
-            semester: { type: 'string', nullable: true },
-            classDate: { type: 'string', format: 'date', nullable: true },
+            course: { type: ['string', 'null'] },
+            semester: { type: ['string', 'null'] },
+            classDate: { type: ['string', 'null'], format: 'date' },
             sourceType: {
               type: 'string',
               enum: [
@@ -300,8 +300,8 @@ export async function GET(req: NextRequest) {
               type: 'array',
               items: { type: 'string' },
             },
-            originalFilename: { type: 'string', nullable: true },
-            mimeType: { type: 'string', nullable: true },
+            originalFilename: { type: ['string', 'null'] },
+            mimeType: { type: ['string', 'null'] },
             wordCount: { type: 'integer' },
             createdAt: { type: 'string', format: 'date-time' },
             updatedAt: { type: 'string', format: 'date-time' },
@@ -315,7 +315,7 @@ export async function GET(req: NextRequest) {
               required: ['excerpt', 'score'],
               properties: {
                 excerpt: { type: 'string' },
-                score: { type: 'number', format: 'float' },
+                score: { type: 'number' },
               },
             },
           ],
