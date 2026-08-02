@@ -598,6 +598,14 @@ export default function NotesPage() {
   async function selectTreePage(nbId: string, secId: string, section: string, id: string) {
     if (id === pageId) return;
     if (dirtyRef.current) await savePage(true);
+    // Claim the selection in the same update as the notebook and section.
+    //
+    // Changing the section runs the effect that opens whichever page was last
+    // read in that tab, and it leaves the current page alone only if it is
+    // already the selected one. `openPage` sets that after an await, so the
+    // effect used to win the race and replace the page just clicked with a
+    // different one - and then Move to trash deleted the wrong page.
+    setPageId(id);
     if (nbId) setNotebookId(nbId);
     if (secId) setSectionId(secId);
     if (section) setSectionName(section);
@@ -1001,17 +1009,27 @@ export default function NotesPage() {
     }
   }
 
+  /** Take a page out of the flat result list the tree is replaced by. */
+  function dropFromResults(id: string) {
+    setSearchResults(current => (current ? current.filter(item => item.id !== id) : current));
+  }
+
   async function archivePage() {
     if (!draft) return;
     if (!window.confirm(`Archive “${draft.title}”? It stays searchable by your GPT but leaves this section.`)) return;
     try {
-      await api(`/api/notes/${encodeURIComponent(draft.id)}`, {
+      const removedId = draft.id;
+      await api(`/api/notes/${encodeURIComponent(removedId)}`, {
         method: 'PATCH', body: JSON.stringify({ archived: true }),
       });
       setDirty(false);
       setDraft(null);
       setPageId('');
-      await Promise.all([loadNotebooks(), loadPages(notebookId, sectionName)]);
+      dropFromResults(removedId);
+      await Promise.all([
+        loadNotebooks(), loadSections(), loadPages(notebookId, sectionName),
+        refreshNotebookPages(notebookId),
+      ]);
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Unable to archive the page.');
     }
@@ -1021,12 +1039,17 @@ export default function NotesPage() {
     if (!draft) return;
     if (!window.confirm(`Move “${draft.title}” to the trash? You can restore it from Set aside.`)) return;
     try {
-      await api(`/api/notes/${encodeURIComponent(draft.id)}`, { method: 'DELETE' });
+      const removedId = draft.id;
+      await api(`/api/notes/${encodeURIComponent(removedId)}`, { method: 'DELETE' });
       // Clear the dirty flag first so the autosave effect cannot re-create the
       // page's content after it has been removed.
       setDirty(false);
       setDraft(null);
       setPageId('');
+      // Search results replace the tree entirely, and nothing else reloads
+      // them, so a page deleted from a result list used to sit there as if the
+      // delete had not happened.
+      dropFromResults(removedId);
       const remaining = await loadPages(notebookId, sectionName);
       // Sections carry a page count, so they have to be reloaded as well or
       // the number beside the section keeps counting the page just deleted.
