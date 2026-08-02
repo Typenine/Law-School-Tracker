@@ -31,6 +31,22 @@ Extras:
 
 By default, data is stored in `data/db.json` (created on first write). This file is not suitable for Vercel (read-only FS), use Postgres in prod.
 
+## Tests
+
+The notes tests drive the real HTTP API against a real Postgres, because the
+bugs worth catching there are about what the database actually does — a
+migration that recreated deleted sections on boot, a page left pointing at a
+deleted section, a search that quietly narrowed itself. Point `DATABASE_URL` at
+a database you do not mind being wiped:
+
+```bash
+npm run build                     # the tests start the built app
+DATABASE_URL=postgres://postgres@127.0.0.1:5432/lst_test npm test
+```
+
+`npm run typecheck` runs TypeScript on its own. CI runs all three on every push
+and pull request.
+
 ## Configure Postgres (Prod)
 - Set `DATABASE_URL` in Vercel Project Settings → Environment Variables
 - The app auto-creates the required tables on first use.
@@ -46,21 +62,22 @@ The Notes page can extract and store text from PDF, DOCX, TXT, and Markdown file
 Set these Vercel environment variables before using the feature:
 
 - `LAW_SCHOOL_GPT_TOKEN`: bearer token used by the custom GPT Action. This token has read-only access to courses, assignments, and notes.
-- `LAW_SCHOOL_NOTES_TOKEN`: token used by the Notes page for uploading, listing, and deleting notes. Use a different value from the GPT token. If omitted, the app falls back to `LAW_SCHOOL_GPT_TOKEN`.
+- `BLOB_READ_WRITE_TOKEN`: set by binding Vercel Blob to the project. Without it, images cannot be added to notes; everything else works, and the editor says why.
+
+The Notes page itself needs no token — it uses the same access model as the rest of the tracker.
 
 After deployment:
 
-1. Open `/notes` and save the notes token in the browser.
-2. Upload notes and verify they appear in the saved-notes list.
-3. Copy the OpenAPI schema URL shown on the Notes page.
-4. In the custom GPT builder, add an Action using that schema URL.
-5. Configure Action authentication as an API key sent with Bearer authentication, using `LAW_SCHOOL_GPT_TOKEN`.
+1. Copy the OpenAPI schema URL shown on the Notes page.
+2. In the custom GPT builder, add an Action using that schema URL.
+3. Configure Action authentication as an API key sent with Bearer authentication, using `LAW_SCHOOL_GPT_TOKEN`.
 
 The GPT Action exposes only these read operations:
 
 - List courses
 - Filter assignments by status, course, or date range
-- Search uploaded notes by topic, course, semester, or class date
+- List notebooks with their nested sections, so the assistant can navigate the hierarchy
+- Search notes by topic, course, semester, class date, notebook, or section
 - Retrieve the full text of a selected note
 
 ## Import Sessions (CSV)
