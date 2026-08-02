@@ -52,6 +52,27 @@ function mondayOfChicago(d: Date): Date { const ymd = chicagoYmd(d); const [yy,m
 function weekKeysChicago(d: Date): string[] { const start = mondayOfChicago(d); return Array.from({length:7},(_,i)=>{const x=new Date(start); x.setDate(x.getDate()+i); return chicagoYmd(x);}); }
 function startOfDay(d: Date) { const x = new Date(d); x.setHours(0,0,0,0); return x; }
 function saturdayOf(d: Date) { const x = startOfDay(d); const dow = x.getDay(); const delta = (dow - 6 + 7) % 7; x.setDate(x.getDate() - delta); return x; }
+/**
+ * Calendar date of a local Date, in local terms.
+ *
+ * The selected week is built from local Date arithmetic and read back with
+ * `new Date(year, month, day)`, so it has to be written the same way. It used
+ * to be stored with `ymd()`, which formats in America/Chicago: for any browser
+ * running ahead of Chicago that rendered the previous day, so each visit
+ * restored a date one day earlier, `saturdayOf` snapped it back another week,
+ * and the planner walked steadily into the past - taking the week's plan out
+ * of view with it.
+ */
+function localYmd(d: Date): string {
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+}
+/** Restore a saved week only when it is not already behind us. */
+function restorableWeek(stored: string): Date | null {
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(stored)) return null;
+  const [y, m, da] = stored.split('-').map(x => parseInt(x, 10));
+  const candidate = saturdayOf(new Date(y, m - 1, da));
+  return candidate >= saturdayOf(new Date()) ? candidate : null;
+}
 function ymd(d: Date) { return chicagoYmd(d); }
 function dayLabel(d: Date) { return d.toLocaleDateString(undefined, { weekday: 'short', month: 'short', day: 'numeric' }); }
 function endOfDayIso(ymdStr: string) { const [y,m,da]=ymdStr.split('-').map(n=>parseInt(n,10)); const x=new Date(y,(m as number)-1,da,23,59,59,999); return x.toISOString(); }
@@ -115,15 +136,16 @@ function estimateMinutesFor(item: BacklogItem): { minutes: number; guessed: bool
 export default function WeekPlanPage() {
   const [sortBy, setSortBy] = useState<'due'|'course'|'priority'|'estimate'>('due');
   const [sortDir, setSortDir] = useState<'asc'|'desc'>('asc');
+  // Read on the client only. Deriving this during render made the server and
+  // the browser disagree about which week to show, so hydration failed and
+  // React re-rendered the whole document - which is why the planner could come
+  // back showing a different week than the one the blocks were placed in.
+  const [mounted, setMounted] = useState(false);
   const [weekStart, setWeekStart] = useState<Date>(() => {
     if (typeof window === 'undefined') return saturdayOf(new Date());
     try {
-      const s = window.localStorage.getItem(LS_WEEK_START);
-      if (s) {
-        const [y,m,da] = s.split('-').map(x=>parseInt(x,10));
-        const dt = new Date(y,(m as number)-1,da);
-        return saturdayOf(dt);
-      }
+      const stored = window.localStorage.getItem(LS_WEEK_START);
+      if (stored) return restorableWeek(stored) || saturdayOf(new Date());
     } catch {}
     return saturdayOf(new Date());
   });
@@ -152,6 +174,8 @@ export default function WeekPlanPage() {
   // is a cache that only wins when it holds edits the server has not confirmed
   // yet (tracked by the dirty flag). Blindly re-pushing localStorage on every
   // load is what used to bring deleted and moved blocks back.
+  useEffect(() => { setMounted(true); }, []);
+
   useEffect(() => {
     setBacklog(loadBacklog());
     // Load windows and breaks from localStorage
@@ -179,9 +203,9 @@ export default function WeekPlanPage() {
           if (Array.isArray(settings.weeklyGoalsV1)) setGoals(settings.weeklyGoalsV1 as any[]);
           if (typeof settings.weekPlanTwoWeeksOnly === 'boolean') setTwoWeeksOnly(settings.weekPlanTwoWeeksOnly as boolean);
           const wk = settings.weekPlanWeekStartYmd;
-          if (typeof wk === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(wk)) {
-            const [y,m,da] = wk.split('-').map(x=>parseInt(x,10));
-            setWeekStart(saturdayOf(new Date(y,(m as number)-1,da)));
+          if (typeof wk === 'string') {
+            const restored = restorableWeek(wk);
+            if (restored) setWeekStart(restored);
           }
           // Load windows and breaks from server settings
           const readLocalJson = (key: string) => { try { if (typeof window!=='undefined') { const raw = window.localStorage.getItem(key); return raw?JSON.parse(raw):null; } } catch {} return null; };
@@ -302,7 +326,11 @@ export default function WeekPlanPage() {
     };
   }, [saveBlocksNow]);
   
-  useEffect(() => { try { if (typeof window !== 'undefined') window.localStorage.setItem(LS_WEEK_START, ymd(weekStart)); } catch {} try { void apiFetch('/api/settings', { method: 'PATCH', body: { weekPlanWeekStartYmd: ymd(weekStart) } }); } catch {} }, [weekStart]);
+  useEffect(() => {
+    const stored = localYmd(weekStart);
+    try { if (typeof window !== 'undefined') window.localStorage.setItem(LS_WEEK_START, stored); } catch {}
+    try { void apiFetch('/api/settings', { method: 'PATCH', body: { weekPlanWeekStartYmd: stored } }); } catch {}
+  }, [weekStart]);
   useEffect(() => { try { void apiFetch('/api/settings', { method: 'PATCH', body: { availabilityTemplateV1: availability } }); } catch {} }, [availability]);
   useEffect(() => { try { void apiFetch('/api/settings', { method: 'PATCH', body: { weeklyGoalsV1: goals } }); } catch {} }, [goals]);
   // Persist windows and breaks
@@ -788,6 +816,19 @@ function shiftWeek(delta: number) {
   }
 
   const noTasksToPlan = unscheduledSorted.length === 0;
+
+  // The planner is entirely driven by browser state (the stored week, the
+  // availability template, the cached schedule). Rendering it on the server
+  // would produce markup the client immediately disagrees with.
+  if (!mounted) {
+    return (
+      <main className="flex flex-col space-y-6">
+        <section className="card p-6">
+          <div className="text-sm opacity-60">Loading your week…</div>
+        </section>
+      </main>
+    );
+  }
 
   return (
     <main className="flex flex-col space-y-6">
