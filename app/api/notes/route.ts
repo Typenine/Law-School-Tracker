@@ -34,6 +34,7 @@ const noteSchema = z.object({
   topics: z.array(z.string().trim().max(100)).max(50).optional(),
   pinned: z.boolean().optional(),
   content: z.string().max(MAX_TEXT_CHARS).optional(),
+  contentHtml: z.string().max(MAX_TEXT_CHARS * 2).optional(),
 });
 
 function parseTopics(value: unknown): string[] {

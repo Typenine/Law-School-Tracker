@@ -15,7 +15,9 @@ export async function GET(
   try {
     const note = await getAiNote(params.id);
     if (!note) return noStoreJson({ error: 'Note not found.' }, { status: 404 });
-    return noStoreJson({ note });
+    // The GPT reads prose, not editor markup.
+    const { contentHtml, ...readable } = note;
+    return noStoreJson({ note: readable });
   } catch (error) {
     return noStoreJson(
       { error: error instanceof Error ? error.message : 'Unable to load note.' },

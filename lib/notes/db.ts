@@ -1,5 +1,5 @@
 import { Pool } from 'pg';
-import type { AiNoteSummary, NoteFilters, NoteNotebook, NoteSourceType } from './types';
+import type { AiNoteSummary, NoteFilters, NoteNotebook, NoteSection, NoteSourceType } from './types';
 
 function databaseUrl(): string | null {
   const direct = process.env.DATABASE_URL
@@ -62,6 +62,26 @@ export async function ensureNotesSchema(): Promise<void> {
   await db.query(`ALTER TABLE ai_notes ADD COLUMN IF NOT EXISTS section TEXT NOT NULL DEFAULT 'Notes'`);
   await db.query(`ALTER TABLE ai_notes ADD COLUMN IF NOT EXISTS pinned BOOLEAN NOT NULL DEFAULT FALSE`);
   await db.query(`ALTER TABLE ai_notes ADD COLUMN IF NOT EXISTS archived BOOLEAN NOT NULL DEFAULT FALSE`);
+  // Rich text for the editor. `content` stays plain text so search, previews
+  // and the GPT endpoints keep working unchanged.
+  await db.query(`ALTER TABLE ai_notes ADD COLUMN IF NOT EXISTS content_html TEXT`);
+  await db.query(`ALTER TABLE ai_notes ADD COLUMN IF NOT EXISTS position INTEGER NOT NULL DEFAULT 0`);
+  await db.query(`ALTER TABLE ai_note_notebooks ADD COLUMN IF NOT EXISTS position INTEGER NOT NULL DEFAULT 0`);
+  await db.query(`
+    CREATE TABLE IF NOT EXISTS ai_note_sections (
+      id TEXT PRIMARY KEY,
+      notebook_id TEXT NOT NULL,
+      name TEXT NOT NULL,
+      color TEXT,
+      position INTEGER NOT NULL DEFAULT 0,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    )
+  `);
+  await db.query(`
+    CREATE UNIQUE INDEX IF NOT EXISTS ai_note_sections_unique_idx
+    ON ai_note_sections (notebook_id, LOWER(name))
+  `);
   await db.query(`CREATE INDEX IF NOT EXISTS ai_notes_course_idx ON ai_notes (LOWER(course))`);
   await db.query(`CREATE INDEX IF NOT EXISTS ai_notes_notebook_idx ON ai_notes (notebook_id)`);
   await db.query(`CREATE INDEX IF NOT EXISTS ai_notes_section_idx ON ai_notes (notebook_id, LOWER(section))`);
@@ -86,6 +106,10 @@ export async function ensureNotesSchema(): Promise<void> {
       NULLIF(TRIM(source.semester), '')
     FROM ai_notes source
     WHERE NULLIF(TRIM(source.course), '') IS NOT NULL
+      -- Only pages that predate notebooks. Without this, every page filed in a
+      -- real notebook also minted a duplicate "legacy" notebook for its course
+      -- on each schema check.
+      AND source.notebook_id IS NULL
     ON CONFLICT (id) DO NOTHING
   `);
   await db.query(`
@@ -98,6 +122,154 @@ export async function ensureNotesSchema(): Promise<void> {
       AND COALESCE(LOWER(notebook.semester), '') =
           COALESCE(LOWER(NULLIF(TRIM(note.semester), '')), '')
   `);
+
+  // Promote the section names already stored on pages into real section rows
+  // so they can be ordered, recoloured and renamed like OneNote tabs.
+  await db.query(`
+    INSERT INTO ai_note_sections (id, notebook_id, name)
+    SELECT DISTINCT ON (note.notebook_id, LOWER(TRIM(note.section)))
+      'section-' || md5(note.notebook_id || '|' || LOWER(TRIM(note.section))),
+      note.notebook_id,
+      TRIM(note.section)
+    FROM ai_notes note
+    WHERE note.notebook_id IS NOT NULL
+      AND NULLIF(TRIM(note.section), '') IS NOT NULL
+    ON CONFLICT DO NOTHING
+  `);
+  // Every notebook gets at least one tab to write on.
+  await db.query(`
+    INSERT INTO ai_note_sections (id, notebook_id, name)
+    SELECT 'section-' || md5(notebook.id || '|notes'), notebook.id, 'Notes'
+    FROM ai_note_notebooks notebook
+    WHERE NOT EXISTS (
+      SELECT 1 FROM ai_note_sections section WHERE section.notebook_id = notebook.id
+    )
+    ON CONFLICT DO NOTHING
+  `);
+}
+
+const HTML_ENTITIES: Record<string, string> = {
+  '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;',
+};
+
+export function escapeHtml(value: string): string {
+  return value.replace(/[&<>"']/g, char => HTML_ENTITIES[char] || char);
+}
+
+/**
+ * Reduce editor HTML to readable plain text. Block boundaries become newlines
+ * and to-do items keep a visible checkbox so the exported/searched text still
+ * reads the way the page looks.
+ */
+export function htmlToPlainText(html: string): string {
+  if (!html) return '';
+  return html
+    .replace(/<style[\s\S]*?<\/style>/gi, '')
+    .replace(/<script[\s\S]*?<\/script>/gi, '')
+    .replace(/<li([^>]*)data-checked="true"([^>]*)>/gi, '\n[x] ')
+    .replace(/<li([^>]*)class="[^"]*nb-todo[^"]*"([^>]*)>/gi, '\n[ ] ')
+    .replace(/<li[^>]*>/gi, '\n• ')
+    .replace(/<br\s*\/?>/gi, '\n')
+    .replace(/<\/(p|div|h1|h2|h3|h4|li|tr|blockquote|pre)>/gi, '\n')
+    .replace(/<hr\s*\/?>/gi, '\n---\n')
+    .replace(/<[^>]+>/g, '')
+    .replace(/&nbsp;/gi, ' ')
+    .replace(/&amp;/gi, '&')
+    .replace(/&lt;/gi, '<')
+    .replace(/&gt;/gi, '>')
+    .replace(/&quot;/gi, '"')
+    .replace(/&#39;/gi, "'")
+    .replace(/\n{3,}/g, '\n\n')
+    .trim();
+}
+
+/**
+ * Turn stored plain text into editor HTML. Used once per legacy page: notes
+ * written before the rich editor existed are markdown-ish, so headings, list
+ * markers and checkboxes are recognised rather than shown as literal syntax.
+ */
+export function plainTextToHtml(text: string): string {
+  if (!text || !text.trim()) return '<p><br></p>';
+  const lines = text.replace(/\r\n?/g, '\n').split('\n');
+  const out: string[] = [];
+  let listType: 'ul' | 'ol' | null = null;
+
+  const closeList = () => {
+    if (listType) { out.push(`</${listType}>`); listType = null; }
+  };
+  const openList = (type: 'ul' | 'ol', className = '') => {
+    if (listType !== type) {
+      closeList();
+      out.push(`<${type}${className ? ` class="${className}"` : ''}>`);
+      listType = type;
+    }
+  };
+
+  const inline = (value: string) => escapeHtml(value)
+    .replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>')
+    .replace(/(^|[^\w*])\*([^*\n]+)\*(?!\w)/g, '$1<em>$2</em>')
+    .replace(/(^|[^\w_])_([^_\n]+)_(?!\w)/g, '$1<em>$2</em>')
+    .replace(/`([^`]+)`/g, '<code>$1</code>');
+
+  for (const raw of lines) {
+    const line = raw.trimEnd();
+    if (!line.trim()) { closeList(); continue; }
+
+    const todo = /^\s*(?:[-*]\s*)?\[( |x|X)\]\s+(.*)$/.exec(line);
+    if (todo) {
+      openList('ul', 'nb-todo-list');
+      out.push(`<li class="nb-todo" data-checked="${todo[1].toLowerCase() === 'x'}">${inline(todo[2])}</li>`);
+      continue;
+    }
+    const heading = /^(#{1,4})\s+(.*)$/.exec(line);
+    if (heading) {
+      closeList();
+      const level = Math.min(4, Math.max(1, heading[1].length));
+      out.push(`<h${level}>${inline(heading[2])}</h${level}>`);
+      continue;
+    }
+    const bullet = /^\s*[-*•]\s+(.*)$/.exec(line);
+    if (bullet) {
+      openList('ul');
+      out.push(`<li>${inline(bullet[1])}</li>`);
+      continue;
+    }
+    const numbered = /^\s*\d+[.)]\s+(.*)$/.exec(line);
+    if (numbered) {
+      openList('ol');
+      out.push(`<li>${inline(numbered[1])}</li>`);
+      continue;
+    }
+    const quote = /^\s*>\s?(.*)$/.exec(line);
+    if (quote) {
+      closeList();
+      out.push(`<blockquote>${inline(quote[1])}</blockquote>`);
+      continue;
+    }
+    if (/^\s*(-{3,}|\*{3,})\s*$/.test(line)) { closeList(); out.push('<hr>'); continue; }
+    closeList();
+    out.push(`<p>${inline(line)}</p>`);
+  }
+  closeList();
+  return out.join('') || '<p><br></p>';
+}
+
+/**
+ * Strip anything that should never round-trip through the editor. This is a
+ * single-user private workspace, but pasted content can still carry scripts,
+ * event handlers and remote resources.
+ */
+export function sanitizeNoteHtml(html: string): string {
+  if (!html) return '<p><br></p>';
+  const cleaned = html
+    .replace(/<\s*(script|style|iframe|object|embed|form|input|link|meta)\b[\s\S]*?<\s*\/\s*\1\s*>/gi, '')
+    .replace(/<\s*(script|style|iframe|object|embed|form|input|link|meta)\b[^>]*\/?\s*>/gi, '')
+    .replace(/\son\w+\s*=\s*"[^"]*"/gi, '')
+    .replace(/\son\w+\s*=\s*'[^']*'/gi, '')
+    .replace(/\son\w+\s*=\s*[^\s>]+/gi, '')
+    .replace(/javascript:/gi, '')
+    .trim();
+  return cleaned || '<p><br></p>';
 }
 
 export function cleanText(value: string | null | undefined): string | null {
@@ -138,6 +310,7 @@ export function toNoteSummary(row: any): AiNoteSummary {
     course: row.course ?? null,
     semester: row.semester ?? null,
     section: row.section || 'Notes',
+    position: Number(row.position) || 0,
     classDate: row.class_date ? iso(row.class_date).slice(0, 10) : null,
     sourceType: row.source_type as NoteSourceType,
     topics: Array.isArray(row.topics) ? row.topics : [],
@@ -160,8 +333,22 @@ export function toNotebook(row: any): NoteNotebook {
     semester: row.semester ?? null,
     color: row.color ?? null,
     archived: Boolean(row.archived),
+    position: Number(row.position) || 0,
     noteCount: Number(row.note_count) || 0,
     sections: Array.isArray(row.sections) ? row.sections.filter(Boolean) : [],
+    createdAt: iso(row.created_at),
+    updatedAt: iso(row.updated_at),
+  };
+}
+
+export function toSection(row: any): NoteSection {
+  return {
+    id: row.id,
+    notebookId: row.notebook_id,
+    name: row.name,
+    color: row.color ?? null,
+    position: Number(row.position) || 0,
+    pageCount: Number(row.page_count) || 0,
     createdAt: iso(row.created_at),
     updatedAt: iso(row.updated_at),
   };

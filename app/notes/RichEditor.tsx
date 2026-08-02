@@ -1,0 +1,296 @@
+'use client';
+
+import { useCallback, useEffect, useRef, useState } from 'react';
+
+type Props = {
+  /** Changing this reloads the canvas; it is the only time we write innerHTML. */
+  pageId: string;
+  initialHtml: string;
+  onChange: (html: string) => void;
+  onSaveNow: () => void;
+};
+
+const HIGHLIGHTS = [
+  ['#fff3a3', 'Yellow'],
+  ['#bdf0c8', 'Green'],
+  ['#bcdcff', 'Blue'],
+  ['#ffc9dd', 'Pink'],
+] as const;
+
+const TEXT_COLORS = [
+  ['#e8eef7', 'Default'],
+  ['#ffd34d', 'Amber'],
+  ['#7fc0ff', 'Blue'],
+  ['#7fdca4', 'Green'],
+  ['#ff9a8a', 'Red'],
+] as const;
+
+/**
+ * OneNote-style canvas. The editor is deliberately uncontrolled: React writes
+ * the HTML only when the page changes, and every keystroke after that is owned
+ * by the DOM. Re-rendering the markup on each change would reset the caret to
+ * the top of the page on every character.
+ */
+export default function RichEditor({ pageId, initialHtml, onChange, onSaveNow }: Props) {
+  const editorRef = useRef<HTMLDivElement | null>(null);
+  const [blockStyle, setBlockStyle] = useState('p');
+  const [openMenu, setOpenMenu] = useState<'highlight' | 'color' | null>(null);
+
+  useEffect(() => {
+    const editor = editorRef.current;
+    if (!editor) return;
+    editor.innerHTML = initialHtml || '<p><br></p>';
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [pageId]);
+
+  useEffect(() => {
+    function closeMenus() { setOpenMenu(null); }
+    document.addEventListener('click', closeMenus);
+    return () => document.removeEventListener('click', closeMenus);
+  }, []);
+
+  const emit = useCallback(() => {
+    const editor = editorRef.current;
+    if (editor) onChange(editor.innerHTML);
+  }, [onChange]);
+
+  const run = useCallback((command: string, value?: string) => {
+    const editor = editorRef.current;
+    if (!editor) return;
+    editor.focus();
+    try {
+      document.execCommand('styleWithCSS', false, 'true');
+      document.execCommand(command, false, value);
+    } catch {}
+    emit();
+  }, [emit]);
+
+  const currentBlock = useCallback((): HTMLElement | null => {
+    const selection = window.getSelection();
+    if (!selection || !selection.anchorNode) return null;
+    let node: Node | null = selection.anchorNode;
+    while (node && node !== editorRef.current) {
+      if (node.nodeType === 1 && /^(P|DIV|H1|H2|H3|H4|LI|BLOCKQUOTE|PRE)$/.test((node as HTMLElement).tagName)) {
+        return node as HTMLElement;
+      }
+      node = node.parentNode;
+    }
+    return null;
+  }, []);
+
+  /** Turn the current block into a to-do item, or back into a paragraph. */
+  const toggleTodo = useCallback(() => {
+    const editor = editorRef.current;
+    if (!editor) return;
+    editor.focus();
+    const block = currentBlock();
+    const listItem = block?.tagName === 'LI' ? block : null;
+
+    if (listItem?.classList.contains('nb-todo')) {
+      listItem.classList.remove('nb-todo');
+      listItem.removeAttribute('data-checked');
+      const list = listItem.parentElement;
+      if (list && !list.querySelector('.nb-todo')) list.classList.remove('nb-todo-list');
+      emit();
+      return;
+    }
+    if (listItem) {
+      listItem.classList.add('nb-todo');
+      listItem.setAttribute('data-checked', 'false');
+      listItem.parentElement?.classList.add('nb-todo-list');
+      emit();
+      return;
+    }
+    // Not in a list yet: make one, then tag the item.
+    try {
+      document.execCommand('insertUnorderedList');
+    } catch {}
+    const created = currentBlock();
+    if (created?.tagName === 'LI') {
+      created.classList.add('nb-todo');
+      created.setAttribute('data-checked', 'false');
+      created.parentElement?.classList.add('nb-todo-list');
+    }
+    emit();
+  }, [currentBlock, emit]);
+
+  function handleClick(event: React.MouseEvent<HTMLDivElement>) {
+    const target = event.target as HTMLElement;
+    const item = target.closest('li.nb-todo') as HTMLElement | null;
+    if (!item) return;
+    // The checkbox is a ::before box in the item's left gutter.
+    const bounds = item.getBoundingClientRect();
+    if (event.clientX - bounds.left > 24) return;
+    event.preventDefault();
+    item.setAttribute('data-checked', item.getAttribute('data-checked') === 'true' ? 'false' : 'true');
+    emit();
+  }
+
+  function handleKeyDown(event: React.KeyboardEvent<HTMLDivElement>) {
+    const meta = event.metaKey || event.ctrlKey;
+    if (!meta) return;
+    const key = event.key.toLowerCase();
+    if (key === 's') { event.preventDefault(); onSaveNow(); return; }
+    if (key === '1' && event.shiftKey) { event.preventDefault(); run('formatBlock', '<h1>'); return; }
+    if (key === '2' && event.shiftKey) { event.preventDefault(); run('formatBlock', '<h2>'); return; }
+    if (key === '3' && event.shiftKey) { event.preventDefault(); run('formatBlock', '<h3>'); return; }
+    if (key === '1' && !event.shiftKey) { event.preventDefault(); toggleTodo(); return; }
+    // Bold / italic / underline are handled natively by contenteditable.
+  }
+
+  /** Paste as plain text so pasted PDFs and web pages do not import their CSS. */
+  function handlePaste(event: React.ClipboardEvent<HTMLDivElement>) {
+    const text = event.clipboardData.getData('text/plain');
+    if (!text) return;
+    event.preventDefault();
+    document.execCommand('insertText', false, text);
+    emit();
+  }
+
+  function applyBlockStyle(value: string) {
+    setBlockStyle(value);
+    run('formatBlock', `<${value}>`);
+  }
+
+  const Button = ({ title, onClick, children, active }: {
+    title: string; onClick: () => void; children: React.ReactNode; active?: boolean;
+  }) => (
+    <button
+      type="button"
+      title={title}
+      aria-label={title}
+      className={`nb-tool${active ? ' is-active' : ''}`}
+      onMouseDown={event => event.preventDefault()}
+      onClick={onClick}
+    >
+      {children}
+    </button>
+  );
+
+  return (
+    <div className="nb-editor-wrap">
+      <div className="nb-ribbon" onClick={event => event.stopPropagation()}>
+        <div className="nb-ribbon-group">
+          <Button title="Undo (Ctrl+Z)" onClick={() => run('undo')}>↺</Button>
+          <Button title="Redo (Ctrl+Y)" onClick={() => run('redo')}>↻</Button>
+        </div>
+
+        <div className="nb-ribbon-group">
+          <select
+            className="nb-style-select"
+            value={blockStyle}
+            onChange={event => applyBlockStyle(event.target.value)}
+            title="Paragraph style"
+          >
+            <option value="p">Normal</option>
+            <option value="h1">Heading 1</option>
+            <option value="h2">Heading 2</option>
+            <option value="h3">Heading 3</option>
+            <option value="h4">Heading 4</option>
+          </select>
+        </div>
+
+        <div className="nb-ribbon-group">
+          <Button title="Bold (Ctrl+B)" onClick={() => run('bold')}><b>B</b></Button>
+          <Button title="Italic (Ctrl+I)" onClick={() => run('italic')}><i>I</i></Button>
+          <Button title="Underline (Ctrl+U)" onClick={() => run('underline')}><u>U</u></Button>
+          <Button title="Strikethrough" onClick={() => run('strikeThrough')}><s>S</s></Button>
+        </div>
+
+        <div className="nb-ribbon-group">
+          <div className="nb-menu-anchor">
+            <Button
+              title="Highlight"
+              onClick={() => setOpenMenu(openMenu === 'highlight' ? null : 'highlight')}
+            >
+              <span className="nb-swatch-icon" style={{ background: '#fff3a3' }} />
+            </Button>
+            {openMenu === 'highlight' && (
+              <div className="nb-menu">
+                {HIGHLIGHTS.map(([value, label]) => (
+                  <button
+                    key={value}
+                    type="button"
+                    className="nb-menu-row"
+                    onMouseDown={event => event.preventDefault()}
+                    onClick={() => { run('hiliteColor', value); setOpenMenu(null); }}
+                  >
+                    <span className="nb-swatch" style={{ background: value }} />{label}
+                  </button>
+                ))}
+                <button
+                  type="button"
+                  className="nb-menu-row"
+                  onMouseDown={event => event.preventDefault()}
+                  onClick={() => { run('hiliteColor', 'transparent'); setOpenMenu(null); }}
+                >
+                  <span className="nb-swatch nb-swatch-none" />No highlight
+                </button>
+              </div>
+            )}
+          </div>
+
+          <div className="nb-menu-anchor">
+            <Button title="Text colour" onClick={() => setOpenMenu(openMenu === 'color' ? null : 'color')}>
+              <span className="nb-color-icon">A</span>
+            </Button>
+            {openMenu === 'color' && (
+              <div className="nb-menu">
+                {TEXT_COLORS.map(([value, label]) => (
+                  <button
+                    key={value}
+                    type="button"
+                    className="nb-menu-row"
+                    onMouseDown={event => event.preventDefault()}
+                    onClick={() => { run('foreColor', value); setOpenMenu(null); }}
+                  >
+                    <span className="nb-swatch" style={{ background: value }} />{label}
+                  </button>
+                ))}
+              </div>
+            )}
+          </div>
+        </div>
+
+        <div className="nb-ribbon-group">
+          <Button title="To-do tag (Ctrl+1)" onClick={toggleTodo}>☑</Button>
+          <Button title="Bulleted list" onClick={() => run('insertUnorderedList')}>•</Button>
+          <Button title="Numbered list" onClick={() => run('insertOrderedList')}>1.</Button>
+          <Button title="Decrease indent" onClick={() => run('outdent')}>⇤</Button>
+          <Button title="Increase indent" onClick={() => run('indent')}>⇥</Button>
+        </div>
+
+        <div className="nb-ribbon-group">
+          <Button title="Quote" onClick={() => run('formatBlock', '<blockquote>')}>❝</Button>
+          <Button title="Divider" onClick={() => run('insertHorizontalRule')}>—</Button>
+          <Button
+            title="Link"
+            onClick={() => {
+              const url = window.prompt('Link address');
+              if (url) run('createLink', url);
+            }}
+          >
+            🔗
+          </Button>
+          <Button title="Clear formatting" onClick={() => run('removeFormat')}>⌫</Button>
+        </div>
+      </div>
+
+      <div
+        ref={editorRef}
+        className="nb-canvas"
+        contentEditable
+        suppressContentEditableWarning
+        spellCheck
+        role="textbox"
+        aria-multiline="true"
+        aria-label="Page content"
+        onInput={emit}
+        onBlur={emit}
+        onClick={handleClick}
+        onKeyDown={handleKeyDown}
+        onPaste={handlePaste}
+      />
+    </div>
+  );
+}

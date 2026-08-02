@@ -9,6 +9,7 @@ import { notifyTasksChanged, onTasksChanged } from "@/lib/taskBus";
 import { notifySessionsChanged } from "@/lib/sessionsBus";
 import { notifyScheduleChanged, onScheduleChanged } from "@/lib/scheduleBus";
 import { clearScheduleDirty, markScheduleDirty, writeLocalSchedule } from "@/lib/useSchedule";
+import { setPageSubtitle } from "@/lib/chromeBus";
 
 type PlanItem = { id: string; title: string; course: string; minutes: number; guessed?: boolean };
 type TodayPlan = { dateKey: string; locked?: boolean; items: PlanItem[] };
@@ -394,32 +395,12 @@ export default function TodayPage() {
     };
   }, [courses, events, today]);
 
-  const weekCount = useMemo(() => {
-    const start = startOfWeekYmd(today);
-    const end = addDays(start, 6);
-    return tasks.filter(task => task.status === "todo" && chicagoYmd(task.dueDate) >= start && chicagoYmd(task.dueDate) <= end).length;
-  }, [tasks, today]);
-
+  // Publish the day's summary to the app header. Writing into the header's DOM
+  // directly used to fight React's own rendering of the shell.
   useEffect(() => {
-    const subtitle = document.getElementById("page-sub");
-    if (subtitle) subtitle.textContent = `${dateHeading} · ${compactMinutes(plannedToday)} planned, ${compactMinutes(leftToday)} left`;
-
-    const ensureCount = (href: string, value: number) => {
-      const link = document.querySelector<HTMLAnchorElement>(`.lst-nav[href="${href}"]`);
-      if (!link) return;
-      let count = link.querySelector<HTMLElement>(".lst-count");
-      if (!count) {
-        count = document.createElement("span");
-        count.className = "lst-count";
-        link.appendChild(count);
-      }
-      count.textContent = String(value);
-    };
-    ensureCount("/", plannedTasks.length);
-    ensureCount("/week-plan", weekCount);
-    ensureCount("/tasks", tasks.filter(task => task.status === "todo").length);
-    ensureCount("/courses", courses.length);
-  }, [courses.length, dateHeading, leftToday, plannedTasks.length, plannedToday, tasks, weekCount]);
+    setPageSubtitle(`${dateHeading} · ${compactMinutes(plannedToday)} planned, ${compactMinutes(leftToday)} left`);
+    return () => setPageSubtitle(null);
+  }, [dateHeading, leftToday, plannedToday]);
 
   function elapsedMs(taskId: string): number {
     void timerTick;

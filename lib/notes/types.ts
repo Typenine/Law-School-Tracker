@@ -13,8 +13,22 @@ export interface NoteNotebook {
   semester: string | null;
   color: string | null;
   archived: boolean;
+  position: number;
   noteCount: number;
+  /** Section names, kept for callers that only need labels. */
   sections: string[];
+  createdAt: string;
+  updatedAt: string;
+}
+
+/** A section tab inside a notebook. */
+export interface NoteSection {
+  id: string;
+  notebookId: string;
+  name: string;
+  color: string | null;
+  position: number;
+  pageCount: number;
   createdAt: string;
   updatedAt: string;
 }
@@ -27,6 +41,7 @@ export interface AiNoteSummary {
   course: string | null;
   semester: string | null;
   section: string;
+  position: number;
   classDate: string | null;
   sourceType: NoteSourceType;
   topics: string[];
@@ -41,7 +56,10 @@ export interface AiNoteSummary {
 }
 
 export interface AiNote extends AiNoteSummary {
+  /** Plain text, used for search, previews and the GPT endpoints. */
   content: string;
+  /** Rich text shown in the editor. */
+  contentHtml: string;
 }
 
 export interface AiNoteSearchResult extends AiNoteSummary {

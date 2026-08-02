@@ -32,6 +32,8 @@ const updateSchema = z.object({
   pinned: z.boolean().optional(),
   archived: z.boolean().optional(),
   content: z.string().max(2_000_000).optional(),
+  contentHtml: z.string().max(4_000_000).optional(),
+  position: z.number().int().min(0).max(10_000).optional(),
 });
 
 export async function GET(
