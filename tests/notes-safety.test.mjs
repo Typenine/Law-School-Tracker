@@ -318,6 +318,43 @@ describe('what survives a restart', () => {
     assert.ok(!after.some(s => s.name === 'Week 2'));
   });
 
+  it('still opens when the schema lock is held by a connection that is gone', async () => {
+    const book = await notebook();
+    await section(book.id, 'Week 1');
+
+    // A deploy kills instances mid-migration, and an advisory lock lives until
+    // its connection actually closes. `pg_advisory_lock` waits forever, so one
+    // unlucky restart used to leave every later instance queued behind a lock
+    // whose owner would never come back - a spinner that never resolved.
+    const squatter = await app.db.connect();
+    try {
+      await squatter.query('SELECT pg_advisory_lock(4021977)');
+
+      await app.restart();
+      const started = Date.now();
+      const response = await app.api('GET', '/api/notes/notebooks');
+      const took = Date.now() - started;
+
+      assert.equal(response.status, 200, 'the page can still load its notebooks');
+      assert.ok(response.body.notebooks.some(n => n.id === book.id));
+      assert.ok(took < 30_000, `gave up waiting rather than blocking (took ${took}ms)`);
+    } finally {
+      await squatter.query('SELECT pg_advisory_unlock(4021977)').catch(() => {});
+      squatter.release();
+    }
+  });
+
+  it('hands the schema connection back without its timeouts', async () => {
+    // Those SETs are session-scoped and the connection is pooled, so leaving
+    // them on would quietly apply a statement timeout to everything else.
+    await app.api('GET', '/api/notes/notebooks');
+    const { rows } = await app.db.query(
+      `SELECT current_setting('statement_timeout') AS statement, current_setting('lock_timeout') AS lock`,
+    );
+    assert.equal(rows[0].statement, '0', 'no statement timeout left behind');
+    assert.equal(rows[0].lock, '0', 'no lock timeout left behind');
+  });
+
   it('clears out the tabs the old resurrection bug left behind', async () => {
     const book = await notebook();
     const briefs = await section(book.id, 'Case briefs');

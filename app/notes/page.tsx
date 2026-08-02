@@ -245,15 +245,15 @@ export default function NotesPage() {
 
   // ---------------------------------------------------------------- loading
 
-  const loadNotebooks = useCallback(async (): Promise<Notebook[]> => {
-    const data = await api('/api/notes/notebooks');
+  const loadNotebooks = useCallback(async (signal?: AbortSignal): Promise<Notebook[]> => {
+    const data = await api('/api/notes/notebooks', signal ? { signal } : {});
     const next = Array.isArray(data?.notebooks) ? (data.notebooks as Notebook[]) : [];
     setNotebooks(next);
     return next;
   }, []);
 
-  const loadSections = useCallback(async (): Promise<Section[]> => {
-    const data = await api('/api/notes/sections');
+  const loadSections = useCallback(async (signal?: AbortSignal): Promise<Section[]> => {
+    const data = await api('/api/notes/sections', signal ? { signal } : {});
     const next = Array.isArray(data?.sections) ? (data.sections as Section[]) : [];
     setSections(next);
     return next;
@@ -418,18 +418,32 @@ export default function NotesPage() {
   // ------------------------------------------------------------------- boot
 
   useEffect(() => {
+    // A request that never answers used to leave this screen up for good, with
+    // nothing said and nothing to click. Boot gives up after a while and shows
+    // what happened instead of spinning.
+    const controller = new AbortController();
+    const giveUp = window.setTimeout(() => controller.abort(), 20_000);
+
     (async () => {
       try {
-        const [loadedNotebooks] = await Promise.all([loadNotebooks(), loadSections()]);
+        const [loadedNotebooks] = await Promise.all([
+          loadNotebooks(controller.signal),
+          loadSections(controller.signal),
+        ]);
         const remembered = window.localStorage.getItem('notesLastNotebook') || '';
         const first = loadedNotebooks.find(item => item.id === remembered) || loadedNotebooks[0];
         if (first) setNotebookId(first.id);
       } catch (err) {
-        setError(err instanceof Error ? err.message : 'Unable to load your notebooks.');
+        setError(controller.signal.aborted
+          ? 'The server did not answer. Your notes are safe — this is only the page failing to load them.'
+          : err instanceof Error ? err.message : 'Unable to load your notebooks.');
       } finally {
+        window.clearTimeout(giveUp);
         setBooted(true);
       }
     })();
+
+    return () => { window.clearTimeout(giveUp); controller.abort(); };
   }, [loadNotebooks, loadSections]);
 
   // Pick a section whenever the notebook changes, preferring the tab that was
@@ -1128,6 +1142,26 @@ export default function NotesPage() {
 
   if (!booted) {
     return <main className="nb-boot">Opening your notebooks…<NotesStyles /></main>;
+  }
+
+  // Boot finished but nothing loaded and something went wrong: say so, and
+  // offer the one thing that helps, rather than showing an empty workspace
+  // that invites the user to start again over the top of existing notes.
+  if (!notebooks.length && error) {
+    return (
+      <main className="nb-empty-state">
+        <h2>Your notes could not be loaded</h2>
+        <p>{error}</p>
+        <p className="nb-boot-hint">
+          Nothing has been lost — this is the page failing to reach the server, not the notes
+          themselves. If a reload does not help, the deployment may still be starting up.
+        </p>
+        <button type="button" className="nb-primary" onClick={() => window.location.reload()}>
+          Try again
+        </button>
+        <NotesStyles />
+      </main>
+    );
   }
 
   if (!notebooks.length) {

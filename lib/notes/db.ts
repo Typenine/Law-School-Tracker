@@ -81,13 +81,38 @@ async function applyNotesSchema(): Promise<void> {
     }
   };
 
-  // Serialise migrations across instances. Best effort: if the lock cannot be
-  // taken the statements below still tolerate losing the race.
-  let locked = false;
+  // Nothing here may block indefinitely. Schema setup runs before the first
+  // notes request can be answered, and its promise is cached, so a single
+  // statement that never returns takes the whole page down for the life of
+  // the instance - a spinner that never resolves and never recovers.
   try {
-    await client.query('SELECT pg_advisory_lock($1)', [NOTES_SCHEMA_LOCK]);
-    locked = true;
+    await client.query(`SET lock_timeout = '5s'`);
+    await client.query(`SET statement_timeout = '30s'`);
+    await client.query(`SET idle_in_transaction_session_timeout = '30s'`);
   } catch {}
+
+  /**
+   * Serialise migrations across instances - without waiting on a lock that may
+   * never be released.
+   *
+   * `pg_advisory_lock` blocks forever. A deploy kills instances mid-flight, and
+   * a session lock survives until its connection actually closes, so one
+   * unlucky restart could leave every later instance queued behind a lock whose
+   * owner is gone. `pg_try_advisory_lock` returns immediately instead; a few
+   * short retries cover ordinary contention, and giving up is safe because
+   * every statement below already tolerates losing the race to another
+   * instance.
+   */
+  let locked = false;
+  for (let attempt = 0; attempt < 10 && !locked; attempt++) {
+    try {
+      const taken = await client.query('SELECT pg_try_advisory_lock($1) AS ok', [NOTES_SCHEMA_LOCK]);
+      locked = taken.rows[0]?.ok === true;
+    } catch {
+      break;
+    }
+    if (!locked) await new Promise(resolve => setTimeout(resolve, 300));
+  }
 
   try {
   await run(`
@@ -318,6 +343,13 @@ async function applyNotesSchema(): Promise<void> {
   `);
   } finally {
     if (locked) { try { await client.query('SELECT pg_advisory_unlock($1)', [NOTES_SCHEMA_LOCK]); } catch {} }
+    // The timeouts above are session settings, and this connection goes back
+    // into the pool for ordinary queries. Hand it back the way we found it.
+    try {
+      await client.query('RESET lock_timeout');
+      await client.query('RESET statement_timeout');
+      await client.query('RESET idle_in_transaction_session_timeout');
+    } catch {}
     client.release();
   }
 }
