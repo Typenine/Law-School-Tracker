@@ -79,6 +79,16 @@ export function formatUpdated(value: string): string {
   return date.toLocaleDateString(undefined, { month: 'short', day: 'numeric' });
 }
 
+/** How much of the trash retention window a deleted page has left. */
+export function daysLeft(deletedAt: string, retentionDays: number): string {
+  const gone = new Date(deletedAt).getTime();
+  if (Number.isNaN(gone)) return '';
+  const left = Math.ceil((gone + retentionDays * 86_400_000 - Date.now()) / 86_400_000);
+  if (left <= 0) return 'removed shortly';
+  if (left === 1) return 'removed tomorrow';
+  return `removed in ${left} days`;
+}
+
 export function longDate(value: string): string {
   const date = new Date(value);
   if (Number.isNaN(date.getTime())) return '';

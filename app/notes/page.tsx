@@ -13,6 +13,7 @@ import {
   SECTION_COLORS,
   SOURCE_TYPES,
   Section,
+  daysLeft,
   formatUpdated,
   longDate,
   safeFilename,
@@ -81,7 +82,9 @@ export default function NotesPage() {
   const [error, setError] = useState('');
   /** A save that was refused, holding both versions so either can be kept. */
   const [conflict, setConflict] = useState<{ theirs: Page; myHtml: string; myTitle: string } | null>(null);
-  const [setAside, setSetAside] = useState<{ trashed: PageSummary[]; archived: PageSummary[] } | null>(null);
+  const [setAside, setSetAside] = useState<
+    { trashed: PageSummary[]; archived: PageSummary[]; retentionDays: number } | null
+  >(null);
 
   const [notebookModal, setNotebookModal] = useState<NotebookForm | null>(null);
   const [sectionModal, setSectionModal] = useState<SectionForm | null>(null);
@@ -679,11 +682,26 @@ export default function NotesPage() {
       setSetAside({
         trashed: Array.isArray(data?.trashed) ? data.trashed : [],
         archived: Array.isArray(data?.archived) ? data.archived : [],
+        retentionDays: Number(data?.retentionDays) || 30,
       });
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Unable to load set-aside pages.');
     }
   }, []);
+
+  /** Throw out everything in the trash now instead of waiting it out. */
+  async function emptyTrash() {
+    const count = setAside?.trashed.length || 0;
+    if (!count) return;
+    const plural = count === 1 ? 'page' : 'pages';
+    if (!window.confirm(`Delete ${count} ${plural} for good? This cannot be undone.`)) return;
+    try {
+      await api('/api/notes/deleted', { method: 'DELETE' });
+      await loadSetAside();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Unable to empty the trash.');
+    }
+  }
 
   async function restorePage(id: string) {
     try {
@@ -1390,19 +1408,34 @@ export default function NotesPage() {
             <div className="nb-modal-head">
               <div>
                 <h3>Set aside</h3>
-                <p>Pages you deleted or archived. Nothing here is gone until you say so.</p>
+                <p>
+                  Deleted pages wait {setAside.retentionDays} days before they are thrown out.
+                  Archived pages stay until you say otherwise.
+                </p>
               </div>
               <button type="button" onClick={() => setSetAside(null)} aria-label="Close">×</button>
             </div>
             <div className="nb-aside-list">
               {[['In the trash', setAside.trashed, true] as const, ['Archived', setAside.archived, false] as const].map(([label, list, purgeable]) => (
                 <section key={label}>
-                  <div className="nb-aside-head">{label} · {list.length}</div>
+                  <div className="nb-aside-head">
+                    <span>{label} · {list.length}</span>
+                    {purgeable && list.length > 0 && (
+                      <button type="button" className="nb-link-danger" onClick={() => void emptyTrash()}>
+                        Empty the trash
+                      </button>
+                    )}
+                  </div>
                   {list.length === 0 ? <p className="nb-tree-empty">Nothing here.</p> : list.map(page => (
                     <div key={page.id} className="nb-aside-row">
                       <div className="nb-aside-main">
                         <span className="nb-node-label">{page.title}</span>
-                        <span className="nb-node-meta">{page.notebookName || 'Unfiled'} · {page.section}</span>
+                        <span className="nb-node-meta">
+                          {page.notebookName || 'Unfiled'} · {page.section}
+                          {purgeable && page.deletedAt
+                            ? ` · ${daysLeft(page.deletedAt, setAside.retentionDays)}`
+                            : ''}
+                        </span>
                       </div>
                       <button type="button" className="nb-secondary" onClick={() => void restorePage(page.id)}>Restore</button>
                       {purgeable && (
