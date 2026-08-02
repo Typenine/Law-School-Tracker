@@ -8,6 +8,8 @@ import { onTasksChanged } from '@/lib/taskBus';
 import { onCoursesChanged } from '@/lib/coursesBus';
 import { onSessionsChanged } from '@/lib/sessionsBus';
 import { openCommandPalette } from '@/components/CommandPalette';
+import { useTerm } from '@/lib/useTerm';
+import { courseInTerm } from '@/lib/semester';
 
 /**
  * The application shell: sidebar, page heading and header actions.
@@ -101,8 +103,10 @@ export default function SiteChrome({ children, brandMark }: { children: React.Re
   const [courseCount, setCourseCount] = useState<number | null>(null);
   const [weekMinutes, setWeekMinutes] = useState(0);
   const [targetMinutes, setTargetMinutes] = useState(1440);
-  const [term, setTerm] = useState('');
   const [subtitleOverride, setSubtitleOverride] = useState<string | null>(null);
+  // Derived from the calendar and the configured semesters, so it stays
+  // honest about whether the term has actually started.
+  const { term, label: termLabel } = useTerm();
 
   const [title, defaultSubtitle] = PAGES[pathname]
     || ['Law School Tracker', 'Structure your workload, stay on pace, and review your progress.'];
@@ -120,9 +124,14 @@ export default function SiteChrome({ children, brandMark }: { children: React.Re
     try {
       const res = await fetch('/api/courses', { cache: 'no-store' });
       const data = await res.json();
-      setCourseCount((data?.courses || []).length);
+      const all = (data?.courses || []) as Array<{ semester?: string | null; year?: number | null }>;
+      // Count this semester's courses, not every course ever taken, so the
+      // badge matches what the Courses page shows by default.
+      setCourseCount(term
+        ? all.filter(c => courseInTerm(c, term) || !c.semester || !c.year).length
+        : all.length);
     } catch {}
-  }, []);
+  }, [term]);
 
   const loadSessions = useCallback(async () => {
     try {
@@ -156,17 +165,6 @@ export default function SiteChrome({ children, brandMark }: { children: React.Re
     return () => { offTasks(); offCourses(); offSessions(); window.clearInterval(timer); };
   }, [loadCounts, loadCourses, loadSessions]);
 
-  // Show the active semester rather than a hardcoded term.
-  useEffect(() => {
-    (async () => {
-      try {
-        const res = await fetch('/api/semesters?active=true', { cache: 'no-store' });
-        const data = await res.json();
-        const active = (data?.semesters || [])[0];
-        if (active?.name) setTerm(String(active.name));
-      } catch {}
-    })();
-  }, []);
 
   useEffect(() => onPageSubtitle(setSubtitleOverride), []);
   useEffect(() => { setSubtitleOverride(null); setSideOpen(false); }, [pathname]);
@@ -221,7 +219,7 @@ export default function SiteChrome({ children, brandMark }: { children: React.Re
       <aside className="lst-sidebar">
         <div className="lst-brand">
           <div className="lst-wordmark">Law School Tracker</div>
-          {term ? <div className="lst-term">{term}</div> : null}
+          {termLabel ? <div className="lst-term">{termLabel}</div> : null}
         </div>
         <nav>
           {renderGroup('Plan', PLAN)}

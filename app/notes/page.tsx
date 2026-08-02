@@ -2,6 +2,7 @@
 
 import { FormEvent, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import RichEditor from './RichEditor';
+import { useTerm } from '@/lib/useTerm';
 import NotesStyles from './NotesStyles';
 import {
   Notebook,
@@ -64,7 +65,10 @@ export default function NotesPage() {
   const [savingModal, setSavingModal] = useState(false);
   const [showDetails, setShowDetails] = useState(false);
   const [railOpen, setRailOpen] = useState(true);
+  const [pageListOpen, setPageListOpen] = useState(true);
   const [dragPageId, setDragPageId] = useState<string>('');
+  // New notebooks belong to the semester you are actually in.
+  const { term } = useTerm();
 
   // The editor is uncontrolled, so the latest HTML lives in a ref and is only
   // read when a save actually runs.
@@ -598,7 +602,7 @@ export default function NotesPage() {
             inside it, and pages inside each section. Everything you write here is what your Law
             School Assistant searches.
           </p>
-          <button type="button" className="nb-primary" onClick={() => setNotebookModal({ id: null, name: '', semester: '', color: SECTION_COLORS[0] })}>
+          <button type="button" className="nb-primary" onClick={() => setNotebookModal({ id: null, name: '', semester: term?.name || '', color: SECTION_COLORS[0] })}>
             Create a notebook
           </button>
         </div>
@@ -618,7 +622,7 @@ export default function NotesPage() {
   }
 
   return (
-    <main className={`nb-shell${railOpen ? '' : ' nb-rail-collapsed'}`}>
+    <main className={`nb-shell${railOpen ? '' : ' nb-rail-collapsed'}${pageListOpen ? '' : ' nb-pages-collapsed'}`}>
       {error && (
         <div className="nb-error">
           <span>{error}</span>
@@ -635,7 +639,7 @@ export default function NotesPage() {
               type="button"
               className="nb-icon-button"
               title="New notebook"
-              onClick={() => setNotebookModal({ id: null, name: '', semester: '', color: SECTION_COLORS[0] })}
+              onClick={() => setNotebookModal({ id: null, name: '', semester: term?.name || '', color: SECTION_COLORS[0] })}
             >
               +
             </button>
@@ -728,6 +732,14 @@ export default function NotesPage() {
                 Section ⋯
               </button>
             )}
+            <button
+              type="button"
+              className="nb-tab-settings"
+              title={pageListOpen ? 'Hide the page list and use the full width' : 'Show the page list'}
+              onClick={() => setPageListOpen(open => !open)}
+            >
+              {pageListOpen ? 'Focus ⤢' : 'Pages ⤡'}
+            </button>
           </div>
 
           <div className="nb-workspace">

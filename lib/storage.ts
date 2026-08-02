@@ -114,6 +114,8 @@ export function storageMode(): 'db' | 'blob' | 'file' {
 }
 
 let pool: Pool | null = null;
+/** ensureSchema runs on nearly every request; only do the work once per process. */
+let schemaReady: Promise<void> | null = null;
 function getPool(): Pool {
   if (!DB_URL) throw new Error('No DATABASE_URL');
   if (!pool) {
@@ -421,115 +423,142 @@ async function recomputeLearnedMppForCourse(courseTitle: string): Promise<void> 
 
 export async function ensureSchema() {
   if (!DB_URL) return; // JSON mode doesn't need schema
-  try {
-    const p = getPool();
-    await p.query(`
-      CREATE TABLE IF NOT EXISTS tasks (
-        id uuid PRIMARY KEY,
-        title text NOT NULL,
-        course text,
-        due_date timestamptz NOT NULL,
-        status text NOT NULL DEFAULT 'todo',
-        created_at timestamptz NOT NULL DEFAULT now()
+  if (schemaReady) return schemaReady;
+  // Clear the cache on failure so a transient outage doesn't leave the process
+  // permanently convinced the schema can never be applied.
+  schemaReady = applySchema().catch(e => { schemaReady = null; throw e; });
+  return schemaReady;
+}
+
+/**
+ * Statements are applied one at a time on purpose.
+ *
+ * Postgres runs a multi-statement query as a single implicit transaction, so
+ * when this was one big string a single failing statement rolled back every
+ * other change - and the error was swallowed. The result was a database that
+ * silently never migrated, and then every query failed with "column does not
+ * exist", which is what filled pages with red error toasts. Applied
+ * individually, one problem statement no longer blocks the rest, and it is
+ * logged with the statement that caused it.
+ */
+async function applySchema(): Promise<void> {
+  const p = getPool();
+  const statements: string[] = [
+    `CREATE TABLE IF NOT EXISTS tasks (
+       id uuid PRIMARY KEY,
+       title text NOT NULL,
+       course text,
+       due_date timestamptz NOT NULL,
+       status text NOT NULL DEFAULT 'todo',
+       created_at timestamptz NOT NULL DEFAULT now()
+     )`,
+    `ALTER TABLE tasks ADD COLUMN IF NOT EXISTS estimated_minutes integer`,
+    `ALTER TABLE tasks ADD COLUMN IF NOT EXISTS estimate_origin text`,
+    `ALTER TABLE tasks ADD COLUMN IF NOT EXISTS actual_minutes integer`,
+    `ALTER TABLE tasks ADD COLUMN IF NOT EXISTS priority integer`,
+    `ALTER TABLE tasks ADD COLUMN IF NOT EXISTS notes text`,
+    `ALTER TABLE tasks ADD COLUMN IF NOT EXISTS attachments jsonb`,
+    `ALTER TABLE tasks ADD COLUMN IF NOT EXISTS depends_on uuid[]`,
+    `ALTER TABLE tasks ADD COLUMN IF NOT EXISTS tags jsonb`,
+    `ALTER TABLE tasks ADD COLUMN IF NOT EXISTS term text`,
+    `ALTER TABLE tasks ADD COLUMN IF NOT EXISTS completed_at timestamptz`,
+    `ALTER TABLE tasks ADD COLUMN IF NOT EXISTS focus integer`,
+    `ALTER TABLE tasks ADD COLUMN IF NOT EXISTS pages_read integer`,
+    `ALTER TABLE tasks ADD COLUMN IF NOT EXISTS activity text`,
+    `ALTER TABLE tasks ADD COLUMN IF NOT EXISTS start_time text`,
+    `ALTER TABLE tasks ADD COLUMN IF NOT EXISTS end_time text`,
+    // Partial-completion page tracking. The Task type and the Today card have
+    // always read these, but there was nowhere to store them.
+    `ALTER TABLE tasks ADD COLUMN IF NOT EXISTS original_page_ranges text`,
+    `ALTER TABLE tasks ADD COLUMN IF NOT EXISTS remaining_page_ranges text`,
+    `CREATE TABLE IF NOT EXISTS courses (
+       id uuid PRIMARY KEY,
+       code text,
+       title text NOT NULL,
+       instructor text,
+       instructor_email text,
+       room text,
+       location text,
+       color text,
+       meeting_days integer[],
+       meeting_start text,
+       meeting_end text,
+       meeting_blocks jsonb,
+       start_date date,
+       end_date date,
+       semester text,
+       year integer,
+       created_at timestamptz NOT NULL DEFAULT now()
+     )`,
+    `ALTER TABLE courses ADD COLUMN IF NOT EXISTS meeting_blocks jsonb`,
+    `ALTER TABLE courses ADD COLUMN IF NOT EXISTS color text`,
+    `ALTER TABLE courses ADD COLUMN IF NOT EXISTS learned_mpp double precision`,
+    `ALTER TABLE courses ADD COLUMN IF NOT EXISTS learned_sample integer`,
+    `ALTER TABLE courses ADD COLUMN IF NOT EXISTS learned_updated_at timestamptz`,
+    `ALTER TABLE courses ADD COLUMN IF NOT EXISTS override_enabled boolean`,
+    `ALTER TABLE courses ADD COLUMN IF NOT EXISTS override_mpp double precision`,
+    `ALTER TABLE courses ADD COLUMN IF NOT EXISTS default_activity text`,
+    // Settings key/value store (single-user)
+    `CREATE TABLE IF NOT EXISTS settings (
+       key text PRIMARY KEY,
+       value jsonb NOT NULL
+     )`,
+    // Week Plan schedule blocks.
+    // ids are text, not uuid: the week planner mints its own block ids and a
+    // block can also point at a backlog item that is not a task row. When
+    // these columns were uuid with a foreign key, every save of a hand-placed
+    // block failed on "invalid input syntax for type uuid" and the whole
+    // schedule silently never reached the server.
+    `CREATE TABLE IF NOT EXISTS schedule_blocks (
+       id text PRIMARY KEY,
+       task_id text,
+       day date NOT NULL,
+       planned_minutes integer NOT NULL,
+       guessed boolean,
+       title text NOT NULL,
+       course text,
+       pages integer,
+       priority integer,
+       catchup boolean,
+       created_at timestamptz NOT NULL DEFAULT now()
+     )`,
+    // Migrate installations created with the original uuid columns.
+    `ALTER TABLE schedule_blocks DROP CONSTRAINT IF EXISTS schedule_blocks_task_id_fkey`,
+    `DO $$ BEGIN
+       ALTER TABLE schedule_blocks ALTER COLUMN id TYPE text USING id::text;
+     EXCEPTION WHEN others THEN NULL; END $$`,
+    `DO $$ BEGIN
+       ALTER TABLE schedule_blocks ALTER COLUMN task_id TYPE text USING task_id::text;
+     EXCEPTION WHEN others THEN NULL; END $$`,
+    `CREATE TABLE IF NOT EXISTS sessions (
+       id uuid PRIMARY KEY,
+       task_id uuid REFERENCES tasks(id) ON DELETE SET NULL,
+       when_ts timestamptz NOT NULL DEFAULT now(),
+       minutes integer NOT NULL,
+       focus double precision,
+       notes text,
+       pages_read integer,
+       outline_pages integer,
+       practice_qs integer,
+       activity text,
+       created_at timestamptz NOT NULL DEFAULT now()
+     )`,
+    // Ensure focus supports decimals
+    `DO $$ BEGIN
+       ALTER TABLE sessions ALTER COLUMN focus TYPE double precision USING focus::double precision;
+     EXCEPTION WHEN others THEN NULL; END $$`,
+  ];
+
+  for (const statement of statements) {
+    try {
+      await p.query(statement);
+    } catch (e) {
+      console.warn(
+        'ensureSchema: statement failed, continuing:',
+        statement.replace(/\s+/g, ' ').slice(0, 120),
+        (e as any)?.message || e,
       );
-      ALTER TABLE tasks ADD COLUMN IF NOT EXISTS estimated_minutes integer;
-      ALTER TABLE tasks ADD COLUMN IF NOT EXISTS estimate_origin text;
-      ALTER TABLE tasks ADD COLUMN IF NOT EXISTS actual_minutes integer;
-      ALTER TABLE tasks ADD COLUMN IF NOT EXISTS priority integer;
-      ALTER TABLE tasks ADD COLUMN IF NOT EXISTS notes text;
-      ALTER TABLE tasks ADD COLUMN IF NOT EXISTS attachments jsonb;
-      ALTER TABLE tasks ADD COLUMN IF NOT EXISTS depends_on uuid[];
-      ALTER TABLE tasks ADD COLUMN IF NOT EXISTS tags jsonb;
-      ALTER TABLE tasks ADD COLUMN IF NOT EXISTS term text;
-      ALTER TABLE tasks ADD COLUMN IF NOT EXISTS completed_at timestamptz;
-      ALTER TABLE tasks ADD COLUMN IF NOT EXISTS focus integer;
-      ALTER TABLE tasks ADD COLUMN IF NOT EXISTS pages_read integer;
-      ALTER TABLE tasks ADD COLUMN IF NOT EXISTS activity text;
-      ALTER TABLE tasks ADD COLUMN IF NOT EXISTS start_time text;
-      ALTER TABLE tasks ADD COLUMN IF NOT EXISTS end_time text;
-      -- Partial-completion page tracking. The Task type and the Today card
-      -- have always read these, but there was nowhere to store them.
-      ALTER TABLE tasks ADD COLUMN IF NOT EXISTS original_page_ranges text;
-      ALTER TABLE tasks ADD COLUMN IF NOT EXISTS remaining_page_ranges text;
-      CREATE TABLE IF NOT EXISTS courses (
-        id uuid PRIMARY KEY,
-        code text,
-        title text NOT NULL,
-        instructor text,
-        instructor_email text,
-        room text,
-        location text,
-        color text,
-        meeting_days integer[],
-        meeting_start text,
-        meeting_end text,
-        meeting_blocks jsonb,
-        start_date date,
-        end_date date,
-        semester text,
-        year integer,
-        created_at timestamptz NOT NULL DEFAULT now()
-      );
-      ALTER TABLE courses ADD COLUMN IF NOT EXISTS meeting_blocks jsonb;
-      ALTER TABLE courses ADD COLUMN IF NOT EXISTS color text;
-      ALTER TABLE courses ADD COLUMN IF NOT EXISTS learned_mpp double precision;
-      ALTER TABLE courses ADD COLUMN IF NOT EXISTS learned_sample integer;
-      ALTER TABLE courses ADD COLUMN IF NOT EXISTS learned_updated_at timestamptz;
-      ALTER TABLE courses ADD COLUMN IF NOT EXISTS override_enabled boolean;
-      ALTER TABLE courses ADD COLUMN IF NOT EXISTS override_mpp double precision;
-      ALTER TABLE courses ADD COLUMN IF NOT EXISTS default_activity text;
-      -- Settings key/value store (single-user)
-      CREATE TABLE IF NOT EXISTS settings (
-        key text PRIMARY KEY,
-        value jsonb NOT NULL
-      );
-      -- Week Plan schedule blocks.
-      -- ids are text, not uuid: the week planner mints its own block ids and a
-      -- block can also point at a backlog item that is not a task row. When
-      -- these columns were uuid with a foreign key, every save of a
-      -- hand-placed block failed on "invalid input syntax for type uuid" and
-      -- the whole schedule silently never reached the server.
-      CREATE TABLE IF NOT EXISTS schedule_blocks (
-        id text PRIMARY KEY,
-        task_id text,
-        day date NOT NULL,
-        planned_minutes integer NOT NULL,
-        guessed boolean,
-        title text NOT NULL,
-        course text,
-        pages integer,
-        priority integer,
-        catchup boolean,
-        created_at timestamptz NOT NULL DEFAULT now()
-      );
-      -- Migrate installations created with the original uuid columns.
-      ALTER TABLE schedule_blocks DROP CONSTRAINT IF EXISTS schedule_blocks_task_id_fkey;
-      DO $$ BEGIN
-        ALTER TABLE schedule_blocks ALTER COLUMN id TYPE text USING id::text;
-      EXCEPTION WHEN others THEN NULL; END $$;
-      DO $$ BEGIN
-        ALTER TABLE schedule_blocks ALTER COLUMN task_id TYPE text USING task_id::text;
-      EXCEPTION WHEN others THEN NULL; END $$;
-      CREATE TABLE IF NOT EXISTS sessions (
-        id uuid PRIMARY KEY,
-        task_id uuid REFERENCES tasks(id) ON DELETE SET NULL,
-        when_ts timestamptz NOT NULL DEFAULT now(),
-        minutes integer NOT NULL,
-        focus double precision,
-        notes text,
-        pages_read integer,
-        outline_pages integer,
-        practice_qs integer,
-        activity text,
-        created_at timestamptz NOT NULL DEFAULT now()
-      );
-      -- Ensure focus supports decimals
-      DO $$ BEGIN
-        ALTER TABLE sessions ALTER COLUMN focus TYPE double precision USING focus::double precision;
-      EXCEPTION WHEN others THEN NULL; END $$;
-    `);
-  } catch (e) {
-    console.warn('ensureSchema: Postgres unavailable, continuing with JSON store:', (e as any)?.message || e);
+    }
   }
 }
 

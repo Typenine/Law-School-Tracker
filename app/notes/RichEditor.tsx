@@ -15,6 +15,8 @@ const HIGHLIGHTS = [
   ['#bdf0c8', 'Green'],
   ['#bcdcff', 'Blue'],
   ['#ffc9dd', 'Pink'],
+  ['#ffd9b0', 'Orange'],
+  ['#e0d0ff', 'Lilac'],
 ] as const;
 
 const TEXT_COLORS = [
@@ -23,6 +25,23 @@ const TEXT_COLORS = [
   ['#7fc0ff', 'Blue'],
   ['#7fdca4', 'Green'],
   ['#ff9a8a', 'Red'],
+  ['#c9a9ff', 'Purple'],
+  ['#9fb2c9', 'Grey'],
+] as const;
+
+const FONTS = [
+  ['', 'Default'],
+  ['"IBM Plex Sans", system-ui, sans-serif', 'Sans'],
+  ['Newsreader, Georgia, serif', 'Serif'],
+  ['"IBM Plex Mono", monospace', 'Mono'],
+] as const;
+
+/** execCommand only understands sizes 1-7; these are the useful ones. */
+const SIZES = [
+  ['2', 'Small'],
+  ['3', 'Normal'],
+  ['4', 'Large'],
+  ['5', 'Huge'],
 ] as const;
 
 /**
@@ -253,6 +272,11 @@ export default function RichEditor({ pageId, initialHtml, onChange, onSaveNow }:
         </div>
 
         <div className="nb-ribbon-group">
+          <Button title="Superscript" onClick={() => run('superscript')}>x²</Button>
+          <Button title="Subscript" onClick={() => run('subscript')}>x₂</Button>
+        </div>
+
+        <div className="nb-ribbon-group">
           <Button title="To-do tag (Ctrl+1)" onClick={toggleTodo}>☑</Button>
           <Button title="Bulleted list" onClick={() => run('insertUnorderedList')}>•</Button>
           <Button title="Numbered list" onClick={() => run('insertOrderedList')}>1.</Button>
@@ -261,7 +285,37 @@ export default function RichEditor({ pageId, initialHtml, onChange, onSaveNow }:
         </div>
 
         <div className="nb-ribbon-group">
+          <Button title="Align left" onClick={() => run('justifyLeft')}>⇱</Button>
+          <Button title="Centre" onClick={() => run('justifyCenter')}>≡</Button>
+          <Button title="Align right" onClick={() => run('justifyRight')}>⇲</Button>
+        </div>
+
+        <div className="nb-ribbon-group">
+          <select
+            className="nb-style-select nb-narrow"
+            defaultValue=""
+            onChange={event => { run('fontName', event.target.value); event.target.value = ''; }}
+            title="Font"
+          >
+            <option value="" disabled>Font</option>
+            {FONTS.filter(([value]) => value).map(([value, label]) => (
+              <option key={label} value={value}>{label}</option>
+            ))}
+          </select>
+          <select
+            className="nb-style-select nb-narrow"
+            defaultValue=""
+            onChange={event => { run('fontSize', event.target.value); event.target.value = ''; }}
+            title="Text size"
+          >
+            <option value="" disabled>Size</option>
+            {SIZES.map(([value, label]) => <option key={value} value={value}>{label}</option>)}
+          </select>
+        </div>
+
+        <div className="nb-ribbon-group">
           <Button title="Quote" onClick={() => run('formatBlock', '<blockquote>')}>❝</Button>
+          <Button title="Code block" onClick={() => run('formatBlock', '<pre>')}>{'</>'}</Button>
           <Button title="Divider" onClick={() => run('insertHorizontalRule')}>—</Button>
           <Button
             title="Link"
@@ -272,6 +326,7 @@ export default function RichEditor({ pageId, initialHtml, onChange, onSaveNow }:
           >
             🔗
           </Button>
+          <Button title="Remove link" onClick={() => run('unlink')}>⛓</Button>
           <Button title="Clear formatting" onClick={() => run('removeFormat')}>⌫</Button>
         </div>
       </div>

@@ -27,7 +27,17 @@ export function notesDb(): Pool {
   return pool;
 }
 
+/** The notes schema check runs on every notes request; do the work once. */
+let notesSchemaReady: Promise<void> | null = null;
+
 export async function ensureNotesSchema(): Promise<void> {
+  if (!notesSchemaReady) {
+    notesSchemaReady = applyNotesSchema().catch(e => { notesSchemaReady = null; throw e; });
+  }
+  return notesSchemaReady;
+}
+
+async function applyNotesSchema(): Promise<void> {
   const db = notesDb();
   await db.query(`
     CREATE TABLE IF NOT EXISTS ai_note_notebooks (

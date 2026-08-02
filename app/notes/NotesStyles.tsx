@@ -9,7 +9,11 @@
 export default function NotesStyles() {
   return (
     <style jsx global>{`
-      .nb-shell, .nb-empty-state, .nb-boot { max-width: 100% !important; }
+      /* The app shell caps page content at ~1180px. The notes workspace is a
+         full-bleed editor, so it opts out and uses the whole window. */
+      body[data-route='/notes'] .lst-content > * { max-width: none !important; }
+      body[data-route='/notes'] .lst-content { padding: 16px 20px 20px !important; }
+      .nb-shell, .nb-empty-state, .nb-boot { max-width: 100% !important; width: 100%; }
       .nb-boot { display: grid; place-items: center; min-height: 60vh; color: var(--muted); }
 
       .nb-empty-state { display: grid; place-items: center; min-height: 62vh; }
@@ -21,7 +25,7 @@ export default function NotesStyles() {
       .nb-error button { background: none; border: 0; color: inherit; font-size: 17px; cursor: pointer; }
 
       /* Frame ------------------------------------------------------------ */
-      .nb-frame { --tab: #8b5cf6; display: grid; grid-template-columns: 226px minmax(0, 1fr); height: calc(100vh - 150px); min-height: 560px; border: 1px solid var(--line); border-radius: 12px; background: var(--s1); overflow: hidden; }
+      .nb-frame { --tab: #8b5cf6; display: grid; grid-template-columns: 214px minmax(0, 1fr); height: calc(100vh - 118px); min-height: 620px; border: 1px solid var(--line); border-radius: 12px; background: var(--s1); overflow: hidden; }
       .nb-rail-collapsed .nb-frame { grid-template-columns: 0 minmax(0, 1fr); }
       .nb-rail-collapsed .nb-rail { display: none; }
 
@@ -62,6 +66,8 @@ export default function NotesStyles() {
 
       /* Workspace -------------------------------------------------------- */
       .nb-workspace { flex: 1; min-height: 0; display: grid; grid-template-columns: minmax(0, 1fr) 268px; }
+      .nb-pages-collapsed .nb-workspace { grid-template-columns: minmax(0, 1fr); }
+      .nb-pages-collapsed .nb-pages { display: none; }
       .nb-canvas-column { display: flex; flex-direction: column; min-width: 0; min-height: 0; background: var(--s1); }
       .nb-placeholder { display: grid; place-content: center; justify-items: center; gap: 9px; height: 100%; padding: 40px; color: var(--muted); text-align: center; }
       .nb-placeholder h3 { margin: 0; color: var(--text2); }
@@ -95,6 +101,7 @@ export default function NotesStyles() {
       .nb-tool:hover { border-color: var(--btn); background: var(--s3); color: var(--text); }
       .nb-tool.is-active { border-color: var(--tab); color: var(--text); }
       .nb-style-select { height: 29px; min-width: 116px; padding: 0 8px !important; border: 1px solid var(--input) !important; border-radius: 6px !important; background: var(--s1) !important; color: var(--text2) !important; font-size: 12px; }
+      .nb-style-select.nb-narrow { min-width: 74px; }
       .nb-swatch-icon { width: 15px; height: 15px; border: 1px solid rgba(0,0,0,.3); border-radius: 3px; }
       .nb-color-icon { font-weight: 600; border-bottom: 3px solid var(--tab); line-height: 1.1; }
       .nb-menu-anchor { position: relative; }
@@ -105,7 +112,8 @@ export default function NotesStyles() {
       .nb-swatch-none { background: repeating-linear-gradient(45deg, #444 0 3px, #222 3px 6px); }
 
       /* Canvas ----------------------------------------------------------- */
-      .nb-canvas { flex: 1; min-height: 0; overflow-y: auto; padding: 26px 30px 120px; outline: none; color: var(--text); font: 15px/1.75 'IBM Plex Sans', system-ui, sans-serif; }
+      .nb-canvas { flex: 1; min-height: 0; overflow-y: auto; padding: 26px 34px 160px; outline: none; color: var(--text); font: 15.5px/1.75 'IBM Plex Sans', system-ui, sans-serif; }
+      .nb-canvas pre { margin: 0 0 12px; padding: 10px 13px; border-radius: 7px; background: var(--s3); font-family: 'IBM Plex Mono', monospace; font-size: 13px; white-space: pre-wrap; }
       .nb-canvas:empty:before { content: 'Start typing…'; color: var(--muted2); }
       .nb-canvas p { margin: 0 0 11px; }
       .nb-canvas h1, .nb-canvas h2, .nb-canvas h3, .nb-canvas h4 { margin: 22px 0 9px; font-family: 'Newsreader', Georgia, serif !important; line-height: 1.25; }
