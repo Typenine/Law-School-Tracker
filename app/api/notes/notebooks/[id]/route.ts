@@ -1,7 +1,7 @@
 import { NextRequest } from 'next/server';
 import { z } from 'zod';
 import { deleteNotebook, getNotebook, updateNotebook } from '@/lib/aiNotes';
-import { noStoreJson, requireNotesToken } from '@/lib/actionAuth';
+import { noStoreJson } from '@/lib/actionAuth';
 
 export const dynamic = 'force-dynamic';
 export const runtime = 'nodejs';
@@ -15,12 +15,9 @@ const updateSchema = z.object({
 });
 
 export async function GET(
-  req: NextRequest,
+  _req: NextRequest,
   { params }: { params: { id: string } },
 ) {
-  const denied = requireNotesToken(req);
-  if (denied) return denied;
-
   try {
     const notebook = await getNotebook(params.id);
     if (!notebook) return noStoreJson({ error: 'Notebook not found.' }, { status: 404 });
@@ -37,9 +34,6 @@ export async function PATCH(
   req: NextRequest,
   { params }: { params: { id: string } },
 ) {
-  const denied = requireNotesToken(req);
-  if (denied) return denied;
-
   try {
     const parsed = updateSchema.safeParse(await req.json());
     if (!parsed.success) {
@@ -60,12 +54,9 @@ export async function PATCH(
 }
 
 export async function DELETE(
-  req: NextRequest,
+  _req: NextRequest,
   { params }: { params: { id: string } },
 ) {
-  const denied = requireNotesToken(req);
-  if (denied) return denied;
-
   try {
     const deleted = await deleteNotebook(params.id);
     if (!deleted) return noStoreJson({ error: 'Notebook not found.' }, { status: 404 });

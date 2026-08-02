@@ -6,7 +6,7 @@ import {
   searchAiNotes,
   type NoteSourceType,
 } from '@/lib/aiNotes';
-import { noStoreJson, requireNotesToken } from '@/lib/actionAuth';
+import { noStoreJson } from '@/lib/actionAuth';
 
 export const dynamic = 'force-dynamic';
 export const runtime = 'nodejs';
@@ -86,9 +86,6 @@ async function extractText(file: File): Promise<string> {
 }
 
 export async function GET(req: NextRequest) {
-  const denied = requireNotesToken(req);
-  if (denied) return denied;
-
   try {
     const params = req.nextUrl.searchParams;
     const filters = {
@@ -115,9 +112,6 @@ export async function GET(req: NextRequest) {
 }
 
 export async function POST(req: NextRequest) {
-  const denied = requireNotesToken(req);
-  if (denied) return denied;
-
   try {
     const contentType = req.headers.get('content-type') || '';
 

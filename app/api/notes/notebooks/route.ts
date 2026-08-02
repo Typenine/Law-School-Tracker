@@ -1,7 +1,7 @@
 import { NextRequest } from 'next/server';
 import { z } from 'zod';
 import { createNotebook, listNotebooks } from '@/lib/aiNotes';
-import { noStoreJson, requireNotesToken } from '@/lib/actionAuth';
+import { noStoreJson } from '@/lib/actionAuth';
 
 export const dynamic = 'force-dynamic';
 export const runtime = 'nodejs';
@@ -14,9 +14,6 @@ const notebookSchema = z.object({
 });
 
 export async function GET(req: NextRequest) {
-  const denied = requireNotesToken(req);
-  if (denied) return denied;
-
   try {
     const notebooks = await listNotebooks(req.nextUrl.searchParams.get('archived') === 'true');
     return noStoreJson({ notebooks });
@@ -29,9 +26,6 @@ export async function GET(req: NextRequest) {
 }
 
 export async function POST(req: NextRequest) {
-  const denied = requireNotesToken(req);
-  if (denied) return denied;
-
   try {
     const parsed = notebookSchema.safeParse(await req.json());
     if (!parsed.success) {
