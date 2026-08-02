@@ -1,5 +1,6 @@
 import { NextRequest } from 'next/server';
 import { ensureSchema, listTasks } from '@/lib/storage';
+import { countNotesByTask } from '@/lib/aiNotes';
 import { noStoreJson, requireGptToken } from '@/lib/actionAuth';
 
 export const dynamic = 'force-dynamic';
@@ -27,6 +28,10 @@ export async function GET(req: NextRequest) {
       ? Math.max(1, Math.min(Math.floor(requestedLimit), 100))
       : 50;
 
+    // How many note pages each assignment has, so the assistant knows there is
+    // something to read before it goes looking.
+    const noteCounts = await countNotesByTask().catch(() => ({} as Record<string, number>));
+
     const assignments = (await listTasks())
       .filter(task => !status || status === 'all' || task.status === status)
       .filter(task => !course || (task.course || '').toLowerCase().includes(course))
@@ -51,6 +56,7 @@ export async function GET(req: NextRequest) {
         activity: task.activity ?? null,
         pagesRead: task.pagesRead ?? null,
         term: task.term ?? null,
+        noteCount: noteCounts[task.id] || 0,
       }));
 
     return noStoreJson({ assignments, count: assignments.length });

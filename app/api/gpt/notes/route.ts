@@ -21,6 +21,8 @@ export async function GET(req: NextRequest) {
       notebookId: params.get('notebookId'),
       section: params.get('section'),
       sectionId: params.get('sectionId'),
+      // Lets the assistant go from a reading assignment to the notes on it.
+      taskId: params.get('taskId'),
       from: params.get('from'),
       to: params.get('to'),
       limit: Number.isFinite(requestedLimit) ? requestedLimit : 12,

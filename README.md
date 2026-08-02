@@ -72,13 +72,32 @@ After deployment:
 2. In the custom GPT builder, add an Action using that schema URL.
 3. Configure Action authentication as an API key sent with Bearer authentication, using `LAW_SCHOOL_GPT_TOKEN`.
 
+**The builder takes a copy of the schema when you import it.** New operations and
+parameters will not appear in an existing Action until you re-import — open the
+Action and refresh from the schema URL after deploying changes, or the GPT will
+keep calling the old set.
+
 The GPT Action exposes only these read operations:
 
-- List courses
-- Filter assignments by status, course, or date range
-- List notebooks with their nested sections, so the assistant can navigate the hierarchy
-- Search notes by topic, course, semester, class date, notebook, or section
-- Retrieve the full text of a selected note
+| Operation | What it answers |
+| --- | --- |
+| `listCourses` | What is being taken this term |
+| `listAssignments` | Deadlines and workload; each carries a `noteCount` |
+| `listStudySessions` | Time spent, focus, pace — with totals over the whole filtered range |
+| `listNotebooks` | The notebook → subject → category → week hierarchy, with section ids |
+| `searchNotes` | Pages by keyword, course, semester, class date, notebook, section, or assignment |
+| `getNote` | The full text of one page, plus the URLs of any images in it |
+
+Nothing writes. Two joins are worth knowing about: an assignment's id can be
+passed to `searchNotes` as `taskId` to get the notes written for that reading,
+and a section id from `listNotebooks` narrows a search to one exact branch.
+
+### If the connector returns nothing
+
+- `LAW_SCHOOL_GPT_TOKEN` unset in the deployment answers every call with `503`.
+- A stale Action still points at the old operation list; re-import the schema.
+- The schema's `servers` URL is derived from the forwarded host headers. Fetch
+  `/api/gpt/openapi` and check `servers[0].url` is the public site.
 
 ## Import Sessions (CSV)
 - Use Settings → Import Data (CSV) to import study sessions with mapping, preview, deduplication, and append/replace modes.

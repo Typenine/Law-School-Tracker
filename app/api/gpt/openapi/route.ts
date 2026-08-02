@@ -2,15 +2,37 @@ import { NextRequest } from 'next/server';
 
 export const dynamic = 'force-dynamic';
 
+/**
+ * The URL the assistant should call back on.
+ *
+ * `nextUrl.origin` is the origin of the request as this process received it,
+ * which behind Vercel's proxy can be an internal address rather than the site's
+ * public one. Whatever ends up here is baked into the schema ChatGPT imports,
+ * so getting it wrong points every Action at a host it cannot reach and the
+ * connector silently returns nothing. The forwarded headers describe the
+ * request the browser actually made, so they win.
+ */
+function publicOrigin(req: NextRequest): string {
+  const host = req.headers.get('x-forwarded-host') || req.headers.get('host');
+  if (host) {
+    const proto = req.headers.get('x-forwarded-proto')
+      || (host.startsWith('localhost') || host.startsWith('127.0.0.1') ? 'http' : 'https');
+    // A comma-separated chain means several proxies; the first entry is the
+    // one the client actually asked for.
+    return `${proto.split(',')[0].trim()}://${host.split(',')[0].trim()}`;
+  }
+  return req.nextUrl.origin;
+}
+
 export async function GET(req: NextRequest) {
-  const origin = req.nextUrl.origin;
+  const origin = publicOrigin(req);
 
   const schema = {
     openapi: '3.1.0',
     info: {
       title: 'Law School Tracker',
-      version: '1.0.2',
-      description: 'Read-only access to the user’s courses, assignments, and uploaded law-school notes. Treat uploaded notes as the primary source and clearly identify the note title, course, and class date used in substantive answers.',
+      version: '1.1.0',
+      description: 'Read-only access to the user’s law-school workspace: courses, reading assignments, study sessions, and their notes. Notes are organised as notebook (a semester) > subject > category (case briefs, reading notes, class notes) > week > pages. Call listNotebooks first when a question names a subject, category or week, then pass the matching sectionId to searchNotes. Treat the user’s own notes as the primary source, and name the note title, course and class date behind any substantive answer. Say so plainly when the notes do not cover something rather than filling the gap.',
     },
     servers: [{ url: origin }],
     security: [{ BearerAuth: [] }],
@@ -38,7 +60,7 @@ export async function GET(req: NextRequest) {
         get: {
           operationId: 'listAssignments',
           summary: 'List and filter assignments',
-          description: 'Use this for deadlines, workload planning, and upcoming tasks.',
+          description: 'Use this for deadlines, workload planning, and upcoming readings. Each assignment carries a noteCount; when it is above zero the user has written pages about that reading, which searchNotes will return if you pass the assignment id as taskId.',
           parameters: [
             {
               name: 'status',
@@ -76,6 +98,50 @@ export async function GET(req: NextRequest) {
               content: {
                 'application/json': {
                   schema: { $ref: '#/components/schemas/AssignmentListResponse' },
+                },
+              },
+            },
+            '401': { $ref: '#/components/responses/Unauthorized' },
+            '503': { $ref: '#/components/responses/NotConfigured' },
+          },
+        },
+      },
+      '/api/gpt/sessions': {
+        get: {
+          operationId: 'listStudySessions',
+          summary: 'List logged study sessions',
+          description: 'The user’s own record of what they studied, for how long, and how well it went. Use this for questions about effort, pace and consistency — how much time went into a course, whether they are keeping up, when they last worked on something. Totals cover everything matching the filters, not just the sessions returned.',
+          parameters: [
+            {
+              name: 'course',
+              in: 'query',
+              description: 'Case-insensitive partial course-title match, resolved through the assignment each session was logged against.',
+              schema: { type: 'string' },
+            },
+            {
+              name: 'from',
+              in: 'query',
+              description: 'Inclusive ISO date or datetime.',
+              schema: { type: 'string' },
+            },
+            {
+              name: 'to',
+              in: 'query',
+              description: 'Inclusive ISO date or datetime.',
+              schema: { type: 'string' },
+            },
+            {
+              name: 'limit',
+              in: 'query',
+              schema: { type: 'integer', minimum: 1, maximum: 200, default: 50 },
+            },
+          ],
+          responses: {
+            '200': {
+              description: 'Sessions with totals',
+              content: {
+                'application/json': {
+                  schema: { $ref: '#/components/schemas/SessionListResponse' },
                 },
               },
             },
@@ -145,6 +211,12 @@ export async function GET(req: NextRequest) {
               schema: { type: 'string' },
             },
             {
+              name: 'taskId',
+              in: 'query',
+              description: 'Only pages written for one reading assignment. Use the id from listAssignments when the user asks what they wrote about a particular reading; assignments with noteCount above zero have pages to find.',
+              schema: { type: 'string' },
+            },
+            {
               name: 'from',
               in: 'query',
               description: 'Earliest class date, YYYY-MM-DD.',
@@ -159,7 +231,7 @@ export async function GET(req: NextRequest) {
             {
               name: 'limit',
               in: 'query',
-              schema: { type: 'integer', minimum: 1, maximum: 30, default: 12 },
+              schema: { type: 'integer', minimum: 1, maximum: 100, default: 12 },
             },
           ],
           responses: {
@@ -292,6 +364,45 @@ export async function GET(req: NextRequest) {
             activity: { type: ['string', 'null'] },
             pagesRead: { type: ['integer', 'null'] },
             term: { type: ['string', 'null'] },
+            noteCount: {
+              type: 'integer',
+              description: 'How many note pages the user has written for this assignment. When above zero, call searchNotes with this assignment’s id as taskId to read them.',
+            },
+          },
+        },
+        Session: {
+          type: 'object',
+          required: ['id', 'when', 'minutes'],
+          properties: {
+            id: { type: 'string' },
+            when: { type: 'string', format: 'date-time' },
+            minutes: { type: 'integer' },
+            focus: { type: ['integer', 'null'], description: 'Self-rated 1-10.' },
+            activity: { type: ['string', 'null'] },
+            pagesRead: { type: ['integer', 'null'] },
+            outlinePages: { type: ['integer', 'null'] },
+            practiceQs: { type: ['integer', 'null'] },
+            notes: { type: ['string', 'null'] },
+            taskId: { type: ['string', 'null'] },
+            taskTitle: { type: ['string', 'null'] },
+            course: { type: ['string', 'null'] },
+          },
+        },
+        SessionListResponse: {
+          type: 'object',
+          required: ['sessions', 'count', 'totalMinutes'],
+          properties: {
+            sessions: {
+              type: 'array',
+              items: { $ref: '#/components/schemas/Session' },
+            },
+            count: { type: 'integer', description: 'How many sessions are in this response.' },
+            totalMinutes: {
+              type: 'integer',
+              description: 'Minutes across everything matching the filters, including sessions beyond the limit.',
+            },
+            totalHours: { type: 'number' },
+            averageFocus: { type: ['number', 'null'] },
           },
         },
         AssignmentListResponse: {
@@ -330,6 +441,10 @@ export async function GET(req: NextRequest) {
             sectionId: {
               type: ['string', 'null'],
               description: 'Pass back to searchNotes to find the rest of this page’s section.',
+            },
+            taskId: {
+              type: ['string', 'null'],
+              description: 'The reading assignment this page was written for, matching an id from listAssignments.',
             },
             classDate: { type: ['string', 'null'], format: 'date' },
             sourceType: {
@@ -425,7 +540,15 @@ export async function GET(req: NextRequest) {
               type: 'object',
               required: ['content'],
               properties: {
-                content: { type: 'string' },
+                content: {
+                  type: 'string',
+                  description: 'The page as plain text. Pictures appear inline as "[image: description]" markers.',
+                },
+                images: {
+                  type: 'array',
+                  description: 'URLs of any pictures in the page, in the order they appear.',
+                  items: { type: 'string' },
+                },
               },
             },
           ],

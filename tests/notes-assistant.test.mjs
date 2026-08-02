@@ -84,8 +84,116 @@ describe('what the assistant can see', () => {
     const { body } = await app.api('GET', '/api/gpt/openapi');
     const spec = JSON.stringify(body);
     assert.ok(spec.includes('listNotebooks'), 'the hierarchy endpoint is advertised');
-    for (const parameter of ['"notebookId"', '"sectionId"', '"section"']) {
+    for (const parameter of ['"notebookId"', '"sectionId"', '"section"', '"taskId"']) {
       assert.ok(spec.includes(parameter), `the spec documents ${parameter}`);
     }
+  });
+
+  it('can go from a reading assignment to the notes on it', async () => {
+    const fall = await notebook('Fall 2026');
+    const week = await section(fall.id, 'Week 1');
+    await app.api('POST', '/api/notes', {
+      notebookId: fall.id, sectionId: week.id, title: 'Palsgraf brief', content: 'zone of danger', taskId: 'task-77',
+    });
+    await page(fall.id, week.id, 'Something else', 'unrelated');
+
+    const { status, body } = await app.gpt('/api/gpt/notes?taskId=task-77&limit=100');
+    assert.equal(status, 200);
+    assert.deepEqual(body.matches.map(n => n.title), ['Palsgraf brief']);
+    assert.equal(body.matches[0].taskId, 'task-77', 'the link comes back so it can be cited');
+  });
+
+  it('reports a page’s pictures rather than dropping them', async () => {
+    const fall = await notebook('Fall 2026');
+    const week = await section(fall.id, 'Week 1');
+    const created = await page(fall.id, week.id, 'Diagram');
+    const url = 'https://example.public.blob.vercel-storage.com/notes/flow.png';
+    await app.api('PATCH', `/api/notes/${created.id}`, {
+      contentHtml: `<p>the framework</p><p><img src="${url}" alt="burden-shifting chart"></p>`,
+    });
+
+    const { body } = await app.gpt(`/api/gpt/notes/${created.id}`);
+    assert.deepEqual(body.note.images, [url]);
+    assert.match(body.note.content, /\[image: burden-shifting chart\]/);
+    assert.equal(body.note.contentHtml, undefined, 'the assistant still gets prose, not markup');
+  });
+
+  it('counts each assignment’s notes so it knows there is something to read', async () => {
+    const fall = await notebook('Fall 2026');
+    const week = await section(fall.id, 'Week 1');
+    const task = await app.api('POST', '/api/tasks', {
+      title: 'Read Palsgraf', course: 'Torts', dueDate: new Date(Date.now() + 864e5).toISOString(),
+    });
+    const taskId = task.body?.task?.id || task.body?.id;
+    await app.api('POST', '/api/notes', {
+      notebookId: fall.id, sectionId: week.id, title: 'My brief', content: 'x', taskId,
+    });
+
+    const { body } = await app.gpt('/api/gpt/assignments?status=all&limit=100');
+    const found = body.assignments.find(a => a.id === taskId);
+    assert.equal(found.noteCount, 1);
+  });
+
+  it('exposes the study log, with totals over everything matched', async () => {
+    const { status, body } = await app.gpt('/api/gpt/sessions');
+    assert.equal(status, 200);
+    assert.ok(Array.isArray(body.sessions));
+    assert.equal(typeof body.totalMinutes, 'number');
+    assert.equal((await app.api('GET', '/api/gpt/sessions')).status, 401, 'and it needs the token');
+  });
+
+  it('publishes a schema that resolves, so the import does not bounce', async () => {
+    const { body: spec } = await app.api('GET', '/api/gpt/openapi');
+
+    // A single dangling $ref makes ChatGPT reject the whole Action at import
+    // time, which looks from the outside like the connector returning nothing.
+    const refs = [];
+    const walk = (node) => {
+      if (!node || typeof node !== 'object') return;
+      if (Array.isArray(node)) return node.forEach(walk);
+      for (const [key, value] of Object.entries(node)) {
+        if (key === '$ref' && typeof value === 'string') refs.push(value);
+        else walk(value);
+      }
+    };
+    walk(spec);
+    assert.ok(refs.length > 0, 'the spec uses shared components');
+
+    for (const ref of refs) {
+      assert.ok(ref.startsWith('#/'), `only local refs are usable here: ${ref}`);
+      let node = spec;
+      for (const step of ref.slice(2).split('/')) {
+        node = node?.[step];
+        assert.ok(node !== undefined, `${ref} does not resolve`);
+      }
+    }
+
+    // Every operation the assistant can call needs a unique id.
+    const ids = [];
+    for (const item of Object.values(spec.paths)) {
+      for (const operation of Object.values(item)) {
+        assert.ok(operation.operationId, 'every operation is named');
+        ids.push(operation.operationId);
+      }
+    }
+    assert.equal(new Set(ids).size, ids.length, `duplicate operationId in ${ids.join(', ')}`);
+    assert.deepEqual(
+      ids.sort(),
+      ['getNote', 'listAssignments', 'listCourses', 'listNotebooks', 'listStudySessions', 'searchNotes'],
+    );
+  });
+
+  it('advertises a callback URL the assistant can actually reach', async () => {
+    // Behind a proxy the request origin is not the public one. Whatever lands
+    // in `servers` is what ChatGPT calls, so it has to follow the forwarded
+    // headers rather than the socket this process was handed.
+    const response = await fetch(`${app.base}/api/gpt/openapi`, {
+      headers: { 'x-forwarded-host': 'law-school-tracker.example.app', 'x-forwarded-proto': 'https' },
+    });
+    const spec = await response.json();
+    assert.equal(spec.servers[0].url, 'https://law-school-tracker.example.app');
+
+    const plain = await (await fetch(`${app.base}/api/gpt/openapi`)).json();
+    assert.ok(plain.servers[0].url.startsWith('http://127.0.0.1:'), plain.servers[0].url);
   });
 });
