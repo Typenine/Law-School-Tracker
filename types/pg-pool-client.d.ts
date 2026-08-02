@@ -5,4 +5,8 @@ declare module 'pg' {
     query(text: string, values?: unknown[]): Promise<any>;
     release(): void;
   }
+
+  export interface Pool {
+    connect(): Promise<PoolClient>;
+  }
 }
