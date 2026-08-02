@@ -251,7 +251,7 @@ export async function reorderSections(notebookId: string, orderedIds: string[]):
   return listSections(notebookId);
 }
 
-/** Resolve a section by id, or create a top-level one with that name. */
+/** Resolve a section by id, or by name, or fall back to the notebook's first. */
 export async function resolveSection(
   notebookId: string | null,
   sectionId: string | null | undefined,
@@ -263,12 +263,26 @@ export async function resolveSection(
     const found = await notesDb().query(`${SECTION_SELECT} WHERE section.id = $1`, [sectionId]);
     if (found.rowCount) return toSection(found.rows[0]);
   }
-  const wanted = (name || '').trim() || 'Notes';
-  const existing = await notesDb().query(
-    `${SECTION_SELECT} WHERE section.notebook_id = $1 AND LOWER(section.name) = LOWER($2)
-     ORDER BY COALESCE(section.parent_id, '') LIMIT 1`,
-    [notebookId, wanted],
+
+  const wanted = (name || '').trim();
+  if (wanted) {
+    const existing = await notesDb().query(
+      `${SECTION_SELECT} WHERE section.notebook_id = $1 AND LOWER(section.name) = LOWER($2)
+       ORDER BY COALESCE(section.parent_id, '') LIMIT 1`,
+      [notebookId, wanted],
+    );
+    if (existing.rowCount) return toSection(existing.rows[0]);
+    return createSection({ notebookId, name: wanted }).catch(() => null);
+  }
+
+  // No section was asked for. Use whatever the notebook already opens with
+  // rather than inventing one called "Notes" - if the user has renamed that
+  // tab, conjuring it back looks exactly like the rename being undone.
+  const first = await notesDb().query(
+    `${SECTION_SELECT} WHERE section.notebook_id = $1
+     ORDER BY COALESCE(section.parent_id, ''), section.position, LOWER(section.name) LIMIT 1`,
+    [notebookId],
   );
-  if (existing.rowCount) return toSection(existing.rows[0]);
-  return createSection({ notebookId, name: wanted }).catch(() => null);
+  if (first.rowCount) return toSection(first.rows[0]);
+  return createSection({ notebookId, name: 'Notes' }).catch(() => null);
 }
