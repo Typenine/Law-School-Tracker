@@ -4,7 +4,6 @@ import Link from 'next/link'
 import ReminderManager from '@/components/ReminderManager'
 import PWARegister from '@/components/PWARegister'
 import CommandPalette from '@/components/CommandPalette'
-import ThemeToggleButton from '@/components/ThemeToggleButton'
 import Providers from '@/app/providers'
 
 export const metadata: Metadata = {
@@ -12,57 +11,45 @@ export const metadata: Metadata = {
   description: 'Structure your workload, stay on pace, and review your progress.',
 }
 
+const css = String.raw`
+:root,.dark{--bg:#07111f;--side:#050d19;--s1:#0d1a2c;--s2:#0f1c2f;--s3:#142440;--active:#10233c;--line:#1a2942;--line2:#22354f;--input:#1d2d47;--btn:#27405f;--hover:#33496b;--text:#eaf0f7;--text2:#d3dde9;--text3:#a8b8cc;--muted:#8fa3bd;--muted2:#6f83a0;--label:#64789a;--gold:#ffcc00;--gold2:#ffd633;--ink:#06152b;--blue:#4b92db;--blue2:#7fb3e8;--green:#4f8f6a;--green2:#5f9e7d;--red:#c9553d;--red2:#e07a68;color-scheme:dark}
+*{box-sizing:border-box}html,body{min-height:100%}html.dark body,body{margin:0;background:var(--bg)!important;color:var(--text)!important;font:13.5px/1.45 'IBM Plex Sans',system-ui,sans-serif!important}a{color:var(--blue)}a:hover{color:var(--blue2)}button,input,textarea,select{font:inherit}h1,h2,h3,h4{font-family:'Newsreader',Georgia,serif!important;color:var(--text)}code,kbd,time,input[type=time],input[type=date],input[type=datetime-local],input[type=number]{font-family:'IBM Plex Mono',monospace!important}
+.lst-shell{min-height:100vh;display:grid;grid-template-columns:232px minmax(0,1fr)}.lst-sidebar{position:sticky;top:0;height:100vh;z-index:45;display:flex;flex-direction:column;padding:20px 14px 14px;background:var(--side);border-right:1px solid var(--line);overflow-y:auto}.lst-brand{padding:0 8px 23px}.lst-wordmark{font:600 17px/1.15 'Newsreader',Georgia,serif;white-space:nowrap}.lst-term{margin-top:7px;color:var(--label);font:500 10.5px/1.2 'IBM Plex Mono',monospace;letter-spacing:.06em;text-transform:uppercase}.lst-group{margin-bottom:19px}.lst-label{padding:0 8px 6px;color:var(--label);font:500 10px/1 'IBM Plex Mono',monospace;letter-spacing:.12em;text-transform:uppercase}.lst-list{display:flex;flex-direction:column;gap:2px}.lst-nav{display:flex;align-items:center;gap:10px;min-height:34px;padding:7px 8px;border-radius:6px;color:var(--text3)!important;text-decoration:none;transition:.1s}.lst-nav:hover{background:var(--s3);color:var(--text)!important}.lst-nav.active{background:var(--active);color:var(--text)!important;box-shadow:inset 2px 0 var(--gold)}.lst-icon{width:18px;flex:0 0 18px;color:var(--muted);font:500 14px/1 'IBM Plex Mono',monospace;text-align:center}.lst-nav.active .lst-icon{color:var(--gold)}.lst-name{min-width:0;flex:1;white-space:nowrap}.lst-count{color:var(--muted2);font:400 10.5px/1 'IBM Plex Mono',monospace}.lst-grow{flex:1}.lst-week{margin:0 4px 14px;padding:13px 12px;border:1px solid var(--line);border-radius:9px;background:var(--s1)}.lst-week b{display:block;color:var(--label);font:500 9.5px/1 'IBM Plex Mono',monospace;letter-spacing:.12em;text-transform:uppercase}.lst-week-value{margin-top:8px;color:var(--text2);font:500 13px/1 'IBM Plex Mono',monospace}.lst-track{height:3px;margin-top:9px;border-radius:2px;background:var(--line2);overflow:hidden}.lst-fill{display:block;width:0;height:100%;background:var(--gold)}.lst-week-copy{margin-top:8px;color:var(--muted);font-size:11px}.lst-bottom{padding-top:12px;border-top:1px solid var(--line)}
+.lst-work{min-width:0}.lst-top{position:sticky;top:0;z-index:35;min-height:78px;display:flex;align-items:center;gap:22px;padding:18px 34px;background:rgba(7,17,31,.94);border-bottom:1px solid var(--line);backdrop-filter:blur(12px)}.lst-menu{display:none;width:34px;height:34px;border:1px solid var(--btn);border-radius:7px;background:var(--s1);color:var(--text2)}.lst-heading{min-width:0;flex:1}.lst-title{margin:0;font:500 20px/1.2 'Newsreader',Georgia,serif}.lst-sub{margin:5px 0 0;color:var(--muted);font-size:12px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}.lst-actions{display:flex;align-items:center;gap:10px}.lst-search{min-width:210px;height:34px;display:flex;align-items:center;justify-content:space-between;gap:12px;padding:0 8px 0 11px;border:1px solid var(--input);border-radius:7px;background:var(--s2);color:var(--muted)}.lst-search:hover{border-color:var(--hover);background:var(--s3)}.lst-search kbd{padding:2px 5px;border:1px solid var(--btn);border-radius:4px;color:var(--muted2);background:var(--s1);font-size:10px}.lst-add{min-height:34px;display:inline-flex;align-items:center;padding:8px 14px;border:1px solid var(--gold);border-radius:7px;background:var(--gold);color:var(--ink)!important;font-weight:600;text-decoration:none;white-space:nowrap}.lst-add:hover{background:var(--gold2);border-color:var(--gold2);color:var(--ink)!important}.lst-content{min-width:0;padding:28px 34px 44px}.lst-content>*{width:100%;max-width:1180px;margin:0 auto 0 0}body[data-route='/'] .lst-content>*,body[data-route='/week-plan'] .lst-content>*{max-width:1340px}body[data-route='/tasks'] .lst-content>*,body[data-route='/review'] .lst-content>*{max-width:1120px}body[data-route='/log'] .lst-content>*{max-width:1060px}body[data-route='/settings'] .lst-content>*{max-width:720px}
+.app-container{max-width:none!important;margin:0!important;padding:0!important}.card,[class*='rounded-xl'][class*='border'],[class*='rounded-lg'][class*='border']{border-color:var(--line)!important;background-color:var(--s1)!important;box-shadow:none!important;backdrop-filter:none!important}[class*='bg-[#11162b]']{background-color:var(--s1)!important}[class*='bg-[#0b1020]']{background-color:var(--s2)!important}[class*='border-[#1b2344]']{border-color:var(--line)!important}[class*='text-slate-300'],[class*='text-slate-400']{color:var(--muted)!important}[class*='text-slate-500']{color:var(--muted2)!important}input,textarea,select{border:1px solid var(--input)!important;border-radius:7px!important;background:var(--s2)!important;color:var(--text)!important;outline:none}input::placeholder,textarea::placeholder{color:var(--muted2)!important}input:focus,textarea:focus,select:focus{border-color:var(--blue)!important;background:var(--s3)!important}.bg-blue-600,.bg-blue-500,.hover\:bg-blue-500:hover{background:var(--gold)!important;color:var(--ink)!important}.bg-emerald-600{background:var(--green)!important}.bg-rose-600,.bg-red-600{background:var(--red)!important}.text-blue-400,.text-blue-300{color:var(--blue2)!important}.text-emerald-400{color:var(--green2)!important}.text-rose-400,.text-red-400{color:var(--red2)!important}.lst-content label,.lst-content th{color:var(--label)!important;font-size:10px!important;font-weight:500!important;letter-spacing:.08em;text-transform:uppercase}table{color:var(--text2)}td,th{border-color:var(--line)!important}
+body[data-route='/tasks'] table{width:100%;border-collapse:separate!important;border-spacing:0 6px!important}body[data-route='/tasks'] table thead{display:none}body[data-route='/tasks'] table tbody tr{background:var(--s2)}body[data-route='/tasks'] table tbody tr:hover{background:var(--s3)}body[data-route='/tasks'] table tbody td{padding:11px 10px!important;border-top:1px solid var(--line);border-bottom:1px solid var(--line)}body[data-route='/tasks'] table tbody td:first-child{border-left:1px solid var(--line);border-radius:8px 0 0 8px}body[data-route='/tasks'] table tbody td:last-child{border-right:1px solid var(--line);border-radius:0 8px 8px 0}body[data-route='/tasks'] table :is(th,td):nth-child(4),body[data-route='/tasks'] table :is(th,td):nth-child(8),body[data-route='/tasks'] table :is(th,td):nth-child(9),body[data-route='/tasks'] table :is(th,td):nth-child(10),body[data-route='/tasks'] table :is(th,td):nth-child(11){display:none!important}body[data-route='/tasks'] table td:nth-child(2){width:132px;color:var(--muted)}body[data-route='/tasks'] table td:nth-child(3){font-weight:500;color:var(--text)}body[data-route='/tasks'] table :is(td:nth-child(5),td:nth-child(6),td:nth-child(7)){font-family:'IBM Plex Mono',monospace;font-size:11.5px}.fixed.inset-0>[class*='rounded'],[role=dialog]{border-color:var(--line2)!important;background:#0b1727!important;box-shadow:0 30px 80px rgba(0,0,0,.6)!important}.fixed.inset-0{backdrop-filter:blur(2px)}.lst-scrim{display:none}
+@media(max-width:1100px){.lst-shell{grid-template-columns:76px minmax(0,1fr)}.lst-sidebar{padding-inline:10px}.lst-brand{text-align:center;padding-inline:3px}.lst-wordmark{font-size:0}.lst-wordmark:after{content:'LST';font:600 16px/1 'Newsreader',Georgia,serif}.lst-term,.lst-label,.lst-name,.lst-count,.lst-week-copy,.lst-week-value{display:none}.lst-nav{justify-content:center}.lst-content,.lst-top{padding-inline:24px}}
+@media(max-width:760px){.lst-shell{display:block}.lst-sidebar{position:fixed;left:0;width:232px;padding:20px 14px 14px;transform:translateX(-100%);transition:transform .14s}.side-open .lst-sidebar{transform:none}.lst-wordmark{font-size:17px;text-align:left}.lst-wordmark:after{content:none}.lst-term,.lst-label,.lst-name,.lst-count,.lst-week-copy,.lst-week-value{display:block}.lst-nav{justify-content:flex-start}.lst-menu{display:grid;place-items:center}.lst-top{min-height:70px;padding:14px 16px;gap:12px}.lst-sub{display:none}.lst-search{min-width:34px;width:34px;padding:0;justify-content:center}.lst-search span{display:none}.lst-search kbd{border:0;padding:0;background:none;font-size:0}.lst-search kbd:after{content:'⌕';font-size:17px}.lst-add{padding:8px 10px;font-size:12px}.lst-content{padding:20px 14px 36px}.lst-scrim{position:fixed;inset:0;z-index:40;border:0;background:rgba(3,10,20,.72)}.side-open .lst-scrim{display:block}body[data-route='/tasks'] table{min-width:720px}}
+@media(max-width:520px){.lst-add{font-size:0;width:34px;justify-content:center;padding:0}.lst-add:before{content:'+';font-size:20px}.lst-title{font-size:18px}}
+`
+
+const script = String.raw`
+(function(){var map={'/':['Today','What is next, what remains, and how the day is shaping up.'],'/week-plan':['This week','Balance the week before the week balances you.'],'/tasks':['Tasks','Assignments grouped around what needs attention.'],'/courses':['Courses','Your semester, course by course.'],'/notes':['Notes','Class notes, reading notes, outlines, and source material.'],'/calendar':['Calendar','Classes, deadlines, exams, and study commitments.'],'/log':['Log a session','Record the work while the details are still fresh.'],'/review':['Review','See where your time went and what your pace says.'],'/settings':['Settings','Set the assumptions the tracker uses to plan your work.'],'/help':['Help','How the tracker plans, estimates, and records your work.']},last='';
+function path(){var p=location.pathname||'/';return p.length>1?p.replace(/\/$/,''):p}function update(){var p=path();if(p===last)return;last=p;document.body.dataset.route=p;document.querySelectorAll('[data-nav]').forEach(function(n){var h=n.getAttribute('href')||'',a=h==='/'?p==='/':p===h||p.indexOf(h+'/')===0;n.classList.toggle('active',a)});var i=map[p]||['Law School Tracker','Structure your workload, stay on pace, and review your progress.'];document.getElementById('page-title').textContent=i[0];document.getElementById('page-sub').textContent=i[1];var a=document.getElementById('add');if(p==='/courses'){a.textContent='Add course';a.href='/courses#add-course'}else if(p==='/notes'){a.textContent='Add notes';a.href='/notes#add-notes'}else if(p==='/log'){a.textContent='View tasks';a.href='/tasks'}else{a.textContent='Add task';a.href='/tasks#add-task'}document.body.classList.remove('side-open')}
+function data(){fetch('/api/tasks').then(function(r){return r.json()}).then(function(d){var e=document.querySelector('[data-count=tasks]'),n=(d.tasks||[]).filter(function(t){return t.status!=='done'}).length;if(e)e.textContent=n||''}).catch(function(){});fetch('/api/courses').then(function(r){return r.json()}).then(function(d){var e=document.querySelector('[data-count=courses]'),n=(d.courses||[]).length;if(e)e.textContent=n||''}).catch(function(){});fetch('/api/sessions').then(function(r){return r.json()}).then(function(d){var now=new Date(),day=now.getDay(),start=new Date(now);start.setHours(0,0,0,0);start.setDate(start.getDate()-((day+6)%7));var mins=(d.sessions||[]).reduce(function(s,x){var dt=new Date(x.startedAt||x.date||x.createdAt||0);return dt>=start?s+(Number(x.minutes)||0):s},0),target=1440;try{target=Number(localStorage.getItem('weeklyTargetMinutes')||localStorage.getItem('weeklyGoalMinutes'))||1440}catch(e){}var hm=function(n){return Math.floor(n/60)+'h'+String(Math.round(n%60)).padStart(2,'0')},pct=Math.min(100,Math.round(mins/target*100));document.getElementById('week-value').textContent=hm(mins)+' / '+hm(target);document.getElementById('week-fill').style.width=pct+'%';document.getElementById('week-copy').textContent=pct>=100?'Weekly target reached.':pct>=70?'On pace. Keep the remaining work deliberate.':'The week still has room. Schedule the next block.'}).catch(function(){})}
+function bind(){document.getElementById('menu').onclick=function(){document.body.classList.toggle('side-open')};document.getElementById('scrim').onclick=function(){document.body.classList.remove('side-open')};document.getElementById('search').onclick=function(){var e=new KeyboardEvent('keydown',{key:'k',code:'KeyK',metaKey:true,ctrlKey:true,bubbles:true});document.dispatchEvent(e);window.dispatchEvent(e)};document.addEventListener('keydown',function(e){if(e.key==='Escape')document.body.classList.remove('side-open')});update();data();setInterval(update,250);setInterval(data,60000)}if(document.readyState==='loading')document.addEventListener('DOMContentLoaded',bind,{once:true});else bind()})();
+`
+
+const plan = [
+  ['/', '●', 'Today'], ['/week-plan', '▦', 'This week'], ['/tasks', '✓', 'Tasks', 'tasks'],
+]
+const semester = [
+  ['/courses', '▤', 'Courses', 'courses'], ['/notes', '≡', 'Notes'], ['/calendar', '□', 'Calendar'],
+]
+const progress = [['/log', '+', 'Log a session'], ['/review', '◒', 'Review']]
+
+function Group({ label, items }: { label: string; items: string[][] }) {
+  return <div className="lst-group"><div className="lst-label">{label}</div><div className="lst-list">{items.map(([href, icon, name, count]) => <Link key={href} href={href} className="lst-nav" data-nav><span className="lst-icon" aria-hidden="true">{icon}</span><span className="lst-name">{name}</span>{count ? <span className="lst-count" data-count={count} /> : null}</Link>)}</div></div>
+}
+
 export default function RootLayout({ children }: { children: React.ReactNode }) {
-  return (
-    <html lang="en" className="dark" suppressHydrationWarning>
-      <head>
-        <link rel="manifest" href="/manifest.json" />
-        <meta name="theme-color" content="#0b1020" />
-        <script dangerouslySetInnerHTML={{
-          __html: `
-            (function() {
-              try {
-                var theme = localStorage.getItem('themePreference');
-                if (theme === 'light') {
-                  document.documentElement.classList.remove('dark');
-                  document.documentElement.classList.add('light');
-                }
-              } catch (e) {}
-            })();
-          `
-        }} />
-      </head>
-      <body>
-        <Providers>
-          <div className="app-container">
-            <header className="mb-6 space-y-3">
-            <div className="flex items-center justify-between">
-              <div>
-                <h1 className="text-2xl font-semibold">Law School Tracker</h1>
-                <p className="text-sm opacity-80">Structure your workload, stay on pace, and review your progress.</p>
-              </div>
-              <ThemeToggleButton />
-            </div>
-            <nav className="flex flex-wrap gap-2 text-sm">
-              <Link href="/" className="nav-link">Today</Link>
-              <Link href="/week-plan" className="nav-link">Week Plan</Link>
-              <Link href="/tasks" className="nav-link">Tasks</Link>
-              <Link href="/courses" className="nav-link">Courses</Link>
-              <Link href="/notes" className="nav-link">Notes</Link>
-              <Link href="/calendar" className="nav-link">Calendar</Link>
-              <Link href="/settings" className="nav-link">Settings</Link>
-              <Link href="/help" className="nav-link">Help</Link>
-              <Link href="/review" className="nav-link">Review</Link>
-              <Link href="/log" className="nav-link">Log</Link>
-            </nav>
-            </header>
-            {children}
-          </div>
-          <ReminderManager />
-          <PWARegister />
-          <CommandPalette />
-        </Providers>
-      </body>
-    </html>
-  )
+  return <html lang="en" className="dark" suppressHydrationWarning><head>
+    <link rel="manifest" href="/manifest.json" /><meta name="theme-color" content="#07111f" />
+    <link rel="preconnect" href="https://fonts.googleapis.com" /><link rel="preconnect" href="https://fonts.gstatic.com" crossOrigin="anonymous" />
+    <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans:wght@400;500;600&family=Newsreader:wght@400;500;600&display=swap" rel="stylesheet" />
+    <style dangerouslySetInnerHTML={{ __html: css }} />
+  </head><body><Providers><div className="lst-shell">
+    <aside className="lst-sidebar"><div className="lst-brand"><div className="lst-wordmark">Law School Tracker</div><div className="lst-term">Fall 2026 · Week 3</div></div><nav><Group label="Plan" items={plan} /><Group label="Semester" items={semester} /><Group label="Progress" items={progress} /></nav><div className="lst-grow" /><div className="lst-week"><b>This week</b><div id="week-value" className="lst-week-value">0h00 / 24h00</div><div className="lst-track"><span id="week-fill" className="lst-fill" /></div><div id="week-copy" className="lst-week-copy">The week still has room. Schedule the next block.</div></div><div className="lst-bottom lst-list"><Link href="/help" className="lst-nav" data-nav><span className="lst-icon">?</span><span className="lst-name">Help</span></Link><Link href="/settings" className="lst-nav" data-nav><span className="lst-icon">⚙</span><span className="lst-name">Settings</span></Link></div></aside>
+    <button id="scrim" className="lst-scrim" aria-label="Close navigation" /><div className="lst-work"><header className="lst-top"><button id="menu" className="lst-menu" type="button" aria-label="Open navigation">☰</button><div className="lst-heading"><h1 id="page-title" className="lst-title">Today</h1><p id="page-sub" className="lst-sub">What is next, what remains, and how the day is shaping up.</p></div><div className="lst-actions"><button id="search" className="lst-search" type="button"><span>Search or jump to…</span><kbd>⌘K</kbd></button><Link id="add" href="/tasks#add-task" className="lst-add">Add task</Link></div></header><main className="lst-content">{children}</main></div>
+  </div><ReminderManager /><PWARegister /><CommandPalette /><script dangerouslySetInnerHTML={{ __html: script }} /></Providers></body></html>
 }
