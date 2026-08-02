@@ -15,6 +15,8 @@ export type Notebook = {
 export type Section = {
   id: string;
   notebookId: string;
+  /** Null for a top-level category; a section id for a week inside one. */
+  parentId: string | null;
   name: string;
   color: string | null;
   position: number;
@@ -31,6 +33,7 @@ export type PageSummary = {
   course: string | null;
   semester: string | null;
   section: string;
+  sectionId: string | null;
   position: number;
   classDate: string | null;
   sourceType: string;

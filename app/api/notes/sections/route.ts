@@ -10,6 +10,8 @@ const createSchema = z.object({
   notebookId: z.string().trim().min(1),
   name: z.string().trim().min(1).max(120),
   color: z.string().trim().max(40).nullable().optional(),
+  /** Omit for a top-level category; pass a section id to nest beneath it. */
+  parentId: z.string().trim().max(200).nullable().optional(),
 });
 
 const reorderSchema = z.object({

@@ -20,7 +20,7 @@ import {
 } from './notesTypes';
 
 type NotebookForm = { id: string | null; name: string; semester: string; color: string };
-type SectionForm = { id: string | null; name: string; color: string };
+type SectionForm = { id: string | null; parentId: string | null; name: string; color: string };
 type ImportForm = {
   title: string;
   section: string;
@@ -49,6 +49,7 @@ export default function NotesPage() {
   const [pages, setPages] = useState<PageSummary[]>([]);
   const [notebookId, setNotebookId] = useState<string>('');
   const [sectionName, setSectionName] = useState<string>('');
+  const [sectionId, setSectionId] = useState<string>('');
   const [pageId, setPageId] = useState<string>('');
   const [draft, setDraft] = useState<Page | null>(null);
 
@@ -99,11 +100,13 @@ export default function NotesPage() {
     [sections, notebookId],
   );
   const activeSection = useMemo(
-    () => notebookSections.find(section => section.name === sectionName) || null,
-    [notebookSections, sectionName],
+    () => notebookSections.find(section => section.id === sectionId)
+      || notebookSections.find(section => section.name === sectionName)
+      || null,
+    [notebookSections, sectionId, sectionName],
   );
   const activeSectionColor = useMemo(() => {
-    const index = notebookSections.findIndex(section => section.name === sectionName);
+    const index = notebookSections.findIndex(section => section.id === activeSection?.id);
     return sectionColor(activeSection || undefined, index < 0 ? 0 : index);
   }, [activeSection, notebookSections, sectionName]);
 
@@ -317,6 +320,13 @@ export default function NotesPage() {
       if (available.some(section => section.name === remembered)) return remembered;
       return available[0].name;
     });
+    // Prefer a leaf (a week) so new pages land somewhere sensible.
+    setSectionId(current => {
+      if (available.some(section => section.id === current)) return current;
+      const leaf = available.find(section => section.parentId
+        && !available.some(child => child.parentId === section.id));
+      return (leaf || available[0]).id;
+    });
   }, [notebookId, sections]);
 
   // Load pages for the selected tab, and open the remembered page.
@@ -344,10 +354,10 @@ export default function NotesPage() {
   useEffect(() => {
     if (!notebookId || !sectionName || !pageId) return;
     window.localStorage.setItem(`notesLastPage:${notebookId}:${sectionName}`, pageId);
-    revealPath(notebooks.find(n => n.id === notebookId), sectionName);
+    revealPath(notebooks.find(n => n.id === notebookId), sectionId);
     void loadNotebookPages(notebookId);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [notebookId, sectionName, pageId]);
+  }, [notebookId, sectionName, sectionId, pageId]);
 
   // Search across every page in the notebook.
   useEffect(() => {
@@ -428,31 +438,38 @@ export default function NotesPage() {
   }, [loadNotebookPages, persistExpanded]);
 
   /** Open the branches leading to a page so the selection is always visible. */
-  const revealPath = useCallback((notebook: Notebook | undefined, section: string) => {
+  const revealPath = useCallback((notebook: Notebook | undefined, targetSectionId: string) => {
     if (!notebook) return;
-    const target = sections.find(s => s.notebookId === notebook.id && s.name.toLowerCase() === section.toLowerCase());
     setExpanded(current => {
       const next = new Set(current);
       next.add(semesterKey(notebook.semester || 'Unsorted'));
       next.add(notebookKey(notebook.id));
-      if (target) next.add(sectionKey(target.id));
+      // Walk up the section chain so every ancestor is open.
+      let node = sections.find(x => x.id === targetSectionId);
+      let guard = 0;
+      while (node && guard++ < 10) {
+        next.add(sectionKey(node.id));
+        node = node.parentId ? sections.find(x => x.id === node!.parentId) : undefined;
+      }
       persistExpanded(next);
       return next;
     });
   }, [sections, persistExpanded]);
 
-  async function selectTreePage(nbId: string, section: string, id: string) {
+  async function selectTreePage(nbId: string, secId: string, section: string, id: string) {
     if (id === pageId) return;
     if (dirtyRef.current) await savePage(true);
     if (nbId) setNotebookId(nbId);
+    if (secId) setSectionId(secId);
     if (section) setSectionName(section);
     await openPage(id);
   }
 
-  async function createPageIn(nbId: string, section: string) {
+  async function createPageIn(nbId: string, secId: string, section: string) {
     setNotebookId(nbId);
+    setSectionId(secId);
     setSectionName(section);
-    await createPage(nbId, section);
+    await createPage(nbId, section, secId);
   }
 
   function patchDraft(patch: Partial<Page>) {
@@ -484,7 +501,7 @@ export default function NotesPage() {
     await openPage(id);
   }
 
-  async function createPage(targetNotebook = notebookId, targetSection = sectionName) {
+  async function createPage(targetNotebook = notebookId, targetSection = sectionName, targetSectionId = sectionId) {
     if (!targetNotebook) {
       setError('Create a notebook first.');
       return;
@@ -501,7 +518,9 @@ export default function NotesPage() {
           body: JSON.stringify({ notebookId: targetNotebook, name: 'Notes' }),
         });
         section = created?.section?.name || 'Notes';
+        targetSectionId = created?.section?.id || '';
         setSectionName(section);
+        setSectionId(targetSectionId);
       }
       const data = await api('/api/notes', {
         method: 'POST',
@@ -509,6 +528,7 @@ export default function NotesPage() {
           title: 'Untitled Page',
           notebookId: targetNotebook,
           section,
+          sectionId: targetSectionId || undefined,
           sourceType: 'class-notes',
           contentHtml: '<p><br></p>',
         }),
@@ -610,7 +630,7 @@ export default function NotesPage() {
       } else {
         await api('/api/notes/sections', {
           method: 'POST',
-          body: JSON.stringify({ notebookId, name, color: sectionModal.color || null }),
+          body: JSON.stringify({ notebookId, name, color: sectionModal.color || null, parentId: sectionModal.parentId }),
         });
       }
       setSectionModal(null);
@@ -847,10 +867,10 @@ export default function NotesPage() {
               expanded={expanded}
               onToggle={toggleNode}
               selectedNotebookId={notebookId}
-              selectedSection={sectionName}
+              selectedSectionId={sectionId}
               selectedPageId={pageId}
               loadingNotebookId={loadingNotebookId}
-              onSelectPage={(nb, section, id) => void selectTreePage(nb, section, id)}
+              onSelectPage={(nb, secId, section, id) => void selectTreePage(nb, secId, section, id)}
               onNewNotebook={semester => setNotebookModal({ id: null, name: '', semester, color: SECTION_COLORS[0] })}
               onEditNotebook={notebook => setNotebookModal({
                 id: notebook.id,
@@ -858,9 +878,9 @@ export default function NotesPage() {
                 semester: notebook.semester || '',
                 color: notebook.color || SECTION_COLORS[0],
               })}
-              onNewSection={nb => { setNotebookId(nb); setSectionModal({ id: null, name: '', color: SECTION_COLORS[sections.filter(x => x.notebookId === nb).length % SECTION_COLORS.length] }); }}
-              onEditSection={(section, colour) => { setNotebookId(section.notebookId); setSectionModal({ id: section.id, name: section.name, color: colour }); }}
-              onNewPage={(nb, section) => void createPageIn(nb, section)}
+              onNewSection={(nb, parentId) => { setNotebookId(nb); setSectionModal({ id: null, parentId, name: '', color: SECTION_COLORS[sections.filter(x => x.notebookId === nb).length % SECTION_COLORS.length] }); }}
+              onEditSection={(section, colour) => { setNotebookId(section.notebookId); setSectionModal({ id: section.id, parentId: section.parentId, name: section.name, color: colour }); }}
+              onNewPage={(nb, secId, section) => void createPageIn(nb, secId, section)}
               searchResults={searchResults}
             />
           </div>
@@ -888,6 +908,7 @@ export default function NotesPage() {
                 title="Section settings"
                 onClick={() => setSectionModal({
                   id: activeSection.id,
+                  parentId: activeSection.parentId,
                   name: activeSection.name,
                   color: activeSectionColor,
                 })}

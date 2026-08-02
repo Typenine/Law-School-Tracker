@@ -5,8 +5,7 @@ import type { NoteSection } from './types';
 const SECTION_SELECT = `
   SELECT section.*,
     (SELECT COUNT(*)::int FROM ai_notes note
-      WHERE note.notebook_id = section.notebook_id
-        AND LOWER(note.section) = LOWER(section.name)
+      WHERE note.section_id = section.id
         AND note.archived = FALSE) AS page_count
   FROM ai_note_sections section
 `;
@@ -14,7 +13,8 @@ const SECTION_SELECT = `
 export async function listSections(notebookId: string): Promise<NoteSection[]> {
   await ensureNotesSchema();
   const result = await notesDb().query(
-    `${SECTION_SELECT} WHERE section.notebook_id = $1 ORDER BY section.position, LOWER(section.name)`,
+    `${SECTION_SELECT} WHERE section.notebook_id = $1
+     ORDER BY COALESCE(section.parent_id, ''), section.position, LOWER(section.name)`,
     [notebookId],
   );
   return result.rows.map(toSection);
@@ -23,7 +23,7 @@ export async function listSections(notebookId: string): Promise<NoteSection[]> {
 export async function listAllSections(): Promise<NoteSection[]> {
   await ensureNotesSchema();
   const result = await notesDb().query(
-    `${SECTION_SELECT} ORDER BY section.notebook_id, section.position, LOWER(section.name)`,
+    `${SECTION_SELECT} ORDER BY section.notebook_id, COALESCE(section.parent_id, ''), section.position, LOWER(section.name)`,
   );
   return result.rows.map(toSection);
 }
@@ -32,20 +32,24 @@ export async function createSection(input: {
   notebookId: string;
   name: string;
   color?: string | null;
+  /** Null for a top-level category; a section id to nest beneath it. */
+  parentId?: string | null;
 }): Promise<NoteSection> {
   await ensureNotesSchema();
   const database = notesDb();
   const name = input.name.trim() || 'New Section';
+  const parentId = cleanText(input.parentId);
   const next = await database.query(
-    `SELECT COALESCE(MAX(position), -1) + 1 AS position FROM ai_note_sections WHERE notebook_id = $1`,
-    [input.notebookId],
+    `SELECT COALESCE(MAX(position), -1) + 1 AS position FROM ai_note_sections
+     WHERE notebook_id = $1 AND COALESCE(parent_id, '') = COALESCE($2, '')`,
+    [input.notebookId, parentId],
   );
   const result = await database.query(
-    `INSERT INTO ai_note_sections (id, notebook_id, name, color, position)
-     VALUES ($1, $2, $3, $4, $5)
-     ON CONFLICT (notebook_id, LOWER(name)) DO UPDATE SET updated_at = NOW()
+    `INSERT INTO ai_note_sections (id, notebook_id, parent_id, name, color, position)
+     VALUES ($1, $2, $3, $4, $5, $6)
+     ON CONFLICT (notebook_id, COALESCE(parent_id, ''), LOWER(name)) DO UPDATE SET updated_at = NOW()
      RETURNING *, 0::int AS page_count`,
-    [randomUUID(), input.notebookId, name, cleanText(input.color), Number(next.rows[0]?.position) || 0],
+    [randomUUID(), input.notebookId, parentId, name, cleanText(input.color), Number(next.rows[0]?.position) || 0],
   );
   return toSection(result.rows[0]);
 }
@@ -71,11 +75,13 @@ export async function updateSection(
       [id, name, color, position],
     );
     if (name !== current.name) {
-      // Pages store the section by name, so a rename has to follow through.
+      // Pages keep a denormalised copy of the section name for search and the
+      // GPT endpoints, so a rename has to follow through. Matching on the id
+      // rather than the old name keeps sibling branches with the same name
+      // (two "Week 1"s under different categories) from being caught up in it.
       await client.query(
-        `UPDATE ai_notes SET section=$3, updated_at=NOW()
-         WHERE notebook_id=$1 AND LOWER(section)=LOWER($2)`,
-        [current.notebook_id, current.name, name],
+        `UPDATE ai_notes SET section=$2, updated_at=NOW() WHERE section_id=$1`,
+        [id, name],
       );
     }
     await client.query('COMMIT');
@@ -91,9 +97,9 @@ export async function updateSection(
 }
 
 /**
- * Delete a section. Its pages move to another section in the same notebook so
- * nothing is lost; only when the notebook has no other section are the pages
- * deleted, and then only if the caller asked for it.
+ * Delete a section and everything nested under it. Pages in the subtree move to
+ * a sibling so nothing is lost; they are only deleted when there is nowhere
+ * left to put them, or when the caller explicitly asks.
  */
 export async function deleteSection(
   id: string,
@@ -105,13 +111,26 @@ export async function deleteSection(
   if (!currentResult.rowCount) return { deleted: false, movedTo: null, deletedPages: 0 };
   const current = currentResult.rows[0];
 
-  const fallbackResult = await database.query(
-    `SELECT name FROM ai_note_sections
-     WHERE notebook_id = $1 AND id <> $2
-     ORDER BY position, LOWER(name) LIMIT 1`,
-    [current.notebook_id, id],
+  // The section plus every descendant.
+  const subtree = await database.query(
+    `WITH RECURSIVE tree AS (
+       SELECT id FROM ai_note_sections WHERE id = $1
+       UNION ALL
+       SELECT child.id FROM ai_note_sections child JOIN tree ON child.parent_id = tree.id
+     ) SELECT id FROM tree`,
+    [id],
   );
-  const fallback: string | null = fallbackResult.rows[0]?.name ?? null;
+  const ids: string[] = subtree.rows.map((r: any) => r.id);
+
+  // Prefer a sibling at the same level to receive the orphaned pages.
+  const fallbackResult = await database.query(
+    `SELECT id, name FROM ai_note_sections
+     WHERE notebook_id = $1 AND NOT (id = ANY($2::text[]))
+     ORDER BY (COALESCE(parent_id, '') = COALESCE($3, '')) DESC, position, LOWER(name)
+     LIMIT 1`,
+    [current.notebook_id, ids, current.parent_id],
+  );
+  const fallback = fallbackResult.rows[0] ?? null;
 
   const client = await database.connect();
   try {
@@ -119,20 +138,17 @@ export async function deleteSection(
     let deletedPages = 0;
     if (fallback && !options.deletePages) {
       await client.query(
-        `UPDATE ai_notes SET section=$3, updated_at=NOW()
-         WHERE notebook_id=$1 AND LOWER(section)=LOWER($2)`,
-        [current.notebook_id, current.name, fallback],
+        `UPDATE ai_notes SET section_id=$2, section=$3, updated_at=NOW()
+         WHERE section_id = ANY($1::text[])`,
+        [ids, fallback.id, fallback.name],
       );
     } else {
-      const removed = await client.query(
-        `DELETE FROM ai_notes WHERE notebook_id=$1 AND LOWER(section)=LOWER($2)`,
-        [current.notebook_id, current.name],
-      );
+      const removed = await client.query(`DELETE FROM ai_notes WHERE section_id = ANY($1::text[])`, [ids]);
       deletedPages = removed.rowCount || 0;
     }
-    await client.query(`DELETE FROM ai_note_sections WHERE id=$1`, [id]);
+    await client.query(`DELETE FROM ai_note_sections WHERE id = ANY($1::text[])`, [ids]);
     await client.query('COMMIT');
-    return { deleted: true, movedTo: options.deletePages ? null : fallback, deletedPages };
+    return { deleted: true, movedTo: options.deletePages ? null : (fallback?.name ?? null), deletedPages };
   } catch (error) {
     await client.query('ROLLBACK').catch(() => undefined);
     throw error;
@@ -163,8 +179,24 @@ export async function reorderSections(notebookId: string, orderedIds: string[]):
   return listSections(notebookId);
 }
 
-/** Make sure a section row exists for a notebook/name pair. */
-export async function ensureSection(notebookId: string | null, name: string): Promise<void> {
-  if (!notebookId || !name.trim()) return;
-  await createSection({ notebookId, name }).catch(() => undefined);
+/** Resolve a section by id, or create a top-level one with that name. */
+export async function resolveSection(
+  notebookId: string | null,
+  sectionId: string | null | undefined,
+  name: string | null | undefined,
+): Promise<NoteSection | null> {
+  if (!notebookId) return null;
+  await ensureNotesSchema();
+  if (sectionId) {
+    const found = await notesDb().query(`${SECTION_SELECT} WHERE section.id = $1`, [sectionId]);
+    if (found.rowCount) return toSection(found.rows[0]);
+  }
+  const wanted = (name || '').trim() || 'Notes';
+  const existing = await notesDb().query(
+    `${SECTION_SELECT} WHERE section.notebook_id = $1 AND LOWER(section.name) = LOWER($2)
+     ORDER BY COALESCE(section.parent_id, '') LIMIT 1`,
+    [notebookId, wanted],
+  );
+  if (existing.rowCount) return toSection(existing.rows[0]);
+  return createSection({ notebookId, name: wanted }).catch(() => null);
 }

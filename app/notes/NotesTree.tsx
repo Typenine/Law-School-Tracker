@@ -24,15 +24,16 @@ export type TreeProps = {
   expanded: Set<string>;
   onToggle: (key: string) => void;
   selectedNotebookId: string;
-  selectedSection: string;
+  selectedSectionId: string;
   selectedPageId: string;
   loadingNotebookId: string;
-  onSelectPage: (notebookId: string, section: string, pageId: string) => void;
+  onSelectPage: (notebookId: string, sectionId: string, section: string, pageId: string) => void;
   onNewNotebook: (semester: string) => void;
   onEditNotebook: (notebook: Notebook) => void;
-  onNewSection: (notebookId: string) => void;
+  /** parentId null => a category; a section id => a week inside it. */
+  onNewSection: (notebookId: string, parentId: string | null) => void;
   onEditSection: (section: Section, colour: string) => void;
-  onNewPage: (notebookId: string, section: string) => void;
+  onNewPage: (notebookId: string, sectionId: string, section: string) => void;
   searchResults: PageSummary[] | null;
 };
 
@@ -47,7 +48,7 @@ function Twisty({ open }: { open: boolean }) {
 export default function NotesTree(props: TreeProps) {
   const {
     notebooks, sections, pagesByNotebook, expanded, onToggle,
-    selectedNotebookId, selectedSection, selectedPageId, loadingNotebookId,
+    selectedNotebookId, selectedSectionId, selectedPageId, loadingNotebookId,
     onSelectPage, onNewNotebook, onEditNotebook, onNewSection, onEditSection,
     onNewPage, searchResults,
   } = props;
@@ -80,7 +81,7 @@ export default function NotesTree(props: TreeProps) {
             type="button"
             className={`nb-node nb-node-page${page.id === selectedPageId ? ' is-active' : ''}`}
             style={{ paddingLeft: 16 }}
-            onClick={() => onSelectPage(page.notebookId || '', page.section, page.id)}
+            onClick={() => onSelectPage(page.notebookId || '', page.sectionId || '', page.section, page.id)}
           >
             <span className="nb-node-label">{page.pinned ? '★ ' : ''}{page.title}</span>
             <span className="nb-node-meta">{page.notebookName} · {page.section}</span>
@@ -119,6 +120,71 @@ export default function NotesTree(props: TreeProps) {
               const nbOpen = expanded.has(nbKey);
               const nbSections = sections.filter(s => s.notebookId === notebook.id);
               const nbPages = pagesByNotebook[notebook.id] || [];
+
+              /**
+               * Sections nest, so this walks the tree: a category renders its
+               * child weeks, and any section can also hold pages directly.
+               */
+              const renderSections = (book: Notebook, parentId: string | null, depth: number): React.ReactNode => {
+                const level = nbSections.filter(x => (x.parentId || null) === parentId);
+                return level.map((section, index) => {
+                  const secKey = sectionKey(section.id);
+                  const secOpen = expanded.has(secKey);
+                  const colour = sectionColor(section, index);
+                  const children = nbSections.filter(x => x.parentId === section.id);
+                  const secPages = nbPages
+                    .filter(p => p.sectionId === section.id)
+                    .sort((a, b) => Number(b.pinned) - Number(a.pinned) || a.position - b.position);
+                  const isCurrent = section.id === selectedSectionId;
+                  const indent = 26 + depth * 20;
+                  return (
+                    <div key={section.id}>
+                      <div className={`nb-node nb-node-sec${isCurrent ? ' is-current' : ''}`} style={{ ['--sec' as any]: colour }}>
+                        <button type="button" className="nb-node-main" style={{ paddingLeft: indent }} onClick={() => onToggle(secKey)}>
+                          <Twisty open={secOpen} />
+                          <span className="nb-sec-chip" />
+                          <span className="nb-node-label">{section.name}</span>
+                          <span className="nb-node-count">{section.pageCount || ''}</span>
+                        </button>
+                        {depth === 0 && (
+                          <button type="button" className="nb-node-action" title={`New week in ${section.name}`} onClick={() => onNewSection(book.id, section.id)}>+</button>
+                        )}
+                        <button type="button" className="nb-node-action" title={`New page in ${section.name}`} onClick={() => onNewPage(book.id, section.id, section.name)}>✎</button>
+                        <button type="button" className="nb-node-action" title={`${section.name} settings`} onClick={() => onEditSection(section, colour)}>⋯</button>
+                      </div>
+
+                      {secOpen && (
+                        <>
+                          {renderSections(book, section.id, depth + 1)}
+                          {secPages.map(page => (
+                            <button
+                              key={page.id}
+                              type="button"
+                              className={`nb-node nb-node-page${page.id === selectedPageId ? ' is-active' : ''}`}
+                              style={{ paddingLeft: indent + 22 }}
+                              onClick={() => onSelectPage(book.id, section.id, section.name, page.id)}
+                            >
+                              <span className="nb-node-label">{page.pinned ? '★ ' : ''}{page.title}</span>
+                              <span className="nb-node-meta">{formatUpdated(page.updatedAt)}</span>
+                            </button>
+                          ))}
+                          {children.length === 0 && secPages.length === 0 && (
+                            <button
+                              type="button"
+                              className="nb-node nb-node-page nb-node-empty"
+                              style={{ paddingLeft: indent + 22 }}
+                              onClick={() => onNewPage(book.id, section.id, section.name)}
+                            >
+                              <span className="nb-node-label">Empty — add a page</span>
+                            </button>
+                          )}
+                        </>
+                      )}
+                    </div>
+                  );
+                });
+              };
+
               return (
                 <div key={notebook.id}>
                   <div className={`nb-node nb-node-book${notebook.id === selectedNotebookId ? ' is-current' : ''}`}>
@@ -128,7 +194,7 @@ export default function NotesTree(props: TreeProps) {
                       <span className="nb-node-label">{notebook.name}</span>
                       <span className="nb-node-count">{notebook.noteCount}</span>
                     </button>
-                    <button type="button" className="nb-node-action" title={`New section in ${notebook.name}`} onClick={() => onNewSection(notebook.id)}>+</button>
+                    <button type="button" className="nb-node-action" title={`New category in ${notebook.name}`} onClick={() => onNewSection(notebook.id, null)}>+</button>
                     <button type="button" className="nb-node-action" title={`${notebook.name} settings`} onClick={() => onEditNotebook(notebook)}>⋯</button>
                   </div>
 
@@ -137,58 +203,14 @@ export default function NotesTree(props: TreeProps) {
                       {loadingNotebookId === notebook.id && nbSections.length === 0 && (
                         <p className="nb-tree-empty" style={{ paddingLeft: 34 }}>Loading…</p>
                       )}
-                      {nbSections.map((section, index) => {
-                        const secKey = sectionKey(section.id);
-                        const secOpen = expanded.has(secKey);
-                        const colour = sectionColor(section, index);
-                        const secPages = nbPages
-                          .filter(p => p.section.toLowerCase() === section.name.toLowerCase())
-                          .sort((a, b) => Number(b.pinned) - Number(a.pinned) || a.position - b.position);
-                        const isCurrent = notebook.id === selectedNotebookId && section.name === selectedSection;
-                        return (
-                          <div key={section.id}>
-                            <div className={`nb-node nb-node-sec${isCurrent ? ' is-current' : ''}`} style={{ ['--sec' as any]: colour }}>
-                              <button type="button" className="nb-node-main" onClick={() => onToggle(secKey)}>
-                                <Twisty open={secOpen} />
-                                <span className="nb-sec-chip" />
-                                <span className="nb-node-label">{section.name}</span>
-                                <span className="nb-node-count">{section.pageCount}</span>
-                              </button>
-                              <button type="button" className="nb-node-action" title={`New page in ${section.name}`} onClick={() => onNewPage(notebook.id, section.name)}>+</button>
-                              <button type="button" className="nb-node-action" title={`${section.name} settings`} onClick={() => onEditSection(section, colour)}>⋯</button>
-                            </div>
-
-                            {secOpen && (
-                              secPages.length ? secPages.map(page => (
-                                <button
-                                  key={page.id}
-                                  type="button"
-                                  className={`nb-node nb-node-page${page.id === selectedPageId ? ' is-active' : ''}`}
-                                  onClick={() => onSelectPage(notebook.id, section.name, page.id)}
-                                >
-                                  <span className="nb-node-label">{page.pinned ? '★ ' : ''}{page.title}</span>
-                                  <span className="nb-node-meta">{formatUpdated(page.updatedAt)}</span>
-                                </button>
-                              )) : (
-                                <button
-                                  type="button"
-                                  className="nb-node nb-node-page nb-node-empty"
-                                  onClick={() => onNewPage(notebook.id, section.name)}
-                                >
-                                  <span className="nb-node-label">No pages — add one</span>
-                                </button>
-                              )
-                            )}
-                          </div>
-                        );
-                      })}
-                      {nbSections.length === 0 && loadingNotebookId !== notebook.id && (
+                      {renderSections(notebook, null, 0)}
+                      {nbSections.filter(x => !x.parentId).length === 0 && loadingNotebookId !== notebook.id && (
                         <button
                           type="button"
                           className="nb-node nb-node-sec nb-node-empty"
-                          onClick={() => onNewSection(notebook.id)}
+                          onClick={() => onNewSection(notebook.id, null)}
                         >
-                          <span className="nb-node-label">No sections — add one</span>
+                          <span className="nb-node-label">No categories — add one</span>
                         </button>
                       )}
                     </>

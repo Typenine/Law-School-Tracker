@@ -8,7 +8,8 @@ export const runtime = 'nodejs';
 
 const schema = z.object({
   notebookId: z.string().trim().min(1).nullable(),
-  section: z.string().trim().min(1).max(120),
+  section: z.string().trim().min(1).max(120).optional(),
+  sectionId: z.string().trim().max(200).nullable().optional(),
   orderedIds: z.array(z.string().trim().min(1)).max(500),
 });
 

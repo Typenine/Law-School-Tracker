@@ -139,10 +139,19 @@ async function applyNotesSchema(): Promise<void> {
       updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
     )
   `);
+  // Sections nest, so a name only has to be unique among its siblings:
+  // "Week 1" can live under both Case Briefs and Reading Notes.
+  await run(`ALTER TABLE ai_note_sections ADD COLUMN IF NOT EXISTS parent_id TEXT`);
+  await run(`DROP INDEX IF EXISTS ai_note_sections_unique_idx`);
   await run(`
-    CREATE UNIQUE INDEX IF NOT EXISTS ai_note_sections_unique_idx
-    ON ai_note_sections (notebook_id, LOWER(name))
+    CREATE UNIQUE INDEX IF NOT EXISTS ai_note_sections_sibling_idx
+    ON ai_note_sections (notebook_id, COALESCE(parent_id, ''), LOWER(name))
   `);
+  await run(`CREATE INDEX IF NOT EXISTS ai_note_sections_parent_idx ON ai_note_sections (parent_id)`);
+  // Pages point at a section by id. The `section` name column stays as a
+  // denormalised copy so search, the GPT endpoints and older rows keep working.
+  await run(`ALTER TABLE ai_notes ADD COLUMN IF NOT EXISTS section_id TEXT`);
+  await run(`CREATE INDEX IF NOT EXISTS ai_notes_section_id_idx ON ai_notes (section_id)`);
   await run(`CREATE INDEX IF NOT EXISTS ai_notes_course_idx ON ai_notes (LOWER(course))`);
   await run(`CREATE INDEX IF NOT EXISTS ai_notes_notebook_idx ON ai_notes (notebook_id)`);
   await run(`CREATE INDEX IF NOT EXISTS ai_notes_section_idx ON ai_notes (notebook_id, LOWER(section))`);
@@ -197,6 +206,17 @@ async function applyNotesSchema(): Promise<void> {
       AND NULLIF(TRIM(note.section), '') IS NOT NULL
     ON CONFLICT DO NOTHING
   `);
+  // Attach existing pages to the section row matching their stored name.
+  await run(`
+    UPDATE ai_notes note
+    SET section_id = section.id
+    FROM ai_note_sections section
+    WHERE note.section_id IS NULL
+      AND section.notebook_id = note.notebook_id
+      AND section.parent_id IS NULL
+      AND LOWER(section.name) = LOWER(TRIM(note.section))
+  `);
+
   // Every notebook gets at least one tab to write on.
   await run(`
     INSERT INTO ai_note_sections (id, notebook_id, name)
@@ -375,6 +395,7 @@ export function toNoteSummary(row: any): AiNoteSummary {
     course: row.course ?? null,
     semester: row.semester ?? null,
     section: row.section || 'Notes',
+    sectionId: row.section_id ?? null,
     position: Number(row.position) || 0,
     classDate: row.class_date ? iso(row.class_date).slice(0, 10) : null,
     sourceType: row.source_type as NoteSourceType,
@@ -410,6 +431,7 @@ export function toSection(row: any): NoteSection {
   return {
     id: row.id,
     notebookId: row.notebook_id,
+    parentId: row.parent_id ?? null,
     name: row.name,
     color: row.color ?? null,
     position: Number(row.position) || 0,
@@ -431,6 +453,10 @@ export function addNoteFilters(input: NoteFilters, clauses: string[], values: un
   if (input.semester?.trim()) {
     values.push(input.semester.trim());
     clauses.push(`${alias}.semester = $${values.length}`);
+  }
+  if (input.sectionId?.trim()) {
+    values.push(input.sectionId.trim());
+    clauses.push(`${alias}.section_id = $${values.length}`);
   }
   if (input.section?.trim()) {
     values.push(input.section.trim());

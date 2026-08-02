@@ -25,6 +25,8 @@ export interface NoteNotebook {
 export interface NoteSection {
   id: string;
   notebookId: string;
+  /** Sections nest: a category holds weeks, a week holds pages. */
+  parentId: string | null;
   name: string;
   color: string | null;
   position: number;
@@ -41,6 +43,8 @@ export interface AiNoteSummary {
   course: string | null;
   semester: string | null;
   section: string;
+  /** The section a page belongs to. Names repeat across branches, ids do not. */
+  sectionId: string | null;
   position: number;
   classDate: string | null;
   sourceType: NoteSourceType;
@@ -72,6 +76,7 @@ export interface NoteFilters {
   course?: string | null;
   semester?: string | null;
   section?: string | null;
+  sectionId?: string | null;
   from?: string | null;
   to?: string | null;
   archived?: boolean;

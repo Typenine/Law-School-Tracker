@@ -29,6 +29,7 @@ const noteSchema = z.object({
   course: z.string().trim().max(200).nullable().optional(),
   semester: z.string().trim().max(100).nullable().optional(),
   section: z.string().trim().max(120).nullable().optional(),
+  sectionId: z.string().trim().max(200).nullable().optional(),
   classDate: z.string().trim().regex(/^\d{4}-\d{2}-\d{2}$/).nullable().optional(),
   sourceType: z.enum(sourceTypes).optional(),
   topics: z.array(z.string().trim().max(100)).max(50).optional(),
@@ -91,6 +92,7 @@ export async function GET(req: NextRequest) {
     const params = req.nextUrl.searchParams;
     const filters = {
       notebookId: params.get('notebookId'),
+      sectionId: params.get('sectionId'),
       course: params.get('course'),
       semester: params.get('semester'),
       section: params.get('section'),
