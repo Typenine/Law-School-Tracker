@@ -32,6 +32,22 @@ type ImportForm = {
 
 const AUTOSAVE_MS = 900;
 
+/**
+ * A failed request, with the body the server sent back.
+ *
+ * A 409 carries the version of the page that won, which is the whole point of
+ * answering 409 rather than overwriting - so the error has to keep it.
+ */
+class ApiError extends Error {
+  status: number;
+  data: any;
+  constructor(message: string, status: number, data: any) {
+    super(message);
+    this.status = status;
+    this.data = data;
+  }
+}
+
 async function api(path: string, init: RequestInit = {}) {
   const headers = new Headers(init.headers || {});
   if (init.body && !(init.body instanceof FormData) && !headers.has('Content-Type')) {
@@ -39,7 +55,9 @@ async function api(path: string, init: RequestInit = {}) {
   }
   const response = await fetch(path, { ...init, headers, cache: 'no-store' });
   const data = await response.json().catch(() => ({}));
-  if (!response.ok) throw new Error(data?.error || `Request failed (${response.status})`);
+  if (!response.ok) {
+    throw new ApiError(data?.error || `Request failed (${response.status})`, response.status, data);
+  }
   return data;
 }
 
@@ -61,7 +79,8 @@ export default function NotesPage() {
   const [dirty, setDirty] = useState(false);
   const [saveState, setSaveState] = useState<'idle' | 'saving' | 'saved' | 'error'>('idle');
   const [error, setError] = useState('');
-  const [conflict, setConflict] = useState(false);
+  /** A save that was refused, holding both versions so either can be kept. */
+  const [conflict, setConflict] = useState<{ theirs: Page; myHtml: string; myTitle: string } | null>(null);
   const [setAside, setSetAside] = useState<{ trashed: PageSummary[]; archived: PageSummary[] } | null>(null);
 
   const [notebookModal, setNotebookModal] = useState<NotebookForm | null>(null);
@@ -263,11 +282,14 @@ export default function NotesPage() {
     } catch (err) {
       const message = err instanceof Error ? err.message : 'Unable to save the page.';
       // A conflict is not worth retrying: someone else's version is newer, so
-      // ask rather than looping until one of the two edits is lost.
-      if (/changed somewhere else/i.test(message)) {
+      // put both in front of the user rather than looping until one is lost.
+      if (err instanceof ApiError && err.status === 409 && err.data?.note) {
         setSaveState('error');
-        setConflict(true);
-        setError(`${message} Your unsaved text is still on screen — copy anything you need, then reload the page.`);
+        setConflict({
+          theirs: err.data.note as Page,
+          myHtml: htmlRef.current,
+          myTitle: current.title,
+        });
         savingRef.current = false;
         return;
       }
@@ -548,6 +570,74 @@ export default function NotesPage() {
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Unable to move the page.');
       await refreshNotebookPages(target.notebookId);
+    }
+  }
+
+  /**
+   * Three ways out of a save conflict. Whichever the user picks, neither
+   * version is thrown away without them saying so.
+   */
+  async function resolveConflict(choice: 'mine' | 'theirs' | 'both') {
+    if (!conflict || !draft) return;
+    const { theirs, myHtml, myTitle } = conflict;
+    setSavingModal(true);
+    setError('');
+    try {
+      if (choice === 'theirs') {
+        // Drop what is on screen and take the newer copy.
+        setDirty(false);
+        setConflict(null);
+        await openPage(theirs.id);
+        setSaveState('saved');
+        return;
+      }
+
+      if (choice === 'both') {
+        // Keep the other version where it is and put mine beside it, so the
+        // two can be reconciled by reading them rather than by guesswork.
+        const data = await api('/api/notes', {
+          method: 'POST',
+          body: JSON.stringify({
+            title: `${myTitle} (my copy)`,
+            notebookId: theirs.notebookId,
+            sectionId: theirs.sectionId,
+            contentHtml: myHtml,
+          }),
+        });
+        setDirty(false);
+        setConflict(null);
+        await Promise.all([
+          loadPages(theirs.notebookId || '', theirs.section || ''),
+          refreshNotebookPages(theirs.notebookId || ''),
+        ]);
+        await openPage(data.note.id);
+        setSaveState('saved');
+        return;
+      }
+
+      // 'mine': overwrite, now that the user has seen what they are replacing.
+      // Sending the timestamp of the version that won makes this a deliberate
+      // save on top of it rather than a blind retry.
+      const data = await api(`/api/notes/${encodeURIComponent(theirs.id)}`, {
+        method: 'PATCH',
+        body: JSON.stringify({
+          title: myTitle.trim() || 'Untitled Page',
+          contentHtml: myHtml,
+          expectedUpdatedAt: theirs.updatedAt,
+        }),
+      });
+      const saved = data.note as Page;
+      setDraft(existing => existing && existing.id === saved.id
+        ? { ...existing, wordCount: saved.wordCount, updatedAt: saved.updatedAt, preview: saved.preview }
+        : existing);
+      setDirty(false);
+      setConflict(null);
+      setSaveState('saved');
+      await refreshNotebookPages(saved.notebookId || '');
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Unable to settle the conflict.');
+    } finally {
+      setSavingModal(false);
     }
   }
 
@@ -1322,6 +1412,69 @@ export default function NotesPage() {
                   ))}
                 </section>
               ))}
+            </div>
+          </div>
+        </div>
+      )}
+
+      {conflict && (
+        // No scrim dismiss and no close button: leaving this without choosing
+        // is how one of the two versions gets lost.
+        <div className="nb-modal-scrim">
+          <div className="nb-modal nb-modal-wide" role="alertdialog" aria-labelledby="nb-conflict-title">
+            <div className="nb-modal-head">
+              <div>
+                <h3 id="nb-conflict-title">This page changed somewhere else</h3>
+                <p>
+                  It was saved from another tab or device while you were writing. Both versions are
+                  below — pick one, or keep both.
+                </p>
+              </div>
+            </div>
+            <div className="nb-conflict">
+              <section>
+                <div className="nb-aside-head">
+                  Yours · not saved yet
+                </div>
+                <div className="nb-conflict-body" dangerouslySetInnerHTML={{ __html: conflict.myHtml }} />
+              </section>
+              <section>
+                <div className="nb-aside-head">
+                  Saved version · {formatUpdated(conflict.theirs.updatedAt)}
+                </div>
+                <div
+                  className="nb-conflict-body"
+                  dangerouslySetInnerHTML={{ __html: conflict.theirs.contentHtml || '' }}
+                />
+              </section>
+            </div>
+            <div className="nb-modal-foot">
+              <button
+                type="button"
+                className="nb-secondary"
+                disabled={savingModal}
+                onClick={() => void resolveConflict('theirs')}
+              >
+                Discard mine
+              </button>
+              <div>
+                <button
+                  type="button"
+                  className="nb-secondary"
+                  disabled={savingModal}
+                  onClick={() => void resolveConflict('both')}
+                >
+                  Keep both
+                </button>
+                <button
+                  type="button"
+                  className="nb-primary"
+                  disabled={savingModal}
+                  onClick={() => void resolveConflict('mine')}
+                >
+                  {savingModal ? 'Saving…' : 'Keep mine'}
+                </button>
+              </div>
             </div>
           </div>
         </div>

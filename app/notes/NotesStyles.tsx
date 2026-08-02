@@ -72,6 +72,11 @@ export default function NotesStyles() {
       .nb-rail-foot-row { margin-bottom: 10px; }
       .nb-rail-foot:hover { background: var(--s3); color: var(--text2); }
       .nb-aside-list { display: grid; gap: 16px; max-height: 58vh; overflow-y: auto; }
+      .nb-conflict { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; }
+      @media (max-width: 760px) { .nb-conflict { grid-template-columns: 1fr; } }
+      .nb-conflict-body { max-height: 42vh; overflow: auto; padding: 10px 12px; border: 1px solid var(--line2); border-radius: 8px; background: var(--s2); font-size: 13px; line-height: 1.55; }
+      .nb-conflict-body :is(h1,h2,h3) { font-size: 15px; margin: 8px 0 4px; }
+      .nb-conflict-body img { max-width: 100%; height: auto; }
       .nb-aside-head { color: var(--label); font: 500 10px/1 'IBM Plex Mono', monospace; letter-spacing: .1em; text-transform: uppercase; padding-bottom: 7px; }
       .nb-aside-row { display: flex; align-items: center; gap: 10px; padding: 8px 0; border-bottom: 1px solid var(--line); }
       .nb-aside-main { flex: 1; min-width: 0; display: grid; }

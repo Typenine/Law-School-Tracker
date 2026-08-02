@@ -116,6 +116,67 @@ describe('two tabs editing the same page', () => {
     assert.equal(saved.status, 200);
     assert.equal(saved.body.note.content, 'typing away');
   });
+
+  it('hands back enough of the winning version to show it side by side', async () => {
+    const book = await notebook();
+    const week = await section(book.id, 'Week 1');
+    const brief = await page(book.id, week.id, 'Palsgraf', 'first draft');
+
+    const opened = (await app.api('GET', `/api/notes/${brief.id}`)).body.note.updatedAt;
+    await new Promise(resolve => setTimeout(resolve, 1500));
+    await app.api('PATCH', `/api/notes/${brief.id}`, { contentHtml: '<p>their edit</p>', expectedUpdatedAt: opened });
+
+    const refused = await app.api('PATCH', `/api/notes/${brief.id}`, {
+      contentHtml: '<p>my edit</p>', expectedUpdatedAt: opened,
+    });
+    assert.equal(refused.status, 409);
+    assert.ok(refused.body.note.contentHtml.includes('their edit'), 'the editor can render what it is up against');
+    assert.ok(refused.body.note.updatedAt, 'and knows the timestamp to overwrite from');
+  });
+
+  it('lets the user deliberately overwrite once they have seen the other version', async () => {
+    const book = await notebook();
+    const week = await section(book.id, 'Week 1');
+    const brief = await page(book.id, week.id, 'Palsgraf', 'first draft');
+
+    const opened = (await app.api('GET', `/api/notes/${brief.id}`)).body.note.updatedAt;
+    await new Promise(resolve => setTimeout(resolve, 1500));
+    await app.api('PATCH', `/api/notes/${brief.id}`, { content: 'their edit', expectedUpdatedAt: opened });
+    const refused = await app.api('PATCH', `/api/notes/${brief.id}`, {
+      content: 'my edit', expectedUpdatedAt: opened,
+    });
+
+    // "Keep mine" re-sends against the timestamp that won, which is what
+    // separates a deliberate overwrite from a blind retry.
+    const forced = await app.api('PATCH', `/api/notes/${brief.id}`, {
+      content: 'my edit', expectedUpdatedAt: refused.body.note.updatedAt,
+    });
+    assert.equal(forced.status, 200);
+    assert.equal((await app.api('GET', `/api/notes/${brief.id}`)).body.note.content, 'my edit');
+  });
+
+  it('can keep both versions as separate pages', async () => {
+    const book = await notebook();
+    const week = await section(book.id, 'Week 1');
+    const brief = await page(book.id, week.id, 'Palsgraf', 'first draft');
+
+    const opened = (await app.api('GET', `/api/notes/${brief.id}`)).body.note.updatedAt;
+    await new Promise(resolve => setTimeout(resolve, 1500));
+    await app.api('PATCH', `/api/notes/${brief.id}`, { content: 'their edit', expectedUpdatedAt: opened });
+
+    // "Keep both" writes the losing version beside the winner rather than
+    // over it, so nothing has to be rescued by hand.
+    const copy = await app.api('POST', '/api/notes', {
+      title: 'Palsgraf (my copy)', notebookId: book.id, sectionId: week.id, contentHtml: '<p>my edit</p>',
+    });
+    assert.equal(copy.status, 201);
+
+    const inSection = (await app.api('GET', `/api/notes?notebookId=${book.id}`)).body.notes
+      .filter(n => n.sectionId === week.id);
+    assert.equal(inSection.length, 2, 'both survive');
+    assert.equal((await app.api('GET', `/api/notes/${brief.id}`)).body.note.content, 'their edit');
+    assert.match((await app.api('GET', `/api/notes/${copy.body.note.id}`)).body.note.content, /my edit/);
+  });
 });
 
 describe('what survives a restart', () => {
