@@ -5,6 +5,14 @@ import { notifyTasksChanged, onTasksChanged } from '@/lib/taskBus';
 import { useSemester } from '@/lib/useSemester';
 import { tasksClient } from '@/lib/tasksClient';
 
+/** Event any component can dispatch on `window` to open the palette. */
+export const COMMAND_PALETTE_EVENT = 'app:command-palette';
+
+export function openCommandPalette(): void {
+  if (typeof window === 'undefined') return;
+  window.dispatchEvent(new Event(COMMAND_PALETTE_EVENT));
+}
+
 function normalize(s: string) { return (s || '').toLowerCase(); }
 
 export default function CommandPalette() {
@@ -24,8 +32,17 @@ export default function CommandPalette() {
         setOpen(false);
       }
     }
+    // The header's search button asks for the palette directly. It used to
+    // synthesize a Ctrl+K KeyboardEvent, which never reopened the palette
+    // because a scripted key event does not carry the trusted modifiers this
+    // listener needs on every browser.
+    function onRequest() { setOpen(true); setQ(''); }
     window.addEventListener('keydown', onKey);
-    return () => window.removeEventListener('keydown', onKey);
+    window.addEventListener(COMMAND_PALETTE_EVENT, onRequest);
+    return () => {
+      window.removeEventListener('keydown', onKey);
+      window.removeEventListener(COMMAND_PALETTE_EVENT, onRequest);
+    };
   }, []);
 
   useEffect(() => {

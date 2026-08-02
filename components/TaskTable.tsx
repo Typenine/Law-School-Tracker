@@ -370,15 +370,21 @@ export default function TaskTable() {
     const sessionWhen = data.completionDate 
       ? new Date(data.completionDate + 'T12:00:00').toISOString()
       : new Date().toISOString();
+    // Pages read were collected by the modal but never sent, so per-course
+    // reading pace never learned anything from sessions logged here.
+    let pagesRead: number | null = null;
+    if (data.pagesCompleted) {
+      try { pagesRead = countPages(parsePageRanges(data.pagesCompleted)) || null; } catch {}
+    }
     try {
       await apiFetch('/api/sessions', { method: 'POST', body: {
         taskId: t.id,
-        taskTitle: t.title,
-        course: t.course || null,
         minutes: data.minutes,
         focus: data.focus,
         notes: data.notes || null,
         when: sessionWhen,
+        pagesRead,
+        activity: t.activity || null,
       }});
       try { notifySessionsChanged(); } catch {}
       try { notifyToast({ kind: 'success', message: 'Session logged.' }); } catch {}
@@ -391,7 +397,14 @@ export default function TaskTable() {
       try { await apiFetch(`/api/tasks/${t.id}`, { method: 'PATCH', body: { estimatedMinutes: newEst } }); try { notifyToast({ kind: 'success', message: 'Task updated.' }); } catch {} } catch {}
     } else {
       // Finish: mark as done
-      try { await apiFetch(`/api/tasks/${t.id}`, { method: 'PATCH', body: { status: 'done', actualMinutes: data.minutes } }); try { notifyToast({ kind: 'success', message: 'Task completed.' }); } catch {} } catch {}
+      try {
+        await apiFetch(`/api/tasks/${t.id}`, { method: 'PATCH', body: {
+          status: 'done',
+          actualMinutes: data.minutes,
+          focus: Math.round(data.focus),
+        } });
+        try { notifyToast({ kind: 'success', message: 'Task completed.' }); } catch {}
+      } catch {}
       clearTimerFor(t.id);
     }
 

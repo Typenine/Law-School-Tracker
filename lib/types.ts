@@ -123,6 +123,8 @@ export interface NewTaskInput {
   term?: string | null;
   pagesRead?: number | null;
   activity?: string | null;
+  originalPageRanges?: string | null;
+  remainingPageRanges?: string | null;
 }
 
 export interface UpdateTaskInput {
@@ -145,6 +147,8 @@ export interface UpdateTaskInput {
   focus?: number | null;
   pagesRead?: number | null;
   activity?: string | null;
+  originalPageRanges?: string | null;
+  remainingPageRanges?: string | null;
 }
 
 export interface StudySession {

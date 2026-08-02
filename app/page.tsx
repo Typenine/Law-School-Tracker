@@ -4,7 +4,7 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import type { CalendarEvent, Course, StudySession, Task } from "@/lib/types";
 import { apiFetch } from "@/lib/apiClient";
 import LogModal, { type LogSubmitData } from "@/components/LogModal";
-import { countPages, parsePageRanges } from "@/lib/pageRanges";
+import { countPages, formatPageRanges, parsePageRanges, subtractPages } from "@/lib/pageRanges";
 import { notifyTasksChanged, onTasksChanged } from "@/lib/taskBus";
 import { notifySessionsChanged } from "@/lib/sessionsBus";
 import { notifyScheduleChanged, onScheduleChanged } from "@/lib/scheduleBus";
@@ -448,10 +448,20 @@ export default function TodayPage() {
       },
     });
     if (data.isPartial) {
-      await apiFetch(`/api/tasks/${logTask.id}`, {
-        method: "PATCH",
-        body: { estimatedMinutes: Math.max(0, (logTask.estimatedMinutes || 0) - data.minutes) },
-      });
+      const patch: Record<string, unknown> = {
+        estimatedMinutes: Math.max(0, (logTask.estimatedMinutes || 0) - data.minutes),
+      };
+      // Narrow the outstanding page range so the Up Next card counts down.
+      const assigned = logTask.originalPageRanges || titlePageRanges(logTask);
+      if (assigned && data.pagesCompleted) {
+        try {
+          const current = logTask.remainingPageRanges || assigned;
+          const remaining = subtractPages(parsePageRanges(current), data.pagesCompleted);
+          patch.originalPageRanges = logTask.originalPageRanges || assigned;
+          patch.remainingPageRanges = formatPageRanges(remaining) || null;
+        } catch {}
+      }
+      await apiFetch(`/api/tasks/${logTask.id}`, { method: "PATCH", body: patch });
     } else {
       await apiFetch(`/api/tasks/${logTask.id}`, {
         method: "PATCH",

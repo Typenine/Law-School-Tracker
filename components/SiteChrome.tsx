@@ -7,6 +7,7 @@ import { onPageSubtitle } from '@/lib/chromeBus';
 import { onTasksChanged } from '@/lib/taskBus';
 import { onCoursesChanged } from '@/lib/coursesBus';
 import { onSessionsChanged } from '@/lib/sessionsBus';
+import { openCommandPalette } from '@/components/CommandPalette';
 
 /**
  * The application shell: sidebar, page heading and header actions.
@@ -193,11 +194,7 @@ export default function SiteChrome({ children, brandMark }: { children: React.Re
       : 'The week still has room. Schedule the next block.';
 
   function openSearch() {
-    const event = new KeyboardEvent('keydown', {
-      key: 'k', code: 'KeyK', metaKey: true, ctrlKey: true, bubbles: true,
-    });
-    document.dispatchEvent(event);
-    window.dispatchEvent(event);
+    openCommandPalette();
   }
 
   const renderGroup = (label: string, items: NavItem[]) => (

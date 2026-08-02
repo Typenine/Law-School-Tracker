@@ -32,6 +32,8 @@ export async function POST(req: NextRequest) {
     term: z.string().trim().min(1).nullable().optional(),
     pagesRead: z.number().int().min(0).nullable().optional(),
     activity: z.string().trim().min(1).nullable().optional(),
+    originalPageRanges: z.string().trim().max(500).nullable().optional(),
+    remainingPageRanges: z.string().trim().max(500).nullable().optional(),
   });
   const parsed = schema.safeParse(await req.json());
   if (!parsed.success) return new Response('Invalid task body', { status: 400 });
@@ -54,6 +56,8 @@ export async function POST(req: NextRequest) {
     term: defaultTerm ?? null,
     pagesRead: (body as any).pagesRead ?? null,
     activity: (body as any).activity ?? null,
+    originalPageRanges: body.originalPageRanges ?? null,
+    remainingPageRanges: body.remainingPageRanges ?? null,
   });
   return Response.json({ task: t }, { status: 201 });
 }

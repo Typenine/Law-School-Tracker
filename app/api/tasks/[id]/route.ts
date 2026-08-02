@@ -27,6 +27,9 @@ export async function PATCH(req: NextRequest, { params }: { params: { id: string
     focus: z.number().int().min(1).max(10).nullable().optional(),
     pagesRead: z.number().int().min(0).nullable().optional(),
     activity: z.string().trim().min(1).nullable().optional(),
+    estimateOrigin: z.enum(['learned', 'default', 'manual']).nullable().optional(),
+    originalPageRanges: z.string().trim().max(500).nullable().optional(),
+    remainingPageRanges: z.string().trim().max(500).nullable().optional(),
   });
   const parsed = schema.safeParse(await req.json());
   if (!parsed.success) return new Response('Invalid patch body', { status: 400 });

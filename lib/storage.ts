@@ -447,6 +447,10 @@ export async function ensureSchema() {
       ALTER TABLE tasks ADD COLUMN IF NOT EXISTS activity text;
       ALTER TABLE tasks ADD COLUMN IF NOT EXISTS start_time text;
       ALTER TABLE tasks ADD COLUMN IF NOT EXISTS end_time text;
+      -- Partial-completion page tracking. The Task type and the Today card
+      -- have always read these, but there was nowhere to store them.
+      ALTER TABLE tasks ADD COLUMN IF NOT EXISTS original_page_ranges text;
+      ALTER TABLE tasks ADD COLUMN IF NOT EXISTS remaining_page_ranges text;
       CREATE TABLE IF NOT EXISTS courses (
         id uuid PRIMARY KEY,
         code text,
@@ -806,35 +810,46 @@ export async function replaceAllScheduleBlocks(input: ScheduleBlockRow[]): Promi
 }
 
 // Tasks
+
+/**
+ * One place that turns a tasks row into a Task. The mapping used to be
+ * copy-pasted at every call site, which is how actual_minutes, completed_at
+ * and focus ended up missing from several of them.
+ */
+function rowToTask(r: any): Task {
+  return {
+    id: r.id,
+    title: r.title,
+    course: r.course,
+    dueDate: new Date(r.due_date).toISOString(),
+    status: r.status,
+    createdAt: new Date(r.created_at).toISOString(),
+    startTime: r.start_time ?? null,
+    endTime: r.end_time ?? null,
+    estimatedMinutes: r.estimated_minutes ?? null,
+    estimateOrigin: (r.estimate_origin as any) ?? null,
+    actualMinutes: r.actual_minutes ?? null,
+    priority: r.priority ?? null,
+    notes: r.notes ?? null,
+    attachments: (r.attachments as any) ?? null,
+    dependsOn: (r.depends_on as any) ?? null,
+    tags: (r.tags as any) ?? null,
+    term: r.term ?? null,
+    completedAt: r.completed_at ? new Date(r.completed_at).toISOString() : null,
+    focus: r.focus ?? null,
+    pagesRead: r.pages_read ?? null,
+    activity: r.activity ?? null,
+    originalPageRanges: r.original_page_ranges ?? null,
+    remainingPageRanges: r.remaining_page_ranges ?? null,
+  };
+}
+
 export async function listTasks(): Promise<Task[]> {
   if (DB_URL) {
     const p = getPool();
     type TaskRow = { id: string; title: string; course: string | null; due_date: Date | string; status: 'todo' | 'done'; created_at: Date | string; estimated_minutes: number | null; estimate_origin: string | null; actual_minutes: number | null; priority: number | null; notes: string | null; attachments: string[] | null; depends_on: string[] | null; tags: string[] | null; term: string | null; completed_at: Date | string | null; focus: number | null; pages_read: number | null; activity: string | null; start_time: string | null; end_time: string | null };
-    const res = await p.query(`SELECT id, title, course, due_date, status, created_at, estimated_minutes, estimate_origin, actual_minutes, priority, notes, attachments, depends_on, tags, term, completed_at, focus, pages_read, activity, start_time, end_time FROM tasks ORDER BY due_date ASC, COALESCE(start_time,'99:99') ASC`);
-    const rows = res.rows as unknown as TaskRow[];
-    return rows.map(r => ({
-      id: r.id,
-      title: r.title,
-      course: r.course,
-      dueDate: new Date(r.due_date).toISOString(),
-      status: r.status,
-      createdAt: new Date(r.created_at).toISOString(),
-      startTime: r.start_time ?? null,
-      endTime: r.end_time ?? null,
-      estimatedMinutes: r.estimated_minutes ?? null,
-      estimateOrigin: (r.estimate_origin as any) ?? null,
-      actualMinutes: r.actual_minutes ?? null,
-      priority: r.priority ?? null,
-      notes: r.notes ?? null,
-      attachments: (r.attachments as any) ?? null,
-      dependsOn: (r.depends_on as any) ?? null,
-      tags: (r.tags as any) ?? null,
-      term: r.term ?? null,
-      completedAt: r.completed_at ? new Date(r.completed_at).toISOString() : null,
-      focus: r.focus ?? null,
-      pagesRead: r.pages_read ?? null,
-      activity: r.activity ?? null,
-    }));
+    const res = await p.query(`SELECT id, title, course, due_date, status, created_at, estimated_minutes, estimate_origin, actual_minutes, priority, notes, attachments, depends_on, tags, term, completed_at, focus, pages_read, activity, start_time, end_time, original_page_ranges, remaining_page_ranges FROM tasks ORDER BY due_date ASC, COALESCE(start_time,'99:99') ASC`);
+    return (res.rows as any[]).map(rowToTask);
   }
   const db = await readJson();
   return db.tasks.sort((a, b) => a.dueDate.localeCompare(b.dueDate));
@@ -846,15 +861,14 @@ export async function createTask(input: NewTaskInput): Promise<Task> {
     const p = getPool();
     const id = uuid();
     const res = await p.query(
-      `INSERT INTO tasks (id, title, course, due_date, status, created_at, estimated_minutes, estimate_origin, priority, notes, attachments, depends_on, tags, term, start_time, end_time, pages_read, activity)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18)
-       RETURNING id, title, course, due_date, status, created_at, estimated_minutes, estimate_origin, priority, notes, attachments, depends_on, tags, term, start_time, end_time, pages_read, activity`,
-      [id, input.title, input.course ?? null, new Date(input.dueDate), input.status ?? 'todo', new Date(now), input.estimatedMinutes ?? null, (input as any).estimateOrigin ?? null, input.priority ?? null, input.notes ?? null, input.attachments ?? null, input.dependsOn ?? null, input.tags ?? null, input.term ?? null, (input as any).startTime ?? null, (input as any).endTime ?? null, (input as any).pagesRead ?? null, (input as any).activity ?? null]
+      `INSERT INTO tasks (id, title, course, due_date, status, created_at, estimated_minutes, estimate_origin, priority, notes, attachments, depends_on, tags, term, start_time, end_time, pages_read, activity, original_page_ranges, remaining_page_ranges)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20)
+       RETURNING id, title, course, due_date, status, created_at, estimated_minutes, estimate_origin, actual_minutes, completed_at, focus, priority, notes, attachments, depends_on, tags, term, start_time, end_time, pages_read, activity, original_page_ranges, remaining_page_ranges`,
+      [id, input.title, input.course ?? null, new Date(input.dueDate), input.status ?? 'todo', new Date(now), input.estimatedMinutes ?? null, (input as any).estimateOrigin ?? null, input.priority ?? null, input.notes ?? null, input.attachments ?? null, input.dependsOn ?? null, input.tags ?? null, input.term ?? null, (input as any).startTime ?? null, (input as any).endTime ?? null, (input as any).pagesRead ?? null, (input as any).activity ?? null, input.originalPageRanges ?? null, input.remainingPageRanges ?? null]
     );
-    const r = res.rows[0];
-    return { id: r.id, title: r.title, course: r.course, dueDate: new Date(r.due_date).toISOString(), status: r.status, createdAt: new Date(r.created_at).toISOString(), startTime: r.start_time ?? null, endTime: r.end_time ?? null, estimatedMinutes: r.estimated_minutes ?? null, estimateOrigin: (r.estimate_origin as any) ?? null, priority: r.priority ?? null, notes: r.notes ?? null, attachments: r.attachments ?? null, dependsOn: r.depends_on ?? null, tags: r.tags ?? null, term: r.term ?? null, pagesRead: r.pages_read ?? null, activity: r.activity ?? null };
+    return rowToTask(res.rows[0]);
   }
-  const task: Task = { id: uuid(), title: input.title, course: input.course ?? null, dueDate: input.dueDate, status: input.status ?? 'todo', createdAt: now, startTime: (input as any).startTime ?? null, endTime: (input as any).endTime ?? null, estimatedMinutes: input.estimatedMinutes ?? null, estimateOrigin: (input as any).estimateOrigin ?? null, priority: input.priority ?? null, notes: input.notes ?? null, attachments: input.attachments ?? null, dependsOn: input.dependsOn ?? null, tags: input.tags ?? null, term: input.term ?? null, pagesRead: (input as any).pagesRead ?? null, activity: (input as any).activity ?? null };
+  const task: Task = { id: uuid(), title: input.title, course: input.course ?? null, dueDate: input.dueDate, status: input.status ?? 'todo', createdAt: now, startTime: (input as any).startTime ?? null, endTime: (input as any).endTime ?? null, estimatedMinutes: input.estimatedMinutes ?? null, estimateOrigin: (input as any).estimateOrigin ?? null, priority: input.priority ?? null, notes: input.notes ?? null, attachments: input.attachments ?? null, dependsOn: input.dependsOn ?? null, tags: input.tags ?? null, term: input.term ?? null, pagesRead: (input as any).pagesRead ?? null, activity: (input as any).activity ?? null, originalPageRanges: input.originalPageRanges ?? null, remainingPageRanges: input.remainingPageRanges ?? null };
   await mutateJson(db => { db.tasks.push(task); });
   return task;
 }
@@ -878,22 +892,31 @@ export async function updateTask(id: string, patch: UpdateTaskInput): Promise<Ta
     if (patch.dependsOn !== undefined) { fields.push(`depends_on = $${idx++}`); values.push(patch.dependsOn); }
     if (patch.tags !== undefined) { fields.push(`tags = $${idx++}`); values.push(patch.tags); }
     if (patch.term !== undefined) { fields.push(`term = $${idx++}`); values.push(patch.term); }
+    // These were accepted by the API and silently discarded here, so finishing
+    // a task never recorded how long it actually took, how focused it was, or
+    // when it was completed - which also left the predictive timing card with
+    // nothing to learn from.
+    if (patch.actualMinutes !== undefined) { fields.push(`actual_minutes = $${idx++}`); values.push(patch.actualMinutes); }
+    if (patch.completedAt !== undefined) { fields.push(`completed_at = $${idx++}`); values.push(patch.completedAt ? new Date(patch.completedAt) : null); }
+    if (patch.focus !== undefined) { fields.push(`focus = $${idx++}`); values.push(patch.focus); }
+    if (patch.originalPageRanges !== undefined) { fields.push(`original_page_ranges = $${idx++}`); values.push(patch.originalPageRanges); }
+    if (patch.remainingPageRanges !== undefined) { fields.push(`remaining_page_ranges = $${idx++}`); values.push(patch.remainingPageRanges); }
     if ((patch as any).pagesRead !== undefined) { fields.push(`pages_read = $${idx++}`); values.push((patch as any).pagesRead); }
     if ((patch as any).activity !== undefined) { fields.push(`activity = $${idx++}`); values.push((patch as any).activity); }
     if ((patch as any).startTime !== undefined) { fields.push(`start_time = $${idx++}`); values.push((patch as any).startTime); }
     if ((patch as any).endTime !== undefined) { fields.push(`end_time = $${idx++}`); values.push((patch as any).endTime); }
     if (!fields.length) {
-      const cur = await p.query(`SELECT id, title, course, due_date, status, created_at, estimated_minutes, estimate_origin, priority, notes, attachments, depends_on, tags, term, start_time, end_time, pages_read, activity FROM tasks WHERE id=$1`, [id]);
+      const cur = await p.query(`SELECT id, title, course, due_date, status, created_at, estimated_minutes, estimate_origin, actual_minutes, completed_at, focus, priority, notes, attachments, depends_on, tags, term, start_time, end_time, pages_read, activity, original_page_ranges, remaining_page_ranges FROM tasks WHERE id=$1`, [id]);
       if (!cur.rowCount) return null;
       const r = cur.rows[0];
-      return { id: r.id, title: r.title, course: r.course, dueDate: new Date(r.due_date).toISOString(), status: r.status, createdAt: new Date(r.created_at).toISOString(), startTime: r.start_time ?? null, endTime: r.end_time ?? null, estimatedMinutes: r.estimated_minutes ?? null, estimateOrigin: (r.estimate_origin as any) ?? null, priority: r.priority ?? null, notes: r.notes ?? null, attachments: r.attachments ?? null, dependsOn: r.depends_on ?? null, tags: r.tags ?? null, term: r.term ?? null, pagesRead: r.pages_read ?? null, activity: r.activity ?? null };
+      return rowToTask(r);
     }
-    const q = `UPDATE tasks SET ${fields.join(', ')} WHERE id = $${idx} RETURNING id, title, course, due_date, status, created_at, estimated_minutes, estimate_origin, priority, notes, attachments, depends_on, tags, term, start_time, end_time, pages_read, activity`;
+    const q = `UPDATE tasks SET ${fields.join(', ')} WHERE id = $${idx} RETURNING id, title, course, due_date, status, created_at, estimated_minutes, estimate_origin, actual_minutes, completed_at, focus, priority, notes, attachments, depends_on, tags, term, start_time, end_time, pages_read, activity, original_page_ranges, remaining_page_ranges`;
     values.push(id);
     const res = await p.query(q, values);
     if (!res.rowCount) return null;
     const r = res.rows[0];
-    return { id: r.id, title: r.title, course: r.course, dueDate: new Date(r.due_date).toISOString(), status: r.status, createdAt: new Date(r.created_at).toISOString(), startTime: r.start_time ?? null, endTime: r.end_time ?? null, estimatedMinutes: r.estimated_minutes ?? null, estimateOrigin: (r.estimate_origin as any) ?? null, priority: r.priority ?? null, notes: r.notes ?? null, attachments: r.attachments ?? null, dependsOn: r.depends_on ?? null, tags: r.tags ?? null, term: r.term ?? null, pagesRead: r.pages_read ?? null, activity: r.activity ?? null };
+    return rowToTask(r);
   }
   return mutateJson(db => {
     const i = db.tasks.findIndex(t => t.id === id);
