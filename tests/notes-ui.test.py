@@ -42,7 +42,7 @@ def run():
             'name': TARGET_BOOK,
             'course': TARGET_BOOK,
             'semester': SEMESTER,
-            'color': '#2563eb',
+            'color': '#2563ec'
         }))['notebook']
         target_sections = ok(request.get(f"/api/notes/sections?notebookId={target_book['id']}"))['sections']
         target_section = target_sections[0]
@@ -51,13 +51,13 @@ def run():
             'notebookId': target_book['id'],
             'section': target_section['name'],
             'sectionId': target_section['id'],
-            'contentHtml': '<p>Global target body</p>',
+            'contentHtml': '<p>Global target body</p>'
         }))
         task = ok(request.post('/api/tasks', data={
             'title': TASK_TITLE,
             'course': MAIN_BOOK,
             'dueDate': (datetime.now(timezone.utc) + timedelta(days=7)).isoformat(),
-            'status': 'todo',
+            'status': 'todo'
         }))['task']
 
         browser = pw.chromium.launch()
@@ -148,14 +148,14 @@ def run():
         # visible input and restores the selected range when applied.
         editor.click()
         page.keyboard.press('Control+A')
-        page.get_by_title('Link').click()
+        page.get_by_title('Link', exact=True).click()
         link_form = page.locator('.nb-link-menu')
         expect(link_form).to_be_visible()
         link_form.get_by_role('button', name='Cancel').click()
         expect(link_form).to_be_hidden()
         editor.click()
         page.keyboard.press('Control+A')
-        page.get_by_title('Link').click()
+        page.get_by_title('Link', exact=True).click()
         link_form.locator('input').fill('https://example.com/audit')
         link_form.get_by_role('button', name='Add link').click()
         expect(editor.locator('a[href="https://example.com/audit"]')).to_be_visible()
@@ -189,7 +189,7 @@ def run():
         import_modal.locator('input[type=file]').set_input_files({
             'name': 'audit.txt',
             'mimeType': 'text/plain',
-            'buffer': b'Imported content survives',
+            'buffer': b'Imported content survives'
         })
         import_modal.get_by_placeholder('Uses the file name when blank').fill(f'Imported Audit {STAMP}')
         import_modal.get_by_role('button', name='Import as page').click()
@@ -209,7 +209,6 @@ def run():
         page.get_by_role('button', name='Archive page').click()
         page.get_by_role('alertdialog').get_by_role('button', name='Archive').click()
         expect(page.get_by_label('Page title')).to_be_hidden(timeout=10_000)
-
         page.get_by_role('button', name=re.compile(r'^Set aside')).click()
         aside = page.locator('.nb-modal').filter(has_text='Set aside')
         row = aside.locator('.nb-aside-row').filter(has_text=f'Imported Audit {STAMP}')
@@ -223,7 +222,7 @@ def run():
         current = ok(request.get(f"/api/notes/{imported['id']}"))['note']
         ok(request.patch(f"/api/notes/{imported['id']}", data={
             'contentHtml': '<p>Server version wins</p>',
-            'expectedUpdatedAt': current['updatedAt'],
+            'expectedUpdatedAt': current['updatedAt']
         }))
         editor = page.get_by_label('Page content')
         editor.fill('My unsaved local version')
