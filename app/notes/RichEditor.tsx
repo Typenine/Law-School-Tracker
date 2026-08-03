@@ -56,18 +56,44 @@ export default function RichEditor({ pageId, initialHtml, onChange, onSaveNow, o
   const editorRef = useRef<HTMLDivElement | null>(null);
   const [blockStyle, setBlockStyle] = useState('p');
   const [openMenu, setOpenMenu] = useState<'highlight' | 'color' | null>(null);
+  const [linkOpen, setLinkOpen] = useState(false);
+  const [linkUrl, setLinkUrl] = useState('https://');
+  const savedRangeRef = useRef<Range | null>(null);
 
   useEffect(() => {
     const editor = editorRef.current;
     if (!editor) return;
     editor.innerHTML = initialHtml || '<p><br></p>';
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [pageId]);
+  }, [pageId, initialHtml]);
 
   useEffect(() => {
-    function closeMenus() { setOpenMenu(null); }
-    document.addEventListener('click', closeMenus);
-    return () => document.removeEventListener('click', closeMenus);
+    function closeMenus(event: PointerEvent) {
+      const target = event.target;
+      if (target instanceof Element && target.closest('.nb-menu-anchor')) return;
+      setOpenMenu(null);
+      setLinkOpen(false);
+    }
+    document.addEventListener('pointerdown', closeMenus);
+    return () => document.removeEventListener('pointerdown', closeMenus);
+  }, []);
+
+  const rememberSelection = useCallback((): Range | null => {
+    const editor = editorRef.current;
+    const selection = window.getSelection();
+    if (!editor || !selection || !selection.rangeCount) return null;
+    const range = selection.getRangeAt(0);
+    if (!editor.contains(range.commonAncestorContainer)) return null;
+    const saved = range.cloneRange();
+    savedRangeRef.current = saved;
+    return saved;
+  }, []);
+
+  const restoreSelection = useCallback((range = savedRangeRef.current) => {
+    if (!range) return;
+    const selection = window.getSelection();
+    if (!selection) return;
+    selection.removeAllRanges();
+    selection.addRange(range);
   }, []);
 
   const emit = useCallback(() => {
@@ -163,13 +189,16 @@ export default function RichEditor({ pageId, initialHtml, onChange, onSaveNow, o
     const editor = editorRef.current;
     if (!editor) return;
     editor.focus();
+    const insertionPoint = rememberSelection();
     const url = await onUploadImage(file);
     if (!url) return;
+    editor.focus();
+    restoreSelection(insertionPoint);
     try {
       document.execCommand('insertHTML', false, `<img src="${url}" alt="${file.name.replace(/"/g, '')}">`);
     } catch {}
     emit();
-  }, [emit, onUploadImage]);
+  }, [emit, onUploadImage, rememberSelection, restoreSelection]);
 
   /**
    * Paste text as plain text so pasted PDFs and web pages do not import their
@@ -348,15 +377,54 @@ export default function RichEditor({ pageId, initialHtml, onChange, onSaveNow, o
           <Button title="Quote" onClick={() => run('formatBlock', '<blockquote>')}>❝</Button>
           <Button title="Code block" onClick={() => run('formatBlock', '<pre>')}>{'</>'}</Button>
           <Button title="Divider" onClick={() => run('insertHorizontalRule')}>—</Button>
-          <Button
-            title="Link"
-            onClick={() => {
-              const url = window.prompt('Link address');
-              if (url) run('createLink', url);
-            }}
-          >
-            🔗
-          </Button>
+          <div className="nb-menu-anchor">
+            <Button
+              title="Link"
+              active={linkOpen}
+              onClick={() => {
+                rememberSelection();
+                setLinkUrl('https://');
+                setLinkOpen(open => !open);
+              }}
+            >
+              🔗
+            </Button>
+            {linkOpen && (
+              <form
+                className="nb-link-menu"
+                onSubmit={event => {
+                  event.preventDefault();
+                  const url = linkUrl.trim();
+                  if (!url) return;
+                  restoreSelection();
+                  run('createLink', url);
+                  setLinkOpen(false);
+                }}
+                onMouseDown={event => event.stopPropagation()}
+              >
+                <label htmlFor="note-link-url">Link address</label>
+                <input
+                  id="note-link-url"
+                  autoFocus
+                  value={linkUrl}
+                  onChange={event => setLinkUrl(event.target.value)}
+                  onKeyDown={event => {
+                    if (event.key === 'Escape') {
+                      event.preventDefault();
+                      setLinkOpen(false);
+                      restoreSelection();
+                    }
+                  }}
+                  placeholder="https://example.com"
+                  inputMode="url"
+                />
+                <div className="nb-link-actions">
+                  <button type="button" onClick={() => { setLinkOpen(false); restoreSelection(); }}>Cancel</button>
+                  <button type="submit">Add link</button>
+                </div>
+              </form>
+            )}
+          </div>
           <Button title="Remove link" onClick={() => run('unlink')}>⛓</Button>
           <Button
             title="Insert an image"

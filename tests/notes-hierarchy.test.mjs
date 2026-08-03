@@ -328,3 +328,17 @@ describe('deleting a section', () => {
     assert.equal(rows[0].dangling, 0);
   });
 });
+
+describe('notebook creation retries', () => {
+  it('returns the existing notebook instead of creating a duplicate', async () => {
+    const first = await notebook('Evidence', 'Fall 2026');
+    const second = await notebook(' evidence ', 'Fall 2026');
+
+    assert.equal(second.id, first.id);
+    const { body } = await app.api('GET', '/api/notes/notebooks');
+    assert.equal(
+      body.notebooks.filter(item => item.name.toLowerCase() === 'evidence' && item.semester === 'Fall 2026').length,
+      1,
+    );
+  });
+});
