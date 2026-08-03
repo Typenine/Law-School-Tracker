@@ -67,9 +67,14 @@ export default function RichEditor({ pageId, initialHtml, onChange, onSaveNow, o
   }, [pageId, initialHtml]);
 
   useEffect(() => {
-    function closeMenus() { setOpenMenu(null); setLinkOpen(false); }
-    document.addEventListener('click', closeMenus);
-    return () => document.removeEventListener('click', closeMenus);
+    function closeMenus(event: PointerEvent) {
+      const target = event.target;
+      if (target instanceof Element && target.closest('.nb-menu-anchor')) return;
+      setOpenMenu(null);
+      setLinkOpen(false);
+    }
+    document.addEventListener('pointerdown', closeMenus);
+    return () => document.removeEventListener('pointerdown', closeMenus);
   }, []);
 
   const rememberSelection = useCallback((): Range | null => {
