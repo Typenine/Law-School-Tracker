@@ -3,6 +3,8 @@ name: Repair Notes state synchronization
 on:
   push:
     branches: [repair/notes-state-sync]
+  pull_request:
+    branches: [main]
 
 permissions:
   contents: write
