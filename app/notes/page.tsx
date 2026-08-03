@@ -6,6 +6,7 @@ import { useTerm } from '@/lib/useTerm';
 import { termOptions, termSortKey } from '@/lib/semester';
 import NotesStyles from './NotesStyles';
 import NotesTree, { notebookKey, sectionKey, semesterKey } from './NotesTree';
+import { useNotesActions } from './NotesActionsContext';
 import {
   Notebook,
   Page,
@@ -161,7 +162,7 @@ export default function NotesPage() {
   const [railOpen, setRailOpen] = useState(true);
   // The tree handles navigation, so the page list starts out of the way and
   // the canvas gets the width. The Pages tab brings it back.
-  const [pageListOpen, setPageListOpen] = useState(false);
+  const [pageListOpen, setPageListOpen] = useState(true);
   const [dragPageId, setDragPageId] = useState<string>('');
   /** Pages per notebook, fetched when a notebook is expanded in the tree. */
   const [pagesByNotebook, setPagesByNotebook] = useState<Record<string, PageSummary[]>>({});
@@ -169,6 +170,7 @@ export default function NotesPage() {
   const [expanded, setExpanded] = useState<Set<string>>(new Set());
   // New notebooks belong to the semester you are actually in.
   const { term } = useTerm();
+  const { registerActions, setCanDelete } = useNotesActions();
 
   // The editor is uncontrolled, so the latest HTML lives in a ref and is only
   // read when a save actually runs.
@@ -180,6 +182,12 @@ export default function NotesPage() {
   const dirtyRef = useRef(false);
   const retryRef = useRef(0);
   const retryTimerRef = useRef<number | null>(null);
+  const creatingPageRef = useRef(false);
+  const deletingPageRef = useRef(false);
+  const pageListRequestRef = useRef(0);
+  const openPageRequestRef = useRef(0);
+  const notebookRequestRef = useRef<Record<string, number>>({});
+  const notesMutationVersionRef = useRef(0);
 
   useEffect(() => { draftRef.current = draft; }, [draft]);
 
@@ -329,25 +337,38 @@ export default function NotesPage() {
     targetNotebook: string,
     targetSection: string,
   ): Promise<PageSummary[]> => {
-    if (!targetNotebook) { setPages([]); return []; }
+    const requestId = ++pageListRequestRef.current;
+    const mutationVersion = notesMutationVersionRef.current;
+    if (!targetNotebook) {
+      if (requestId === pageListRequestRef.current) setPages([]);
+      return [];
+    }
     setLoadingPages(true);
     try {
       const params = new URLSearchParams({ limit: '500', notebookId: targetNotebook });
       if (targetSection) params.set('section', targetSection);
       const data = await api(`/api/notes?${params.toString()}`);
       const next = Array.isArray(data?.notes) ? (data.notes as PageSummary[]) : [];
-      setPages(next);
+      if (requestId === pageListRequestRef.current
+        && mutationVersion === notesMutationVersionRef.current) {
+        setPages(next);
+      }
       return next;
     } finally {
-      setLoadingPages(false);
+      if (requestId === pageListRequestRef.current) setLoadingPages(false);
     }
   }, []);
 
+
   const openPage = useCallback(async (id: string) => {
+    const requestId = ++openPageRequestRef.current;
+    const mutationVersion = notesMutationVersionRef.current;
     setLoadingPage(true);
     setError('');
     try {
       const data = await api(`/api/notes/${encodeURIComponent(id)}`);
+      if (requestId !== openPageRequestRef.current
+        || mutationVersion !== notesMutationVersionRef.current) return;
       const page = data.note as Page;
       htmlRef.current = page.contentHtml;
       draftRef.current = page;
@@ -358,11 +379,14 @@ export default function NotesPage() {
       setDirty(false);
       setSaveState('idle');
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Unable to open the page.');
+      if (requestId === openPageRequestRef.current) {
+        setError(err instanceof Error ? err.message : 'Unable to open the page.');
+      }
     } finally {
-      setLoadingPage(false);
+      if (requestId === openPageRequestRef.current) setLoadingPage(false);
     }
   }, []);
+
 
   // ------------------------------------------------------------------ saving
 
@@ -673,17 +697,24 @@ export default function NotesPage() {
   /** Load a notebook's pages once, so its sections can list them. */
   const loadNotebookPages = useCallback(async (id: string) => {
     if (!id || pagesByNotebook[id]) return;
+    const requestId = (notebookRequestRef.current[id] || 0) + 1;
+    notebookRequestRef.current[id] = requestId;
+    const mutationVersion = notesMutationVersionRef.current;
     setLoadingNotebookId(id);
     try {
       const data = await api(`/api/notes?limit=500&notebookId=${encodeURIComponent(id)}`);
       const list = Array.isArray(data?.notes) ? (data.notes as PageSummary[]) : [];
-      setPagesByNotebook(current => ({ ...current, [id]: list }));
+      if (notebookRequestRef.current[id] === requestId
+        && mutationVersion === notesMutationVersionRef.current) {
+        setPagesByNotebook(current => ({ ...current, [id]: list }));
+      }
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Unable to load pages.');
     } finally {
-      setLoadingNotebookId('');
+      if (notebookRequestRef.current[id] === requestId) setLoadingNotebookId('');
     }
   }, [pagesByNotebook]);
+
 
   const toggleNode = useCallback((key: string) => {
     setExpanded(current => {
@@ -954,6 +985,7 @@ export default function NotesPage() {
     try {
       const data = await api('/api/notes/deleted', { method: 'POST', body: JSON.stringify({ id }) });
       const restored = data.note as Page;
+      notesMutationVersionRef.current += 1;
       const [nextNotebooks] = await Promise.all([loadNotebooks(), loadSections(), loadSetAside()]);
       if (restored.notebookId) {
         await refreshNotebookPages(restored.notebookId);
@@ -1023,15 +1055,16 @@ export default function NotesPage() {
     /** Set when the page is being started from an assignment. */
     forTaskId: string | null = null,
   ) {
+    if (creatingPageRef.current) return;
     if (!targetNotebook) {
       setError('Create a notebook first.');
       return;
     }
-    if (dirtyRef.current) await savePage(true);
+
+    creatingPageRef.current = true;
+    setError('');
     try {
-      // A notebook can end up with no sections (for instance if creating its
-      // default one failed). Rather than refusing to make a page, give the
-      // notebook the section it should have had.
+      if (dirtyRef.current) await savePage(true);
       let section = targetSection;
       if (!section) {
         const created = await api('/api/notes/sections', {
@@ -1040,9 +1073,8 @@ export default function NotesPage() {
         });
         section = created?.section?.name || 'Notes';
         targetSectionId = created?.section?.id || '';
-        setSectionName(section);
-        setSectionId(targetSectionId);
       }
+
       const data = await api('/api/notes', {
         method: 'POST',
         body: JSON.stringify({
@@ -1056,19 +1088,41 @@ export default function NotesPage() {
         }),
       });
       const page = data.note as Page;
-      const [, nextSections] = await Promise.all([loadNotebooks(), loadSections(), loadPages(targetNotebook, section)]);
-      await refreshNotebookPages(targetNotebook);
-      // Make sure the new page is visible in the tree.
-      const book = notebooks.find(n => n.id === targetNotebook);
-      const target = nextSections.find(x => x.notebookId === targetNotebook && x.name.toLowerCase() === section.toLowerCase());
-      setExpanded(current => {
-        const next = new Set(current);
-        if (book) next.add(semesterKey(book.semester || 'Unsorted'));
-        next.add(notebookKey(targetNotebook));
-        if (target) next.add(sectionKey(target.id));
-        persistExpanded(next);
-        return next;
+      const summary = page as PageSummary;
+      const resolvedSection = page.section || section;
+      const resolvedSectionId = page.sectionId || targetSectionId;
+
+      notesMutationVersionRef.current += 1;
+      pageListRequestRef.current += 1;
+      openPageRequestRef.current += 1;
+      notebookRequestRef.current[targetNotebook] = (notebookRequestRef.current[targetNotebook] || 0) + 1;
+
+      setSearchQuery('');
+      setSearchResults(null);
+      if (!forTaskId) setTaskFilter('');
+      setNotebookId(targetNotebook);
+      setSectionId(resolvedSectionId || '');
+      setSectionName(resolvedSection);
+      setPageListOpen(true);
+
+      const sameVisibleSection = targetNotebook === notebookId
+        && (resolvedSectionId ? resolvedSectionId === sectionId : resolvedSection === sectionName);
+      setPages(current => {
+        const base = sameVisibleSection ? current : [];
+        return [...base.filter(item => item.id !== page.id), summary]
+          .sort((a, b) => Number(b.pinned) - Number(a.pinned) || a.position - b.position);
       });
+      setPagesByNotebook(current => ({
+        ...current,
+        [targetNotebook]: [
+          ...(current[targetNotebook] || []).filter(item => item.id !== page.id),
+          summary,
+        ],
+      }));
+      setNotebooks(current => current.map(notebook => notebook.id === targetNotebook
+        ? { ...notebook, noteCount: notebook.noteCount + 1 }
+        : notebook));
+
       htmlRef.current = page.contentHtml;
       draftRef.current = page;
       dirtyRef.current = false;
@@ -1077,20 +1131,70 @@ export default function NotesPage() {
       setDraft(page);
       setDirty(false);
       setSaveState('idle');
+
+      const book = notebooks.find(item => item.id === targetNotebook);
+      setExpanded(current => {
+        const next = new Set(current);
+        if (book) next.add(semesterKey(book.semester || 'Unsorted'));
+        next.add(notebookKey(targetNotebook));
+        if (resolvedSectionId) next.add(sectionKey(resolvedSectionId));
+        persistExpanded(next);
+        return next;
+      });
+
+      window.setTimeout(() => {
+        const title = document.querySelector<HTMLInputElement>('.nb-page-title');
+        if (title && draftRef.current?.id === page.id) {
+          title.focus();
+          title.select();
+        }
+      }, 0);
+
+      try {
+        const [nextNotebooks, nextSections] = await Promise.all([
+          loadNotebooks(),
+          loadSections(),
+          loadPages(targetNotebook, resolvedSection),
+          refreshNotebookPages(targetNotebook),
+        ]);
+        const refreshedBook = nextNotebooks.find(item => item.id === targetNotebook);
+        const refreshedSection = nextSections.find(item => item.id === resolvedSectionId)
+          || nextSections.find(item => item.notebookId === targetNotebook && item.name === resolvedSection);
+        setExpanded(current => {
+          const next = new Set(current);
+          if (refreshedBook) next.add(semesterKey(refreshedBook.semester || 'Unsorted'));
+          next.add(notebookKey(targetNotebook));
+          if (refreshedSection) next.add(sectionKey(refreshedSection.id));
+          persistExpanded(next);
+          return next;
+        });
+      } catch {
+        setError('The page was created and opened, but the sidebar could not fully refresh.');
+      }
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Unable to create the page.');
+    } finally {
+      creatingPageRef.current = false;
     }
   }
+
 
   /** Re-read a notebook's pages after something changes them. */
   const refreshNotebookPages = useCallback(async (id: string) => {
     if (!id) return;
+    const requestId = (notebookRequestRef.current[id] || 0) + 1;
+    notebookRequestRef.current[id] = requestId;
+    const mutationVersion = notesMutationVersionRef.current;
     try {
       const data = await api(`/api/notes?limit=500&notebookId=${encodeURIComponent(id)}`);
       const list = Array.isArray(data?.notes) ? (data.notes as PageSummary[]) : [];
-      setPagesByNotebook(current => ({ ...current, [id]: list }));
+      if (notebookRequestRef.current[id] === requestId
+        && mutationVersion === notesMutationVersionRef.current) {
+        setPagesByNotebook(current => ({ ...current, [id]: list }));
+      }
     } catch {}
   }, []);
+
 
   async function saveNotebook(event: FormEvent) {
     event.preventDefault();
@@ -1253,34 +1357,101 @@ export default function NotesPage() {
   }
 
   async function deletePage() {
-    if (!draft) return;
-    if (!await ask('Move to trash?', `“${draft.title}” goes to the trash. You can restore it from Set aside.`, 'Move to trash')) return;
+    const current = draftRef.current;
+    if (!current || deletingPageRef.current) return;
+
+    deletingPageRef.current = true;
     try {
-      const removedId = draft.id;
-      const owner = draft.notebookId || notebookId;
-      await api(`/api/notes/${encodeURIComponent(removedId)}`, { method: 'DELETE' });
-      // Clear the dirty flag first so the autosave effect cannot re-create the
-      // page's content after it has been removed.
+      if (!await ask(
+        'Move to trash?',
+        `“${current.title}” goes to the trash. You can restore it from Set aside.`,
+        'Move to trash',
+      )) return;
+
+      const owner = current.notebookId || notebookId;
+      const source = (owner ? pagesByNotebook[owner] : null) || pages;
+      const siblings = source
+        .filter(item => item.sectionId === current.sectionId || item.section === current.section)
+        .sort((a, b) => Number(b.pinned) - Number(a.pinned) || a.position - b.position);
+      const index = siblings.findIndex(item => item.id === current.id);
+      const nextPage = siblings[index + 1] || siblings[index - 1] || null;
+
+      const wasDirty = dirtyRef.current;
       dirtyRef.current = false;
       saveQueuedRef.current = false;
-      draftRef.current = null;
       setDirty(false);
+      if (retryTimerRef.current) {
+        window.clearTimeout(retryTimerRef.current);
+        retryTimerRef.current = null;
+      }
+      for (let attempt = 0; attempt < 100 && savingRef.current; attempt++) {
+        await new Promise(resolve => window.setTimeout(resolve, 25));
+      }
+
+      try {
+        await api(`/api/notes/${encodeURIComponent(current.id)}`, { method: 'DELETE' });
+      } catch (err) {
+        dirtyRef.current = wasDirty;
+        setDirty(wasDirty);
+        throw err;
+      }
+
+      notesMutationVersionRef.current += 1;
+      pageListRequestRef.current += 1;
+      openPageRequestRef.current += 1;
+      if (owner) notebookRequestRef.current[owner] = (notebookRequestRef.current[owner] || 0) + 1;
+
+      draftRef.current = null;
       setDraft(null);
       setPageId('');
-      removeFromView(removedId, owner);
-      const remaining = await loadPages(notebookId, sectionName);
-      // Sections carry a page count, so they have to be reloaded as well or
-      // the number beside the section keeps counting the page just deleted.
-      await Promise.all([
-        loadNotebooks(), loadSections(),
-        refreshNotebookPages(owner),
-        owner === notebookId ? Promise.resolve() : refreshNotebookPages(notebookId),
-      ]);
-      if (remaining[0]) void openPage(remaining[0].id);
+      setSaveState('idle');
+      setShowDetails(false);
+      removeFromView(current.id, owner || null);
+      setNotebooks(list => list.map(notebook => notebook.id === owner
+        ? { ...notebook, noteCount: Math.max(0, notebook.noteCount - 1) }
+        : notebook));
+
+      try {
+        const rememberedKey = `notesLastPage:${owner}:${current.section}`;
+        if (window.localStorage.getItem(rememberedKey) === current.id) {
+          window.localStorage.removeItem(rememberedKey);
+        }
+      } catch {}
+
+      if (nextPage) {
+        setPageId(nextPage.id);
+        await openPage(nextPage.id);
+      }
+
+      try {
+        const remaining = owner ? await loadPages(owner, current.section) : [];
+        await Promise.all([
+          loadNotebooks(),
+          loadSections(),
+          owner ? refreshNotebookPages(owner) : Promise.resolve(),
+        ]);
+        if (!nextPage && remaining[0]) await openPage(remaining[0].id);
+      } catch {
+        setError('The page is in the trash, but the sidebar could not fully refresh.');
+      }
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Unable to delete the page.');
+    } finally {
+      deletingPageRef.current = false;
     }
   }
+
+  useEffect(() => {
+    setCanDelete(Boolean(draft));
+  }, [draft, setCanDelete]);
+
+  useEffect(() => {
+    registerActions({
+      create: () => createPage(),
+      remove: () => deletePage(),
+    });
+  }, [registerActions, notebookId, sectionName, sectionId, draft?.id]);
+
 
   async function importFile(event: FormEvent) {
     event.preventDefault();

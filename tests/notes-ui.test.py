@@ -110,23 +110,30 @@ def run():
         editor = page.get_by_label('Page content')
         expect(title).to_be_visible(timeout=10_000)
 
-        # The prominent app-header controls are the controls a user actually
-        # sees first. Add notes must create and open a page; Delete note must be
-        # visible, cancellable, and then move that exact page to the trash.
+        # OneNote keeps the page pane visible and every mutation appears in both
+        # navigation surfaces immediately. Three synchronous clicks must still
+        # create exactly one page, not three parallel requests.
+        pages_panel = page.locator('.nb-pages')
+        expect(pages_panel).to_be_visible()
         before_count = len(notes_in_notebook(request, main_book['id']))
         header_add = page.locator('.lst-actions').get_by_role('button', name='Add notes')
         expect(header_add).to_be_visible(timeout=10_000)
-        header_add.click()
+        header_add.evaluate('(button) => { button.click(); button.click(); button.click(); }')
         for _ in range(100):
             if len(notes_in_notebook(request, main_book['id'])) == before_count + 1:
                 break
             time.sleep(.1)
+        page.wait_for_timeout(750)
         assert len(notes_in_notebook(request, main_book['id'])) == before_count + 1
 
         header_title = f'Header Action Audit {STAMP}'
         title.fill(header_title)
         expect(page.get_by_text('All changes saved')).to_be_visible(timeout=10_000)
         header_note = find_note(request, header_title)
+        tree_row = page.locator('.nb-tree .nb-node-page').filter(has_text=header_title)
+        page_row = pages_panel.locator('.nb-page-item').filter(has_text=header_title)
+        expect(tree_row).to_be_visible(timeout=10_000)
+        expect(page_row).to_be_visible(timeout=10_000)
 
         header_delete = page.locator('.lst-actions').get_by_role('button', name='Delete note')
         expect(header_delete).to_be_visible(timeout=10_000)
@@ -135,11 +142,15 @@ def run():
         expect(confirm).to_contain_text('Move to trash?')
         confirm.get_by_role('button', name='Cancel').click()
         expect(title).to_have_value(header_title)
+        expect(tree_row).to_be_visible()
+        expect(page_row).to_be_visible()
 
         header_delete.click()
         confirm = page.get_by_role('alertdialog')
         confirm.get_by_role('button', name='Move to trash').click()
         expect(title).not_to_have_value(header_title, timeout=10_000)
+        expect(tree_row).to_be_hidden(timeout=10_000)
+        expect(page_row).to_be_hidden(timeout=10_000)
         for _ in range(100):
             remaining_ids = {item['id'] for item in notes_in_notebook(request, main_book['id'])}
             if header_note['id'] not in remaining_ids:
@@ -203,8 +214,8 @@ def run():
         expect(editor.locator('a[href="https://example.com/audit"]')).to_be_visible()
         expect(page.get_by_text('All changes saved')).to_be_visible(timeout=10_000)
 
-        # Pages/Focus and the reopen tab show and hide the list predictably.
-        page.get_by_role('button', name=re.compile(r'^Pages')).click()
+        # The page pane starts visible like OneNote; Focus hides it and the
+        # persistent reopen tab brings it back.
         pages_panel = page.locator('.nb-pages')
         expect(pages_panel).to_be_visible()
         page.get_by_role('button', name=re.compile(r'^Focus')).click()
