@@ -1,0 +1,103 @@
+name: Repair Notes state synchronization
+
+on:
+  push:
+    branches: [repair/notes-state-sync]
+
+permissions:
+  contents: write
+
+jobs:
+  repair-and-publish:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: law_school_tracker_test
+        ports: ['5432:5432']
+        options: >-
+          --health-cmd "pg_isready -U postgres -d law_school_tracker_test"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
+    env:
+      DATABASE_URL: postgres://postgres:postgres@127.0.0.1:5432/law_school_tracker_test
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Prepare one clean production commit
+        run: |
+          cp scripts/repair_notes_state.py /tmp/repair_notes_state.py
+          git fetch origin main
+          echo "BASE_SHA=$(git rev-parse origin/main)" >> "$GITHUB_ENV"
+          git checkout -B repair-publish origin/main
+          python /tmp/repair_notes_state.py
+          git diff --check
+          git status --short
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - run: npm ci
+
+      - name: Typecheck
+        run: npm run typecheck
+
+      - name: Build
+        run: npm run build
+
+      - name: Database and API tests
+        run: npm test
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install browser test runner
+        run: |
+          python -m pip install --disable-pip-version-check playwright==1.54.0
+          python -m playwright install --with-deps chromium
+
+      - name: Start production build for browser audit
+        run: |
+          npm start > /tmp/law-school-tracker.log 2>&1 &
+          echo $! > /tmp/law-school-tracker.pid
+          for attempt in $(seq 1 60); do
+            if curl --fail --silent http://127.0.0.1:3000/notes > /dev/null; then
+              exit 0
+            fi
+            sleep 1
+          done
+          cat /tmp/law-school-tracker.log
+          exit 1
+
+      - name: Audit real OneNote-style create and delete behavior
+        env:
+          NOTES_E2E_BASE_URL: http://127.0.0.1:3000
+        run: python tests/notes-ui.test.py
+
+      - name: Publish one tested commit to main
+        run: |
+          git fetch origin main
+          test "$(git rev-parse origin/main)" = "$BASE_SHA" || {
+            echo "main moved while the repair was testing; refusing to overwrite it"
+            exit 1
+          }
+          git config user.name "Notes Repair"
+          git config user.email "actions@users.noreply.github.com"
+          git add app/notes/page.tsx app/notes/layout.tsx app/notes/NotesActionsContext.tsx tests/notes-ui.test.py
+          git commit -m "Make Notes creation and deletion stay synchronized" -m "Replace DOM-click header shims with direct React actions, serialize page mutations, optimistically update the OneNote-style tree and page pane, and reject stale list responses that previously resurrected deleted pages or hid newly created ones."
+          git push origin HEAD:main
+
+      - name: Show server log after failure
+        if: failure()
+        run: cat /tmp/law-school-tracker.log || true
