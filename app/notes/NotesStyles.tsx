@@ -170,6 +170,12 @@ export default function NotesStyles() {
       .nb-menu { position: absolute; z-index: 20; top: 34px; left: 0; min-width: 168px; padding: 5px; border: 1px solid var(--line2); border-radius: 8px; background: #0b1727; box-shadow: 0 18px 42px rgba(0,0,0,.55); }
       .nb-menu-row { width: 100%; display: flex; align-items: center; gap: 9px; padding: 7px 9px; border: 0; border-radius: 6px; background: none; color: var(--text2); font-size: 12.5px; text-align: left; cursor: pointer; }
       .nb-menu-row:hover { background: var(--s3); }
+      .nb-link-menu { position: absolute; z-index: 24; top: 34px; left: 0; width: min(320px, 82vw); display: grid; gap: 8px; padding: 11px; border: 1px solid var(--line2); border-radius: 9px; background: #0b1727; box-shadow: 0 18px 42px rgba(0,0,0,.55); }
+      .nb-link-menu label { color: var(--label) !important; font-size: 10px !important; letter-spacing: .08em; text-transform: uppercase; }
+      .nb-link-menu input { width: 100%; padding: 7px 9px !important; font-size: 12.5px; }
+      .nb-link-actions { display: flex; justify-content: flex-end; gap: 7px; }
+      .nb-link-actions button { padding: 6px 9px; border: 1px solid var(--line2); border-radius: 6px; background: var(--s2); color: var(--text2); cursor: pointer; }
+      .nb-link-actions button[type='submit'] { border-color: var(--tab); background: var(--tab); color: #07111f; font-weight: 600; }
       .nb-swatch { width: 14px; height: 14px; border: 1px solid rgba(0,0,0,.35); border-radius: 3px; }
       .nb-swatch-none { background: repeating-linear-gradient(45deg, #444 0 3px, #222 3px 6px); }
 
@@ -250,6 +256,10 @@ export default function NotesStyles() {
       .nb-color-dot.is-on { border-color: var(--text); }
       .nb-modal-foot { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
       .nb-modal-foot > div { display: flex; gap: 8px; }
+
+      @media (hover: none), (pointer: coarse) {
+        .nb-node-action, .nb-rail-edit { opacity: 1; }
+      }
 
       @media (max-width: 1080px) {
         .nb-workspace { grid-template-columns: minmax(0, 1fr) 232px; }

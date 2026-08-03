@@ -120,6 +120,7 @@ export default function NotesPage() {
   const [error, setError] = useState('');
   /** A save that was refused, holding both versions so either can be kept. */
   const [conflict, setConflict] = useState<{ theirs: Page; myHtml: string; myTitle: string } | null>(null);
+  const conflictRef = useRef<typeof conflict>(null);
   /**
    * Confirmation for anything destructive, asked inside the page.
    *
@@ -174,6 +175,8 @@ export default function NotesPage() {
   const htmlRef = useRef<string>('');
   const draftRef = useRef<Page | null>(null);
   const savingRef = useRef(false);
+  const saveQueuedRef = useRef(false);
+  const revisionRef = useRef(0);
   const dirtyRef = useRef(false);
   const retryRef = useRef(0);
   const retryTimerRef = useRef<number | null>(null);
@@ -235,6 +238,7 @@ export default function NotesPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
   useEffect(() => { dirtyRef.current = dirty; }, [dirty]);
+  useEffect(() => { conflictRef.current = conflict; }, [conflict]);
 
   const activeNotebook = useMemo(
     () => notebooks.find(item => item.id === notebookId) || null,
@@ -346,6 +350,9 @@ export default function NotesPage() {
       const data = await api(`/api/notes/${encodeURIComponent(id)}`);
       const page = data.note as Page;
       htmlRef.current = page.contentHtml;
+      draftRef.current = page;
+      dirtyRef.current = false;
+      saveQueuedRef.current = false;
       setPageId(page.id);
       setDraft(page);
       setDirty(false);
@@ -359,66 +366,115 @@ export default function NotesPage() {
 
   // ------------------------------------------------------------------ saving
 
-  /** The body a save sends; shared by the normal path and the exit flush. */
-  const savePayload = useCallback((current: Page) => JSON.stringify({
+  /** The body a save sends; shared by normal saves, conflict resolution and exit flushes. */
+  const savePayload = useCallback((
+    current: Page,
+    contentHtml = htmlRef.current,
+    expectedUpdatedAt = current.updatedAt,
+  ) => JSON.stringify({
     title: current.title.trim() || 'Untitled Page',
     notebookId: current.notebookId,
     section: current.section || 'Notes',
+    sectionId: current.sectionId,
+    taskId: current.taskId,
     classDate: current.classDate,
     sourceType: current.sourceType,
     topics: current.topics,
     pinned: current.pinned,
-    contentHtml: htmlRef.current,
+    contentHtml,
     // What we believe the server has. If it moved on, the save is refused
     // rather than overwriting an edit made on another device.
-    expectedUpdatedAt: current.updatedAt,
+    expectedUpdatedAt,
   }), []);
 
   const savePage = useCallback(async (force = false) => {
     const current = draftRef.current;
     if (!current) return;
     if (!dirtyRef.current && !force) return;
-    if (savingRef.current) return;
+    if (savingRef.current) {
+      saveQueuedRef.current = true;
+      return;
+    }
+
+    const revision = revisionRef.current;
+    const html = htmlRef.current;
+    let mayQueueAnotherSave = true;
     savingRef.current = true;
+    saveQueuedRef.current = false;
     setSaveState('saving');
     try {
       const data = await api(`/api/notes/${encodeURIComponent(current.id)}`, {
         method: 'PATCH',
-        body: savePayload(current),
+        body: savePayload(current, html),
       });
       const saved = data.note as Page;
-      setDraft(existing => existing && existing.id === saved.id
-        ? { ...existing, wordCount: saved.wordCount, updatedAt: saved.updatedAt, preview: saved.preview }
-        : existing);
+      const latest = draftRef.current;
+      if (latest?.id === saved.id) {
+        // A newer keystroke may have landed while this request was in flight.
+        // Keep the newer editor state, but advance the server timestamp so the
+        // immediately queued save does not look like a conflict.
+        const merged = revision === revisionRef.current
+          ? saved
+          : {
+              ...latest,
+              notebookName: saved.notebookName,
+              course: saved.course,
+              semester: saved.semester,
+              wordCount: saved.wordCount,
+              updatedAt: saved.updatedAt,
+              preview: saved.preview,
+            };
+        draftRef.current = merged;
+        setDraft(merged);
+      }
       setPages(list => list.map(page => page.id === saved.id
-        ? { ...page, title: saved.title, section: saved.section, pinned: saved.pinned, preview: saved.preview, wordCount: saved.wordCount, updatedAt: saved.updatedAt }
+        ? { ...page, ...saved }
         : page));
-      setDirty(false);
-      setSaveState('saved');
       retryRef.current = 0;
-      // Keep the tree's copy of this page's title in step with the editor.
-      setPagesByNotebook(current => {
-        const key = saved.notebookId || '';
-        const list = current[key];
-        if (!list) return current;
-        return { ...current, [key]: list.map(p => p.id === saved.id ? { ...p, title: saved.title, section: saved.section, pinned: saved.pinned, updatedAt: saved.updatedAt } : p) };
+
+      if (revision === revisionRef.current) {
+        dirtyRef.current = false;
+        setDirty(false);
+        setSaveState('saved');
+      } else {
+        // Do not claim the newer edit was saved by an older request.
+        dirtyRef.current = true;
+        setDirty(true);
+        setSaveState('idle');
+        saveQueuedRef.current = true;
+      }
+
+      // Keep every cached tree copy in step with the server response.
+      setPagesByNotebook(cache => {
+        const next: Record<string, PageSummary[]> = {};
+        for (const [key, list] of Object.entries(cache)) {
+          next[key] = list.map(page => page.id === saved.id ? { ...page, ...saved } : page);
+        }
+        return next;
       });
     } catch (err) {
       const message = err instanceof Error ? err.message : 'Unable to save the page.';
       // A conflict is not worth retrying: someone else's version is newer, so
       // put both in front of the user rather than looping until one is lost.
       if (err instanceof ApiError && err.status === 409 && err.data?.note) {
+        mayQueueAnotherSave = false;
+        saveQueuedRef.current = false;
         setSaveState('error');
-        setConflict({
+        const nextConflict = {
           theirs: err.data.note as Page,
           myHtml: htmlRef.current,
-          myTitle: current.title,
-        });
-        savingRef.current = false;
+          myTitle: draftRef.current?.title || current.title,
+        };
+        conflictRef.current = nextConflict;
+        setConflict(nextConflict);
         return;
       }
       // Keep the edits marked dirty and try again shortly. Giving up here used
       // to leave "Save failed" on screen with the work only in the browser.
+      mayQueueAnotherSave = false;
+      saveQueuedRef.current = false;
+      dirtyRef.current = true;
+      setDirty(true);
       setSaveState('error');
       setError(message);
       const attempt = Math.min(retryRef.current + 1, 5);
@@ -427,6 +483,10 @@ export default function NotesPage() {
       retryTimerRef.current = window.setTimeout(() => { void savePageRef.current?.(true); }, 1000 * 2 ** (attempt - 1));
     } finally {
       savingRef.current = false;
+      if (mayQueueAnotherSave && (saveQueuedRef.current || revisionRef.current !== revision)) {
+        saveQueuedRef.current = false;
+        window.setTimeout(() => { void savePageRef.current?.(true); }, 0);
+      }
     }
   }, [savePayload]);
 
@@ -686,36 +746,69 @@ export default function NotesPage() {
    * section to move it there. Both go through the same reorder call.
    */
   async function movePage(pageId: string, targetSectionId: string, beforePageId: string | null) {
-    const target = sections.find(x => x.id === targetSectionId);
+    const target = sections.find(section => section.id === targetSectionId);
     if (!target) return;
-    const bookPages = pagesByNotebook[target.notebookId] || [];
-    const moving = bookPages.find(p => p.id === pageId);
+
+    let moving: PageSummary | undefined;
+    let sourceNotebookId = '';
+    for (const [cachedNotebookId, cachedPages] of Object.entries(pagesByNotebook)) {
+      const found = cachedPages.find(page => page.id === pageId);
+      if (found) { moving = found; sourceNotebookId = cachedNotebookId; break; }
+    }
     if (!moving) return;
 
-    const rest = bookPages
-      .filter(p => p.sectionId === targetSectionId && p.id !== pageId)
+    const targetPages = pagesByNotebook[target.notebookId] || [];
+    const rest = targetPages
+      .filter(page => page.sectionId === targetSectionId && page.id !== pageId)
       .sort((a, b) => a.position - b.position)
-      .map(p => p.id);
+      .map(page => page.id);
     const at = beforePageId ? rest.indexOf(beforePageId) : rest.length;
     rest.splice(at < 0 ? rest.length : at, 0, pageId);
 
-    // Reflect the move straight away; the server call follows.
-    setPagesByNotebook(current => ({
-      ...current,
-      [target.notebookId]: (current[target.notebookId] || []).map(p => p.id === pageId
-        ? { ...p, sectionId: targetSectionId, section: target.name, position: rest.indexOf(pageId) }
-        : p),
-    }));
+    const movedSummary: PageSummary = {
+      ...moving,
+      notebookId: target.notebookId,
+      notebookName: notebooks.find(item => item.id === target.notebookId)?.name || moving.notebookName,
+      sectionId: targetSectionId,
+      section: target.name,
+      position: rest.indexOf(pageId),
+    };
+
+    // Reflect the move straight away in both notebook branches.
+    setPagesByNotebook(cache => {
+      const next: Record<string, PageSummary[]> = {};
+      for (const [key, list] of Object.entries(cache)) next[key] = list.filter(page => page.id !== pageId);
+      next[target.notebookId] = [...(next[target.notebookId] || []), movedSummary];
+      return next;
+    });
     try {
       await api('/api/notes/reorder', {
         method: 'PUT',
         body: JSON.stringify({ notebookId: target.notebookId, sectionId: targetSectionId, orderedIds: rest }),
       });
-      await Promise.all([loadSections(), refreshNotebookPages(target.notebookId)]);
-      if (pageId === draftRef.current?.id) await openPage(pageId);
+      await Promise.all([
+        loadSections(), loadNotebooks(),
+        refreshNotebookPages(target.notebookId),
+        sourceNotebookId && sourceNotebookId !== target.notebookId
+          ? refreshNotebookPages(sourceNotebookId)
+          : Promise.resolve(),
+        target.notebookId === notebookId
+          ? loadPages(notebookId, sectionName)
+          : Promise.resolve(),
+      ]);
+      if (pageId === draftRef.current?.id) {
+        setNotebookId(target.notebookId);
+        setSectionId(targetSectionId);
+        setSectionName(target.name);
+        await loadPages(target.notebookId, target.name);
+        await openPage(pageId);
+      }
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Unable to move the page.');
-      await refreshNotebookPages(target.notebookId);
+      await Promise.all([
+        refreshNotebookPages(target.notebookId),
+        sourceNotebookId ? refreshNotebookPages(sourceNotebookId) : Promise.resolve(),
+      ]);
     }
   }
 
@@ -731,6 +824,8 @@ export default function NotesPage() {
     try {
       if (choice === 'theirs') {
         // Drop what is on screen and take the newer copy.
+        dirtyRef.current = false;
+        conflictRef.current = null;
         setDirty(false);
         setConflict(null);
         await openPage(theirs.id);
@@ -745,11 +840,19 @@ export default function NotesPage() {
           method: 'POST',
           body: JSON.stringify({
             title: `${myTitle} (my copy)`,
-            notebookId: theirs.notebookId,
-            sectionId: theirs.sectionId,
+            notebookId: draft.notebookId,
+            section: draft.section,
+            sectionId: draft.sectionId,
+            taskId: draft.taskId,
+            classDate: draft.classDate,
+            sourceType: draft.sourceType,
+            topics: draft.topics,
+            pinned: draft.pinned,
             contentHtml: myHtml,
           }),
         });
+        dirtyRef.current = false;
+        conflictRef.current = null;
         setDirty(false);
         setConflict(null);
         await Promise.all([
@@ -766,16 +869,17 @@ export default function NotesPage() {
       // save on top of it rather than a blind retry.
       const data = await api(`/api/notes/${encodeURIComponent(theirs.id)}`, {
         method: 'PATCH',
-        body: JSON.stringify({
-          title: myTitle.trim() || 'Untitled Page',
-          contentHtml: myHtml,
-          expectedUpdatedAt: theirs.updatedAt,
-        }),
+        body: savePayload(
+          { ...draft, title: myTitle.trim() || 'Untitled Page' },
+          myHtml,
+          theirs.updatedAt,
+        ),
       });
       const saved = data.note as Page;
-      setDraft(existing => existing && existing.id === saved.id
-        ? { ...existing, wordCount: saved.wordCount, updatedAt: saved.updatedAt, preview: saved.preview }
-        : existing);
+      draftRef.current = saved;
+      dirtyRef.current = false;
+      conflictRef.current = null;
+      setDraft(saved);
       setDirty(false);
       setConflict(null);
       setSaveState('saved');
@@ -848,9 +952,19 @@ export default function NotesPage() {
 
   async function restorePage(id: string) {
     try {
-      await api('/api/notes/deleted', { method: 'POST', body: JSON.stringify({ id }) });
-      await Promise.all([loadNotebooks(), loadSections(), loadSetAside()]);
-      if (notebookId) await refreshNotebookPages(notebookId);
+      const data = await api('/api/notes/deleted', { method: 'POST', body: JSON.stringify({ id }) });
+      const restored = data.note as Page;
+      const [nextNotebooks] = await Promise.all([loadNotebooks(), loadSections(), loadSetAside()]);
+      if (restored.notebookId) {
+        await refreshNotebookPages(restored.notebookId);
+        setNotebookId(restored.notebookId);
+        setSectionId(restored.sectionId || '');
+        setSectionName(restored.section);
+        revealPath(nextNotebooks.find(item => item.id === restored.notebookId), restored.sectionId || '');
+        await loadPages(restored.notebookId, restored.section);
+      }
+      setSetAside(null);
+      await openPage(restored.id);
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Unable to restore the page.');
     }
@@ -867,9 +981,16 @@ export default function NotesPage() {
   }
 
   function patchDraft(patch: Partial<Page>) {
+    revisionRef.current += 1;
+    dirtyRef.current = true;
     setDirty(true);
     setSaveState('idle');
-    setDraft(current => (current ? { ...current, ...patch } : current));
+    setDraft(current => {
+      if (!current) return current;
+      const next = { ...current, ...patch };
+      draftRef.current = next;
+      return next;
+    });
     if (patch.title !== undefined || patch.pinned !== undefined) {
       setPages(list => list.map(page => page.id === draftRef.current?.id ? { ...page, ...patch } as PageSummary : page));
     }
@@ -949,6 +1070,9 @@ export default function NotesPage() {
         return next;
       });
       htmlRef.current = page.contentHtml;
+      draftRef.current = page;
+      dirtyRef.current = false;
+      saveQueuedRef.current = false;
       setPageId(page.id);
       setDraft(page);
       setDirty(false);
@@ -1007,6 +1131,8 @@ export default function NotesPage() {
       const remaining = await loadNotebooks();
       await loadSections();
       setNotebookId(remaining[0]?.id || '');
+      setSectionId('');
+      setSectionName('');
       setDraft(null);
       setPageId('');
     } catch (err) {
@@ -1023,23 +1149,27 @@ export default function NotesPage() {
     setError('');
     try {
       const name = sectionModal.name.trim();
+      let savedSection: Section;
       if (sectionModal.id) {
-        await api(`/api/notes/sections/${encodeURIComponent(sectionModal.id)}`, {
+        const data = await api(`/api/notes/sections/${encodeURIComponent(sectionModal.id)}`, {
           method: 'PATCH',
           body: JSON.stringify({ name, color: sectionModal.color || null, parentId: sectionModal.parentId }),
         });
+        savedSection = data.section as Section;
         if (sectionModal.parentId) {
           setExpanded(current => new Set(current).add(sectionKey(sectionModal.parentId as string)));
         }
       } else {
-        await api('/api/notes/sections', {
+        const data = await api('/api/notes/sections', {
           method: 'POST',
           body: JSON.stringify({ notebookId, name, color: sectionModal.color || null, parentId: sectionModal.parentId }),
         });
+        savedSection = data.section as Section;
       }
       setSectionModal(null);
       await Promise.all([loadSections(), loadNotebooks()]);
-      setSectionName(name);
+      setSectionId(savedSection.id);
+      setSectionName(savedSection.name);
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Unable to save the section.');
     } finally {
@@ -1061,6 +1191,7 @@ export default function NotesPage() {
       const nextSections = await loadSections();
       await loadNotebooks();
       const remaining = nextSections.filter(section => section.notebookId === notebookId);
+      setSectionId(remaining[0]?.id || '');
       setSectionName(remaining[0]?.name || '');
       setDraft(null);
       setPageId('');
@@ -1098,13 +1229,16 @@ export default function NotesPage() {
 
   async function archivePage() {
     if (!draft) return;
-    if (!await ask('Archive this page?', `“${draft.title}” stays searchable by your assistant but leaves this section.`, 'Archive')) return;
+    if (!await ask('Archive this page?', `“${draft.title}” moves to Set aside and can be restored later.`, 'Archive')) return;
     try {
       const removedId = draft.id;
       const owner = draft.notebookId || notebookId;
       await api(`/api/notes/${encodeURIComponent(removedId)}`, {
         method: 'PATCH', body: JSON.stringify({ archived: true }),
       });
+      dirtyRef.current = false;
+      saveQueuedRef.current = false;
+      draftRef.current = null;
       setDirty(false);
       setDraft(null);
       setPageId('');
@@ -1127,6 +1261,9 @@ export default function NotesPage() {
       await api(`/api/notes/${encodeURIComponent(removedId)}`, { method: 'DELETE' });
       // Clear the dirty flag first so the autosave effect cannot re-create the
       // page's content after it has been removed.
+      dirtyRef.current = false;
+      saveQueuedRef.current = false;
+      draftRef.current = null;
       setDirty(false);
       setDraft(null);
       setPageId('');
@@ -1166,6 +1303,7 @@ export default function NotesPage() {
       const page = data.note as Page;
       setImportModal(null);
       await Promise.all([loadNotebooks(), loadSections()]);
+      setSectionId(page.sectionId || '');
       setSectionName(page.section);
       await loadPages(notebookId, page.section);
       await openPage(page.id);
@@ -1180,7 +1318,22 @@ export default function NotesPage() {
    * A copy of the notes that lives outside this app. One notebook, or the lot.
    * The server assembles the Markdown in tree order; the browser just saves it.
    */
-  function downloadBackup(notebook: string | null) {
+  /** Wait until the editor has no save in flight and no newer revision queued. */
+  async function flushPendingSave(): Promise<boolean> {
+    if (dirtyRef.current) await savePage(true);
+    for (let attempt = 0; attempt < 80 && (savingRef.current || dirtyRef.current); attempt++) {
+      await new Promise(resolve => window.setTimeout(resolve, 50));
+      if (!savingRef.current && dirtyRef.current && !conflictRef.current) await savePage(true);
+    }
+    if (dirtyRef.current || conflictRef.current) {
+      setError('Save this page successfully before exporting it.');
+      return false;
+    }
+    return true;
+  }
+
+  async function downloadBackup(notebook: string | null) {
+    if (!await flushPendingSave()) return;
     const query = notebook ? `?notebookId=${encodeURIComponent(notebook)}` : '';
     const anchor = document.createElement('a');
     anchor.href = `/api/notes/export${query}`;
@@ -1188,22 +1341,31 @@ export default function NotesPage() {
     anchor.click();
   }
 
-  function exportPage() {
-    if (!draft) return;
-    const meta = [
-      draft.notebookName ? `Notebook: ${draft.notebookName}` : '',
-      draft.section ? `Section: ${draft.section}` : '',
-      draft.classDate ? `Class date: ${draft.classDate}` : '',
-      draft.topics.length ? `Tags: ${draft.topics.join(', ')}` : '',
-    ].filter(Boolean).join('\n');
-    const body = `# ${draft.title}\n\n${meta ? `${meta}\n\n---\n\n` : ''}${draft.content}`;
-    const blob = new Blob([body], { type: 'text/markdown;charset=utf-8' });
-    const url = URL.createObjectURL(blob);
-    const anchor = document.createElement('a');
-    anchor.href = url;
-    anchor.download = `${safeFilename(draft.title)}.md`;
-    anchor.click();
-    URL.revokeObjectURL(url);
+  async function exportPage() {
+    const current = draftRef.current;
+    if (!current || !await flushPendingSave()) return;
+    try {
+      // Re-read the page so the file is made from the exact server copy that
+      // the status line now calls saved, not from an older React snapshot.
+      const data = await api(`/api/notes/${encodeURIComponent(current.id)}`);
+      const page = data.note as Page;
+      const meta = [
+        page.notebookName ? `Notebook: ${page.notebookName}` : '',
+        page.section ? `Section: ${page.section}` : '',
+        page.classDate ? `Class date: ${page.classDate}` : '',
+        page.topics.length ? `Tags: ${page.topics.join(', ')}` : '',
+      ].filter(Boolean).join('\n');
+      const body = `# ${page.title}\n\n${meta ? `${meta}\n\n---\n\n` : ''}${page.content}`;
+      const blob = new Blob([body], { type: 'text/markdown;charset=utf-8' });
+      const url = URL.createObjectURL(blob);
+      const anchor = document.createElement('a');
+      anchor.href = url;
+      anchor.download = `${safeFilename(page.title)}.md`;
+      anchor.click();
+      URL.revokeObjectURL(url);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Unable to export the page.');
+    }
   }
 
   async function reorderPages(targetId: string) {
@@ -1227,17 +1389,24 @@ export default function NotesPage() {
     }
   }
 
-  async function movePageToSection(target: string) {
-    if (!draft || target === draft.section) return;
+  async function movePageToSection(targetSectionId: string) {
+    const current = draftRef.current;
+    const target = notebookSections.find(section => section.id === targetSectionId);
+    if (!current || !target || target.id === current.sectionId) return;
     try {
-      await api(`/api/notes/${encodeURIComponent(draft.id)}`, {
-        method: 'PATCH', body: JSON.stringify({ section: target }),
+      const data = await api(`/api/notes/${encodeURIComponent(current.id)}`, {
+        method: 'PATCH',
+        body: JSON.stringify({ sectionId: target.id, section: target.name }),
       });
+      const moved = data.note as Page;
+      dirtyRef.current = false;
       setDirty(false);
-      setSectionName(target);
-      await Promise.all([loadSections(), loadNotebooks()]);
-      await loadPages(notebookId, target);
-      await openPage(draft.id);
+      draftRef.current = moved;
+      setDraft(moved);
+      setSectionId(target.id);
+      setSectionName(target.name);
+      await Promise.all([loadSections(), loadNotebooks(), refreshNotebookPages(notebookId)]);
+      await loadPages(notebookId, target.name);
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Unable to move the page.');
     }
@@ -1388,7 +1557,7 @@ export default function NotesPage() {
             <button
               type="button"
               className="nb-rail-foot"
-              onClick={() => downloadBackup(null)}
+              onClick={() => void downloadBackup(null)}
               title="Download every notebook as one Markdown file"
             >
               Back up everything
@@ -1402,6 +1571,7 @@ export default function NotesPage() {
               type="button"
               className="nb-rail-toggle"
               title={railOpen ? 'Hide the notebook tree' : 'Show the notebook tree'}
+              aria-expanded={railOpen}
               onClick={() => setRailOpen(open => !open)}
             >
               ☰
@@ -1430,6 +1600,7 @@ export default function NotesPage() {
               type="button"
               className="nb-tab-settings"
               title={pageListOpen ? 'Hide the page list and use the full width' : 'Show the page list'}
+              aria-expanded={pageListOpen}
               onClick={() => setPageListOpen(open => !open)}
             >
               {pageListOpen ? 'Focus ⤢' : 'Pages ⤡'}
@@ -1479,12 +1650,12 @@ export default function NotesPage() {
                       >
                         {draft.pinned ? '★ Pinned' : '☆ Pin'}
                       </button>
-                      <button type="button" className="nb-chip" onClick={() => setShowDetails(open => !open)}>Page info</button>
-                      <button type="button" className="nb-chip" onClick={exportPage}>Export page</button>
+                      <button type="button" className={`nb-chip${showDetails ? ' is-on' : ''}`} aria-expanded={showDetails} onClick={() => setShowDetails(open => !open)}>Page info</button>
+                      <button type="button" className="nb-chip" onClick={() => void exportPage()}>Export page</button>
                       <button
                         type="button"
                         className="nb-chip"
-                        onClick={() => downloadBackup(notebookId)}
+                        onClick={() => void downloadBackup(notebookId)}
                         title="Download this whole notebook as one Markdown file"
                       >
                         Export notebook
@@ -1497,9 +1668,9 @@ export default function NotesPage() {
                     <div className="nb-details">
                       <label>
                         <span>Section</span>
-                        <select value={draft.section} onChange={event => void movePageToSection(event.target.value)}>
+                        <select value={draft.sectionId || ''} onChange={event => void movePageToSection(event.target.value)}>
                           {notebookSections.map(section => (
-                            <option key={section.id} value={section.name}>{section.name}</option>
+                            <option key={section.id} value={section.id}>{section.name}</option>
                           ))}
                         </select>
                       </label>
@@ -1555,7 +1726,10 @@ export default function NotesPage() {
                     initialHtml={draft.contentHtml}
                     onChange={html => {
                       htmlRef.current = html;
-                      if (!dirtyRef.current) { setDirty(true); setSaveState('idle'); }
+                      revisionRef.current += 1;
+                      dirtyRef.current = true;
+                      setDirty(true);
+                      setSaveState('idle');
                     }}
                     onSaveNow={() => void savePage(true)}
                     onUploadImage={uploadImage}
@@ -1606,14 +1780,14 @@ export default function NotesPage() {
                   className="nb-search"
                   value={searchQuery}
                   onChange={event => setSearchQuery(event.target.value)}
-                  placeholder="Search this notebook…"
-                  aria-label="Search this notebook"
+                  placeholder="Search all notes…"
+                  aria-label="Search all notes"
                 />
               </div>
               <div className="nb-pages-list">
                 {searchResults && (
                   <div className="nb-pages-note">
-                    {searchResults.length} result{searchResults.length === 1 ? '' : 's'} across all sections
+                    {searchResults.length} result{searchResults.length === 1 ? '' : 's'} across all notebooks
                   </div>
                 )}
                 {loadingPages ? (
@@ -1632,7 +1806,9 @@ export default function NotesPage() {
                     onDrop={() => void reorderPages(page.id)}
                     onDragEnd={() => setDragPageId('')}
                     className={`nb-page-item${page.id === pageId ? ' is-active' : ''}${dragPageId === page.id ? ' is-dragging' : ''}`}
-                    onClick={() => void selectPage(page.id)}
+                    onClick={() => void (searchResults
+                      ? selectTreePage(page.notebookId || '', page.sectionId || '', page.section, page.id)
+                      : selectPage(page.id))}
                   >
                     <span className="nb-page-item-title">{page.pinned ? '★ ' : ''}{page.title}</span>
                     <span className="nb-page-item-meta">
