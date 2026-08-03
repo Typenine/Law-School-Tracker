@@ -52,8 +52,8 @@ jobs:
           echo 'db3fccc4890bea9ddc169047ec059c3dcfa311ee74fc8b9ef2f78619e5aaa2a0  /tmp/notes-audit.patch.gz.b64' | sha256sum -c -
           base64 -d /tmp/notes-audit.patch.gz.b64 | gzip -d > /tmp/notes-audit.patch
           echo '06ca6bccf7468be42bcdb06029b59126d34125b76c230749ab095397fc328a84  /tmp/notes-audit.patch' | sha256sum -c -
-          printf 'x\n' > .github/workflows/notes-audit-export.yml
-          patch -p1 < /tmp/notes-audit.patch
+          printf 'x' > .github/workflows/notes-audit-export.yml
+          patch --batch -p1 < /tmp/notes-audit.patch
           git diff --check
 
       - name: Commit consolidated fix
