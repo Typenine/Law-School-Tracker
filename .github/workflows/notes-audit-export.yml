@@ -81,6 +81,7 @@ jobs:
           patch --batch -p1 < /tmp/notes-audit.patch
           git checkout HEAD -- .github/workflows/notes-audit-export.yml
           git checkout origin/main -- .github/workflows/ci.yml
+          sed -i "s/get_by_title('New notebook')/get_by_title('New notebook', exact=True)/g" tests/notes-ui.test.py
           git diff --check
 
       - uses: actions/setup-node@v4
@@ -104,6 +105,15 @@ jobs:
       - name: API and storage tests
         if: steps.gate.outputs.apply == 'true'
         run: npm test
+
+      - name: Save consolidated application patch
+        if: steps.gate.outputs.apply == 'true'
+        run: |
+          git config user.name 'Type Nine Notes Audit'
+          git config user.email 'actions@users.noreply.github.com'
+          git add -A
+          git commit -m 'Audit and harden Notes interface'
+          git push origin HEAD:audit/notes-controls
 
       - uses: actions/setup-python@v5
         if: steps.gate.outputs.apply == 'true'
@@ -135,15 +145,6 @@ jobs:
         env:
           NOTES_E2E_BASE_URL: http://127.0.0.1:3000
         run: python tests/notes-ui.test.py
-
-      - name: Commit consolidated fix
-        if: steps.gate.outputs.apply == 'true'
-        run: |
-          git config user.name 'Type Nine Notes Audit'
-          git config user.email 'actions@users.noreply.github.com'
-          git add -A
-          git commit -m 'Audit and harden Notes interface'
-          git push origin HEAD:audit/notes-controls
 
       - name: Show server log after failure
         if: failure()
