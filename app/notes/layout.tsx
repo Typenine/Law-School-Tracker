@@ -53,13 +53,19 @@ function DeletedPageState() {
     setCanvasHost(document.querySelector<HTMLElement>('.nb-canvas-column'));
     document.body.classList.add('notes-awaiting-page-selection');
 
-    const choosePage = (event: MouseEvent) => {
+    const chooseAnotherPage = (event: Event) => {
       const target = event.target instanceof Element ? event.target : null;
-      if (target?.closest('.nb-page-item, .nb-node-page')) clearDeletedNotice();
+      if (target?.closest(
+        '.nb-page-item, .nb-node-page, .nb-page-title, [contenteditable="true"], .nb-page-head button',
+      )) {
+        clearDeletedNotice();
+      }
     };
-    document.addEventListener('click', choosePage, true);
+    document.addEventListener('click', chooseAnotherPage, true);
+    document.addEventListener('focusin', chooseAnotherPage, true);
     return () => {
-      document.removeEventListener('click', choosePage, true);
+      document.removeEventListener('click', chooseAnotherPage, true);
+      document.removeEventListener('focusin', chooseAnotherPage, true);
       document.body.classList.remove('notes-awaiting-page-selection');
     };
   }, [deletedNotice, clearDeletedNotice]);
@@ -92,8 +98,8 @@ export default function NotesLayout({ children }: { children: ReactNode }) {
         .notes-header-delete:disabled,.notes-header-add:disabled { opacity:.55; cursor:wait; }
         .notes-header-message { max-width:250px; color:var(--red2); font-size:11px; line-height:1.25; text-align:right; }
         .nb-canvas-column { position:relative; }
-        .notes-deleted-state { position:absolute; inset:0; z-index:60; display:grid; place-items:center; padding:32px; background:var(--bg); }
-        .notes-deleted-card { width:min(460px,100%); padding:28px; border:1px solid var(--line2); border-radius:12px; background:var(--s1); text-align:center; }
+        .notes-deleted-state { position:absolute; inset:0; z-index:60; display:grid; place-items:center; padding:32px; background:var(--bg); pointer-events:none; }
+        .notes-deleted-card { width:min(460px,100%); padding:28px; border:1px solid var(--line2); border-radius:12px; background:var(--s1); text-align:center; pointer-events:auto; }
         .notes-deleted-card h2 { margin:8px 0; font-size:24px; }
         .notes-deleted-card p { margin:0 auto 20px; max-width:360px; color:var(--muted); }
         .notes-deleted-kicker { color:var(--green2); font:500 10px/1 'IBM Plex Mono',monospace; letter-spacing:.12em; text-transform:uppercase; }
