@@ -25,6 +25,11 @@ def find_note(request, title):
     return next(item for item in data['notes'] if item['title'] == title)
 
 
+def notes_in_notebook(request, notebook_id):
+    data = ok(request.get(f'/api/notes?limit=500&notebookId={notebook_id}'))
+    return data['notes']
+
+
 def expand_row(row):
     button = row.locator('button.nb-node-main')
     if button.get_attribute('aria-expanded') != 'true':
@@ -104,6 +109,43 @@ def run():
         title = page.get_by_label('Page title')
         editor = page.get_by_label('Page content')
         expect(title).to_be_visible(timeout=10_000)
+
+        # The prominent app-header controls are the controls a user actually
+        # sees first. Add notes must create and open a page; Delete note must be
+        # visible, cancellable, and then move that exact page to the trash.
+        before_count = len(notes_in_notebook(request, main_book['id']))
+        header_add = page.locator('.lst-actions').get_by_role('button', name='Add notes')
+        expect(header_add).to_be_visible(timeout=10_000)
+        header_add.click()
+        for _ in range(100):
+            if len(notes_in_notebook(request, main_book['id'])) == before_count + 1:
+                break
+            time.sleep(.1)
+        assert len(notes_in_notebook(request, main_book['id'])) == before_count + 1
+
+        header_title = f'Header Action Audit {STAMP}'
+        title.fill(header_title)
+        expect(page.get_by_text('All changes saved')).to_be_visible(timeout=10_000)
+        header_note = find_note(request, header_title)
+
+        header_delete = page.locator('.lst-actions').get_by_role('button', name='Delete note')
+        expect(header_delete).to_be_visible(timeout=10_000)
+        header_delete.click()
+        confirm = page.get_by_role('alertdialog')
+        expect(confirm).to_contain_text('Move to trash?')
+        confirm.get_by_role('button', name='Cancel').click()
+        expect(title).to_have_value(header_title)
+
+        header_delete.click()
+        confirm = page.get_by_role('alertdialog')
+        confirm.get_by_role('button', name='Move to trash').click()
+        expect(title).not_to_have_value(header_title, timeout=10_000)
+        for _ in range(100):
+            remaining_ids = {item['id'] for item in notes_in_notebook(request, main_book['id'])}
+            if header_note['id'] not in remaining_ids:
+                break
+            time.sleep(.1)
+        assert header_note['id'] not in {item['id'] for item in notes_in_notebook(request, main_book['id'])}
 
         # Delay the first autosave response, then edit again while it is still
         # in flight. The status must not claim the second edit was saved until a
