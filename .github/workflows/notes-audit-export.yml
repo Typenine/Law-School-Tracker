@@ -23,11 +23,27 @@ jobs:
         run: |
           : > /tmp/notes-audit.patch.gz.b64
           for blob in \
-            cfc3a290ca35b915da0380f5999ad5326c39aa92 \
+            aef0eb792a183a63a3e64a449effc17460468ea8 \
+            df8f339097f7b64d9fc7a43f91571f315456e2ad \
+            6d6ff0efb4aa28bbaab28f1d9dc3dfc148e0c769 \
+            6f2704a011a2e166a083b576512b4a2b95539862 \
             0773e036a5c8fe50126f00b360abca0f41aa654e \
             94ae1548ac8b4729dce4f92aaff46bac545873ae \
             491117f0e520590198747f430c35f0f77cbfddb3 \
-            30d1045ca9954dc108fc60a69994e3ad6ede5e45
+            5e00378f92600d0c97b6242e6483799995743ff9 \
+            ebc7dbfe37f1fac9e8ebdbe8e787505ec3122d99 \
+            a0e632d9d19022f420dd0fce9ce0240d2b795b75 \
+            6f18b2c78088308fcccd5b9e59039abb1f3fe9a0 \
+            f348dbb7f5684d67cf52c5760923d59cd6e08287 \
+            c64967eb0e929cd43323c89c880588c98b1b5887 \
+            d9751175c6b7f427923222bbf4fd9efba200df1a \
+            165edf937a924ac749a370933a68148693d9f9ef \
+            7a177efabac9de9bb1e776216fa92fbc7f3e6bde \
+            da5ffe66fe55c0e88b26fe65d4343e5e7d718e6b \
+            7ecb2c947b0c469eb70a2ebbea4a08074d7c2348 \
+            132ca450f8819f739a04552692157f7f7ff1c824 \
+            741c5d6d6973dd376dd7f944d5bca4e6ecd91211 \
+            5a4f85d9d9bb6489eedbad461948ff5c80b4589e
           do
             gh api "repos/${GITHUB_REPOSITORY}/git/blobs/${blob}" --jq .content \
               | tr -d '\n' | base64 -d >> /tmp/notes-audit.patch.gz.b64
