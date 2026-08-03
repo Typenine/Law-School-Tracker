@@ -1,1 +1,31 @@
-x
+name: Notes audit source export
+
+on:
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  export:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 2
+
+      - name: Record clean main source
+        run: |
+          git rev-parse HEAD^ > base-commit.txt
+          git rev-parse HEAD^^{tree} > base-tree.txt
+          git archive --format=tar.gz --output=law-school-tracker-main.tar.gz HEAD^
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: law-school-tracker-main-source
+          path: |
+            law-school-tracker-main.tar.gz
+            base-commit.txt
+            base-tree.txt
+          retention-days: 1
