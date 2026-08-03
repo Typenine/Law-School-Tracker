@@ -47,7 +47,9 @@ export async function GET(
 ) {
   try {
     const note = await getAiNote(params.id);
-    if (!note) return noStoreJson({ error: 'Note not found.' }, { status: 404 });
+    // Trash has its own endpoint. A stale page selection must not be able to
+    // reopen a page that has already been moved there.
+    if (!note || note.deletedAt) return noStoreJson({ error: 'Note not found.' }, { status: 404 });
     return noStoreJson({ note });
   } catch (error) {
     return noStoreJson(
@@ -62,6 +64,11 @@ export async function PATCH(
   { params }: { params: { id: string } },
 ) {
   try {
+    const existing = await getAiNote(params.id);
+    if (!existing || existing.deletedAt) {
+      return noStoreJson({ error: 'Note not found.' }, { status: 404 });
+    }
+
     const parsed = updateSchema.safeParse(await req.json());
     if (!parsed.success) {
       return noStoreJson(
@@ -73,7 +80,7 @@ export async function PATCH(
       ...parsed.data,
       sourceType: parsed.data.sourceType as NoteSourceType | undefined,
     });
-    if (!note) return noStoreJson({ error: 'Note not found.' }, { status: 404 });
+    if (!note || note.deletedAt) return noStoreJson({ error: 'Note not found.' }, { status: 404 });
     return noStoreJson({ note });
   } catch (error) {
     // 409 so the editor can offer to reload rather than clobbering.
