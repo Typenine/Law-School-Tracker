@@ -16,7 +16,8 @@ export default function NotesStyles() {
       .nb-shell, .nb-empty-state, .nb-boot { max-width: 100% !important; width: 100%; }
       .nb-boot { display: grid; place-items: center; min-height: 60vh; color: var(--muted); }
 
-      .nb-empty-state { display: grid; place-items: center; min-height: 62vh; }
+      .nb-empty-state { display: grid; place-items: center; min-height: 62vh; gap: 10px; text-align: center; padding: 0 20px; }
+      .nb-boot-hint { max-width: 46ch; color: var(--muted); font-size: 12.5px; line-height: 1.6; }
       .nb-empty-card { max-width: 520px; padding: 34px; border: 1px solid var(--line); border-radius: 14px; background: var(--s1); text-align: center; }
       .nb-empty-card h2 { margin: 0 0 12px; font-size: 22px; }
       .nb-empty-card p { margin: 0 0 22px; color: var(--muted); line-height: 1.6; }

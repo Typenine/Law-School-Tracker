@@ -30,6 +30,52 @@ describe('nothing is destroyed by accident', () => {
     assert.ok(trashed.some(n => n.id === brief.id), 'and turns up in the trash');
   });
 
+  it('stops counting a page once it is in the trash', async () => {
+    const book = await notebook();
+    const week = await section(book.id, 'Week 1');
+    const first = await page(book.id, week.id, 'One');
+    await page(book.id, week.id, 'Two');
+
+    const before = (await app.api('GET', `/api/notes/sections?notebookId=${book.id}`)).body.sections
+      .find(s => s.id === week.id);
+    assert.equal(before.pageCount, 2);
+
+    await app.api('DELETE', `/api/notes/${first.id}`);
+
+    // The count is the most visible sign a delete worked. Leaving the trash in
+    // it made deleting look like it had done nothing at all.
+    const after = (await app.api('GET', `/api/notes/sections?notebookId=${book.id}`)).body.sections
+      .find(s => s.id === week.id);
+    assert.equal(after.pageCount, 1, 'the section count drops');
+
+    const shelf = (await app.api('GET', '/api/notes/notebooks')).body.notebooks
+      .find(n => n.id === book.id);
+    assert.equal(shelf.noteCount, 1, 'and so does the notebook count');
+  });
+
+  it('counts a page again once it is restored', async () => {
+    const book = await notebook();
+    const week = await section(book.id, 'Week 1');
+    const only = await page(book.id, week.id, 'One');
+    await app.api('DELETE', `/api/notes/${only.id}`);
+    await app.api('POST', '/api/notes/deleted', { id: only.id });
+
+    const back = (await app.api('GET', `/api/notes/sections?notebookId=${book.id}`)).body.sections
+      .find(s => s.id === week.id);
+    assert.equal(back.pageCount, 1);
+  });
+
+  it('does not count archived pages either', async () => {
+    const book = await notebook();
+    const week = await section(book.id, 'Week 1');
+    const filed = await page(book.id, week.id, 'Set aside');
+    await app.api('PATCH', `/api/notes/${filed.id}`, { archived: true });
+
+    const shelf = (await app.api('GET', '/api/notes/notebooks')).body.notebooks
+      .find(n => n.id === book.id);
+    assert.equal(shelf.noteCount, 0, 'the notebook count matches what the tree lists');
+  });
+
   it('restore brings a page back where it was, with its text', async () => {
     const book = await notebook();
     const week = await section(book.id, 'Week 1');
@@ -316,6 +362,43 @@ describe('what survives a restart', () => {
     await app.restart();
     const after = (await app.api('GET', `/api/notes/sections?notebookId=${book.id}`)).body.sections;
     assert.ok(!after.some(s => s.name === 'Week 2'));
+  });
+
+  it('still opens when the schema lock is held by a connection that is gone', async () => {
+    const book = await notebook();
+    await section(book.id, 'Week 1');
+
+    // A deploy kills instances mid-migration, and an advisory lock lives until
+    // its connection actually closes. `pg_advisory_lock` waits forever, so one
+    // unlucky restart used to leave every later instance queued behind a lock
+    // whose owner would never come back - a spinner that never resolved.
+    const squatter = await app.db.connect();
+    try {
+      await squatter.query('SELECT pg_advisory_lock(4021977)');
+
+      await app.restart();
+      const started = Date.now();
+      const response = await app.api('GET', '/api/notes/notebooks');
+      const took = Date.now() - started;
+
+      assert.equal(response.status, 200, 'the page can still load its notebooks');
+      assert.ok(response.body.notebooks.some(n => n.id === book.id));
+      assert.ok(took < 30_000, `gave up waiting rather than blocking (took ${took}ms)`);
+    } finally {
+      await squatter.query('SELECT pg_advisory_unlock(4021977)').catch(() => {});
+      squatter.release();
+    }
+  });
+
+  it('hands the schema connection back without its timeouts', async () => {
+    // Those SETs are session-scoped and the connection is pooled, so leaving
+    // them on would quietly apply a statement timeout to everything else.
+    await app.api('GET', '/api/notes/notebooks');
+    const { rows } = await app.db.query(
+      `SELECT current_setting('statement_timeout') AS statement, current_setting('lock_timeout') AS lock`,
+    );
+    assert.equal(rows[0].statement, '0', 'no statement timeout left behind');
+    assert.equal(rows[0].lock, '0', 'no lock timeout left behind');
   });
 
   it('clears out the tabs the old resurrection bug left behind', async () => {

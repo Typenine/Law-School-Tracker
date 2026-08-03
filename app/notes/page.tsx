@@ -49,17 +49,51 @@ class ApiError extends Error {
   }
 }
 
+/**
+ * No request may hang forever.
+ *
+ * `fetch` has no timeout of its own, so a server that accepts a connection and
+ * never answers leaves the promise pending for good. Every caller here awaits
+ * that promise before refreshing the tree or reporting a problem, so a single
+ * unanswered request means the button appears to do nothing at all - no new
+ * page, no deletion, no error, nothing to retry.
+ */
+const REQUEST_TIMEOUT_MS = 15_000;
+
 async function api(path: string, init: RequestInit = {}) {
   const headers = new Headers(init.headers || {});
   if (init.body && !(init.body instanceof FormData) && !headers.has('Content-Type')) {
     headers.set('Content-Type', 'application/json');
   }
-  const response = await fetch(path, { ...init, headers, cache: 'no-store' });
-  const data = await response.json().catch(() => ({}));
-  if (!response.ok) {
-    throw new ApiError(data?.error || `Request failed (${response.status})`, response.status, data);
+
+  const controller = new AbortController();
+  const timer = window.setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS);
+  // Callers may bring their own signal; honour both.
+  const caller = init.signal;
+  if (caller) {
+    if (caller.aborted) controller.abort();
+    else caller.addEventListener('abort', () => controller.abort(), { once: true });
   }
-  return data;
+
+  try {
+    const response = await fetch(path, { ...init, headers, cache: 'no-store', signal: controller.signal });
+    const data = await response.json().catch(() => ({}));
+    if (!response.ok) {
+      throw new ApiError(data?.error || `Request failed (${response.status})`, response.status, data);
+    }
+    return data;
+  } catch (error) {
+    if (error instanceof DOMException && error.name === 'AbortError' && !caller?.aborted) {
+      throw new ApiError(
+        'The server did not answer. Nothing was lost — wait a moment and try again.',
+        504,
+        {},
+      );
+    }
+    throw error;
+  } finally {
+    window.clearTimeout(timer);
+  }
 }
 
 export default function NotesPage() {
@@ -86,6 +120,34 @@ export default function NotesPage() {
   const [error, setError] = useState('');
   /** A save that was refused, holding both versions so either can be kept. */
   const [conflict, setConflict] = useState<{ theirs: Page; myHtml: string; myTitle: string } | null>(null);
+  /**
+   * Confirmation for anything destructive, asked inside the page.
+   *
+   * These used to be `window.confirm`. Browsers offer "prevent this page from
+   * creating additional dialogs" once a few have been shown, and from then on
+   * confirm() returns false instantly and silently - so every delete returned
+   * early and did nothing at all. No request, no error, no change on screen,
+   * and the more often you tried the more certain it became.
+   */
+  const [confirmAsk, setConfirmAsk] = useState<
+    { title: string; body: string; action: string } | null
+  >(null);
+  const confirmReply = useRef<((ok: boolean) => void) | null>(null);
+
+  const ask = useCallback((title: string, body: string, action: string): Promise<boolean> => {
+    // Anything still waiting is answered "no" rather than left hanging.
+    confirmReply.current?.(false);
+    setConfirmAsk({ title, body, action });
+    return new Promise<boolean>(resolve => { confirmReply.current = resolve; });
+  }, []);
+
+  const answerConfirm = useCallback((ok: boolean) => {
+    setConfirmAsk(null);
+    const reply = confirmReply.current;
+    confirmReply.current = null;
+    reply?.(ok);
+  }, []);
+
   const [setAside, setSetAside] = useState<
     { trashed: PageSummary[]; archived: PageSummary[]; retentionDays: number } | null
   >(null);
@@ -245,15 +307,15 @@ export default function NotesPage() {
 
   // ---------------------------------------------------------------- loading
 
-  const loadNotebooks = useCallback(async (): Promise<Notebook[]> => {
-    const data = await api('/api/notes/notebooks');
+  const loadNotebooks = useCallback(async (signal?: AbortSignal): Promise<Notebook[]> => {
+    const data = await api('/api/notes/notebooks', signal ? { signal } : {});
     const next = Array.isArray(data?.notebooks) ? (data.notebooks as Notebook[]) : [];
     setNotebooks(next);
     return next;
   }, []);
 
-  const loadSections = useCallback(async (): Promise<Section[]> => {
-    const data = await api('/api/notes/sections');
+  const loadSections = useCallback(async (signal?: AbortSignal): Promise<Section[]> => {
+    const data = await api('/api/notes/sections', signal ? { signal } : {});
     const next = Array.isArray(data?.sections) ? (data.sections as Section[]) : [];
     setSections(next);
     return next;
@@ -418,18 +480,32 @@ export default function NotesPage() {
   // ------------------------------------------------------------------- boot
 
   useEffect(() => {
+    // A request that never answers used to leave this screen up for good, with
+    // nothing said and nothing to click. Boot gives up after a while and shows
+    // what happened instead of spinning.
+    const controller = new AbortController();
+    const giveUp = window.setTimeout(() => controller.abort(), 20_000);
+
     (async () => {
       try {
-        const [loadedNotebooks] = await Promise.all([loadNotebooks(), loadSections()]);
+        const [loadedNotebooks] = await Promise.all([
+          loadNotebooks(controller.signal),
+          loadSections(controller.signal),
+        ]);
         const remembered = window.localStorage.getItem('notesLastNotebook') || '';
         const first = loadedNotebooks.find(item => item.id === remembered) || loadedNotebooks[0];
         if (first) setNotebookId(first.id);
       } catch (err) {
-        setError(err instanceof Error ? err.message : 'Unable to load your notebooks.');
+        setError(controller.signal.aborted
+          ? 'The server did not answer. Your notes are safe — this is only the page failing to load them.'
+          : err instanceof Error ? err.message : 'Unable to load your notebooks.');
       } finally {
+        window.clearTimeout(giveUp);
         setBooted(true);
       }
     })();
+
+    return () => { window.clearTimeout(giveUp); controller.abort(); };
   }, [loadNotebooks, loadSections]);
 
   // Pick a section whenever the notebook changes, preferring the tab that was
@@ -584,6 +660,14 @@ export default function NotesPage() {
   async function selectTreePage(nbId: string, secId: string, section: string, id: string) {
     if (id === pageId) return;
     if (dirtyRef.current) await savePage(true);
+    // Claim the selection in the same update as the notebook and section.
+    //
+    // Changing the section runs the effect that opens whichever page was last
+    // read in that tab, and it leaves the current page alone only if it is
+    // already the selected one. `openPage` sets that after an await, so the
+    // effect used to win the race and replace the page just clicked with a
+    // different one - and then Move to trash deleted the wrong page.
+    setPageId(id);
     if (nbId) setNotebookId(nbId);
     if (secId) setSectionId(secId);
     if (section) setSectionName(section);
@@ -753,7 +837,7 @@ export default function NotesPage() {
     const count = setAside?.trashed.length || 0;
     if (!count) return;
     const plural = count === 1 ? 'page' : 'pages';
-    if (!window.confirm(`Delete ${count} ${plural} for good? This cannot be undone.`)) return;
+    if (!await ask('Empty the trash?', `${count} ${plural} will be deleted for good. This cannot be undone.`, 'Delete for good')) return;
     try {
       await api('/api/notes/deleted', { method: 'DELETE' });
       await loadSetAside();
@@ -773,7 +857,7 @@ export default function NotesPage() {
   }
 
   async function purgePage(id: string, title: string) {
-    if (!window.confirm(`Permanently delete “${title}”? This cannot be undone.`)) return;
+    if (!await ask('Delete for good?', `“${title}” will be gone for good. This cannot be undone.`, 'Delete for good')) return;
     try {
       await api(`/api/notes/${encodeURIComponent(id)}?purge=true`, { method: 'DELETE' });
       await loadSetAside();
@@ -915,7 +999,7 @@ export default function NotesPage() {
 
   async function deleteNotebook() {
     if (!notebookModal?.id) return;
-    if (!window.confirm('Delete this notebook? Its pages move to Unfiled rather than being deleted.')) return;
+    if (!await ask('Delete this notebook?', 'Its pages move to Unfiled rather than being deleted.', 'Delete notebook')) return;
     setSavingModal(true);
     try {
       await api(`/api/notes/notebooks/${encodeURIComponent(notebookModal.id)}`, { method: 'DELETE' });
@@ -967,9 +1051,9 @@ export default function NotesPage() {
     if (!sectionModal?.id) return;
     const others = notebookSections.filter(section => section.id !== sectionModal.id);
     const message = others.length
-      ? `Delete the “${sectionModal.name}” section? Its pages move to “${others[0].name}”.`
-      : `Delete the “${sectionModal.name}” section? It is the last section, so its pages are deleted too.`;
-    if (!window.confirm(message)) return;
+      ? `“${sectionModal.name}” is removed and its pages move to “${others[0].name}”.`
+      : `“${sectionModal.name}” is the last section, so its pages go to the trash with it.`;
+    if (!await ask('Delete this section?', message, 'Delete section')) return;
     setSavingModal(true);
     try {
       await api(`/api/notes/sections/${encodeURIComponent(sectionModal.id)}`, { method: 'DELETE' });
@@ -987,17 +1071,48 @@ export default function NotesPage() {
     }
   }
 
+  /**
+   * Take a page out of every list that can show it, at once.
+   *
+   * The tree reads from a per-notebook cache, the section panel from its own
+   * list, and a search replaces the tree with a third. Waiting on a refetch to
+   * clear them is both slow and fragile - the refetch targets the selected
+   * notebook, which is not necessarily the one the page lived in, and the
+   * cache used to refuse to reload a notebook it had already seen. So the page
+   * goes from all three immediately, and the refetch merely confirms it.
+   */
+  function removeFromView(id: string, ownerNotebookId: string | null) {
+    setSearchResults(current => (current ? current.filter(item => item.id !== id) : current));
+    setPages(current => current.filter(item => item.id !== id));
+    setPagesByNotebook(current => {
+      const next: Record<string, PageSummary[]> = {};
+      // Drop it wherever it is cached: a page can appear under the notebook it
+      // belongs to and under whichever one happens to be selected.
+      for (const [key, list] of Object.entries(current)) {
+        next[key] = list.filter(item => item.id !== id);
+      }
+      if (ownerNotebookId && !next[ownerNotebookId]) next[ownerNotebookId] = [];
+      return next;
+    });
+  }
+
   async function archivePage() {
     if (!draft) return;
-    if (!window.confirm(`Archive “${draft.title}”? It stays searchable by your GPT but leaves this section.`)) return;
+    if (!await ask('Archive this page?', `“${draft.title}” stays searchable by your assistant but leaves this section.`, 'Archive')) return;
     try {
-      await api(`/api/notes/${encodeURIComponent(draft.id)}`, {
+      const removedId = draft.id;
+      const owner = draft.notebookId || notebookId;
+      await api(`/api/notes/${encodeURIComponent(removedId)}`, {
         method: 'PATCH', body: JSON.stringify({ archived: true }),
       });
       setDirty(false);
       setDraft(null);
       setPageId('');
-      await Promise.all([loadNotebooks(), loadPages(notebookId, sectionName)]);
+      removeFromView(removedId, owner);
+      await Promise.all([
+        loadNotebooks(), loadSections(), loadPages(notebookId, sectionName),
+        refreshNotebookPages(owner),
+      ]);
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Unable to archive the page.');
     }
@@ -1005,16 +1120,25 @@ export default function NotesPage() {
 
   async function deletePage() {
     if (!draft) return;
-    if (!window.confirm(`Move “${draft.title}” to the trash? You can restore it from Set aside.`)) return;
+    if (!await ask('Move to trash?', `“${draft.title}” goes to the trash. You can restore it from Set aside.`, 'Move to trash')) return;
     try {
-      await api(`/api/notes/${encodeURIComponent(draft.id)}`, { method: 'DELETE' });
+      const removedId = draft.id;
+      const owner = draft.notebookId || notebookId;
+      await api(`/api/notes/${encodeURIComponent(removedId)}`, { method: 'DELETE' });
       // Clear the dirty flag first so the autosave effect cannot re-create the
       // page's content after it has been removed.
       setDirty(false);
       setDraft(null);
       setPageId('');
+      removeFromView(removedId, owner);
       const remaining = await loadPages(notebookId, sectionName);
-      await Promise.all([loadNotebooks(), refreshNotebookPages(notebookId)]);
+      // Sections carry a page count, so they have to be reloaded as well or
+      // the number beside the section keeps counting the page just deleted.
+      await Promise.all([
+        loadNotebooks(), loadSections(),
+        refreshNotebookPages(owner),
+        owner === notebookId ? Promise.resolve() : refreshNotebookPages(notebookId),
+      ]);
       if (remaining[0]) void openPage(remaining[0].id);
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Unable to delete the page.');
@@ -1128,6 +1252,26 @@ export default function NotesPage() {
 
   if (!booted) {
     return <main className="nb-boot">Opening your notebooks…<NotesStyles /></main>;
+  }
+
+  // Boot finished but nothing loaded and something went wrong: say so, and
+  // offer the one thing that helps, rather than showing an empty workspace
+  // that invites the user to start again over the top of existing notes.
+  if (!notebooks.length && error) {
+    return (
+      <main className="nb-empty-state">
+        <h2>Your notes could not be loaded</h2>
+        <p>{error}</p>
+        <p className="nb-boot-hint">
+          Nothing has been lost — this is the page failing to reach the server, not the notes
+          themselves. If a reload does not help, the deployment may still be starting up.
+        </p>
+        <button type="button" className="nb-primary" onClick={() => window.location.reload()}>
+          Try again
+        </button>
+        <NotesStyles />
+      </main>
+    );
   }
 
   if (!notebooks.length) {
@@ -1401,7 +1545,7 @@ export default function NotesPage() {
                       </label>
                       <div className="nb-details-actions">
                         <button type="button" className="nb-link-warn" onClick={() => void archivePage()}>Archive page</button>
-                        <button type="button" className="nb-link-danger" onClick={() => void deletePage()}>Delete permanently</button>
+                        <button type="button" className="nb-link-danger" onClick={() => void deletePage()}>Move to trash</button>
                       </div>
                     </div>
                   )}
@@ -1546,6 +1690,30 @@ export default function NotesPage() {
                   ))}
                 </section>
               ))}
+            </div>
+          </div>
+        </div>
+      )}
+
+      {confirmAsk && (
+        <div className="nb-modal-scrim" onMouseDown={event => event.target === event.currentTarget && answerConfirm(false)}>
+          <div className="nb-modal" role="alertdialog" aria-labelledby="nb-confirm-title">
+            <div className="nb-modal-head">
+              <div>
+                <h3 id="nb-confirm-title">{confirmAsk.title}</h3>
+                <p>{confirmAsk.body}</p>
+              </div>
+            </div>
+            <div className="nb-modal-foot">
+              <span />
+              <div>
+                <button type="button" className="nb-secondary" onClick={() => answerConfirm(false)}>
+                  Cancel
+                </button>
+                <button type="button" className="nb-primary" autoFocus onClick={() => answerConfirm(true)}>
+                  {confirmAsk.action}
+                </button>
+              </div>
             </div>
           </div>
         </div>

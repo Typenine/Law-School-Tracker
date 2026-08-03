@@ -42,7 +42,10 @@ export async function listNotebooks(archived = false): Promise<NoteNotebook[]> {
          ARRAY[]::text[]
        ) AS sections
      FROM ai_note_notebooks notebook
-     LEFT JOIN ai_notes note ON note.notebook_id = notebook.id
+     LEFT JOIN ai_notes note
+       ON note.notebook_id = notebook.id
+      AND note.deleted_at IS NULL
+      AND note.archived = FALSE
      WHERE notebook.archived = $1
      GROUP BY notebook.id
      ORDER BY notebook.position, COALESCE(notebook.semester, 'Unsorted') DESC, LOWER(notebook.name)`,
@@ -61,7 +64,10 @@ export async function getNotebook(id: string): Promise<NoteNotebook | null> {
          ARRAY[]::text[]
        ) AS sections
      FROM ai_note_notebooks notebook
-     LEFT JOIN ai_notes note ON note.notebook_id = notebook.id
+     LEFT JOIN ai_notes note
+       ON note.notebook_id = notebook.id
+      AND note.deleted_at IS NULL
+      AND note.archived = FALSE
      WHERE notebook.id = $1
      GROUP BY notebook.id`,
     [id],
