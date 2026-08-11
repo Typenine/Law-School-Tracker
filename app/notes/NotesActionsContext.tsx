@@ -4,7 +4,8 @@ import { createContext, ReactNode, useCallback, useContext, useMemo, useRef, use
 
 type RegisteredActions = {
   create: () => Promise<void>;
-  remove: () => Promise<void>;
+  /** Resolves to whether a page was actually moved to trash (false if cancelled). */
+  remove: () => Promise<boolean>;
 };
 
 type DeleteNotice = {
@@ -42,9 +43,8 @@ export function NotesActionsProvider({ children }: { children: ReactNode }) {
     const actions = actionsRef.current;
     if (!actions) throw new Error('Notes are still loading. Try again in a moment.');
 
-    const beforeCount = kind === 'delete'
-      ? document.querySelectorAll('.nb-page-item').length
-      : 0;
+    // Read before the delete runs: the title input (and the page itself)
+    // is gone from the DOM by the time `remove()` resolves.
     const beforeTitle = kind === 'delete'
       ? document.querySelector<HTMLInputElement>('.nb-page-title')?.value.trim() || 'Page'
       : '';
@@ -53,19 +53,14 @@ export function NotesActionsProvider({ children }: { children: ReactNode }) {
     busyRef.current = kind;
     setBusy(kind);
     try {
-      if (kind === 'create') await actions.create();
-      else await actions.remove();
-
-      if (kind === 'delete') {
-        await new Promise<void>(resolve => {
-          requestAnimationFrame(() => requestAnimationFrame(() => resolve()));
-        });
-        const afterCount = document.querySelectorAll('.nb-page-item').length;
-        // A cancelled confirmation leaves the list untouched. Only show the
-        // post-delete state when a page actually left the active page list.
-        if (afterCount < beforeCount) {
-          setDeletedNotice({ title: beforeTitle });
-        }
+      if (kind === 'create') {
+        await actions.create();
+      } else {
+        // `remove()` reports whether a page was actually moved to trash, so
+        // a cancelled confirmation cannot be mistaken for a real deletion -
+        // no DOM inspection required.
+        const deleted = await actions.remove();
+        if (deleted) setDeletedNotice({ title: beforeTitle });
       }
     } finally {
       busyRef.current = null;

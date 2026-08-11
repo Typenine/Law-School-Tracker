@@ -8,13 +8,17 @@ export type ApiOptions = {
 
 export async function apiFetch<T = any>(url: string, opts: ApiOptions = {}): Promise<T> {
   const { method = 'GET', headers = {}, body } = opts;
+  const isFormData = body instanceof FormData;
+  // FormData must not get an explicit Content-Type: the browser needs to set
+  // its own multipart boundary, and setting the key to `undefined` here would
+  // otherwise send the literal header value "undefined".
+  const mergedHeaders: Record<string, string> = isFormData
+    ? { ...headers }
+    : { 'Content-Type': 'application/json', ...headers };
   const init: RequestInit = {
     method,
-    headers: {
-      'Content-Type': body instanceof FormData ? undefined as any : 'application/json',
-      ...headers,
-    },
-    body: body instanceof FormData ? body : (body != null ? JSON.stringify(body) : undefined),
+    headers: mergedHeaders,
+    body: isFormData ? body : (body != null ? JSON.stringify(body) : undefined),
     cache: 'no-store',
   };
   try {

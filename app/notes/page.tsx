@@ -7,6 +7,7 @@ import { termOptions, termSortKey } from '@/lib/semester';
 import NotesStyles from './NotesStyles';
 import NotesTree, { notebookKey, sectionKey, semesterKey } from './NotesTree';
 import { useNotesActions } from './NotesActionsContext';
+import { sanitizeNoteHtml } from '@/lib/notes/htmlUtils';
 import {
   Notebook,
   Page,
@@ -486,7 +487,10 @@ export default function NotesPage() {
         setSaveState('error');
         const nextConflict = {
           theirs: err.data.note as Page,
-          myHtml: htmlRef.current,
+          // Straight from the live contenteditable DOM, so it has never been
+          // through the server's sanitizer - do that before it is ever handed
+          // to dangerouslySetInnerHTML below.
+          myHtml: sanitizeNoteHtml(htmlRef.current),
           myTitle: draftRef.current?.title || current.title,
         };
         conflictRef.current = nextConflict;
@@ -525,7 +529,10 @@ export default function NotesPage() {
    */
   const flushOnExit = useCallback(() => {
     const current = draftRef.current;
-    if (!current || !dirtyRef.current) return;
+    // A conflict is already showing the user two versions to choose between;
+    // firing a beacon with the same stale `expectedUpdatedAt` on the way out
+    // would just be rejected again by the server for no benefit.
+    if (!current || !dirtyRef.current || conflictRef.current) return;
     try {
       const body = new Blob([savePayload(current)], { type: 'application/json' });
       navigator.sendBeacon(`/api/notes/${encodeURIComponent(current.id)}`, body);
@@ -1356,9 +1363,10 @@ export default function NotesPage() {
     }
   }
 
-  async function deletePage() {
+  /** Returns whether a page was actually moved to trash (false if cancelled). */
+  async function deletePage(): Promise<boolean> {
     const current = draftRef.current;
-    if (!current || deletingPageRef.current) return;
+    if (!current || deletingPageRef.current) return false;
 
     deletingPageRef.current = true;
     try {
@@ -1366,7 +1374,7 @@ export default function NotesPage() {
         'Move to trash?',
         `“${current.title}” goes to the trash. You can restore it from Set aside.`,
         'Move to trash',
-      )) return;
+      )) return false;
 
       const owner = current.notebookId || notebookId;
       const source = (owner ? pagesByNotebook[owner] : null) || pages;
@@ -1434,8 +1442,10 @@ export default function NotesPage() {
       } catch {
         setError('The page is in the trash, but the sidebar could not fully refresh.');
       }
+      return true;
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Unable to delete the page.');
+      return false;
     } finally {
       deletingPageRef.current = false;
     }
