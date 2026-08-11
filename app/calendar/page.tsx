@@ -1,7 +1,7 @@
 "use client";
 import { useEffect, useMemo, useState } from 'react';
 import { Task, CalendarEvent, EventCategory } from '@/lib/types';
-import { courseColorClass } from '@/lib/colors';
+import { resolveCourseColor } from '@/lib/colors';
 import TimePickerField from '@/components/TimePickerField';
 import { notifyTasksChanged, onTasksChanged } from '@/lib/taskBus';
 import { useSemester } from '@/lib/useSemester';
@@ -635,7 +635,7 @@ export default function CalendarPage() {
                     const selected = addCourse === label;
                     return (
                       <button key={c.id} onClick={() => setAddCourse(selected ? '' : label)} className={`px-2 py-1 rounded border text-xs whitespace-nowrap ${selected ? 'border-blue-500 bg-[#1a2243]' : 'border-[#1b2344]'}`}>
-                        <span className={`inline-block w-2 h-2 rounded-full mr-1 ${c.color ? '' : courseColorClass(label, 'bg')}`} style={c.color ? { backgroundColor: (c.color as any) } : undefined}></span>
+                        <span className="inline-block w-2 h-2 rounded-full mr-1" style={{ backgroundColor: resolveCourseColor({ color: c.color, title: label }) }}></span>
                         {label || '—'}
                       </button>
                     );
@@ -821,7 +821,7 @@ export default function CalendarPage() {
                 <ul className="space-y-0.5 mb-1">
                   {classesByDay[k].map((c, idx) => (
                     <li key={idx} className={`text-[10px] flex flex-wrap items-center gap-1 break-words ${c.conflict ? 'text-rose-400' : 'text-slate-300/80'}`} title={c.conflict ? 'Time conflict' : ''}>
-                      <span className={`inline-block w-2 h-2 rounded-full ${c.color ? '' : courseColorClass(c.title, 'bg')}`} style={c.color ? { backgroundColor: c.color as any } : undefined}></span>
+                      <span className="inline-block w-2 h-2 rounded-full" style={{ backgroundColor: resolveCourseColor(c) }}></span>
                       <span className="text-slate-200">{c.code || c.title}</span>
                       {c.time ? <span className="text-slate-300/60"> · {c.time}</span> : null}
                       {c.conflict ? <span className="ml-1 text-[9px] px-1 rounded border border-rose-500 text-rose-400">conflict</span> : null}
@@ -937,7 +937,7 @@ export default function CalendarPage() {
                     const selected = editCourse === label;
                     return (
                       <button key={c.id} onClick={() => setEditCourse(selected ? '' : label)} className={`px-2 py-1 rounded border text-xs whitespace-nowrap ${selected ? 'border-blue-500 bg-[#1a2243]' : 'border-[#1b2344]'}`}>
-                        <span className={`inline-block w-2 h-2 rounded-full mr-1 ${c.color ? '' : courseColorClass(label, 'bg')}`} style={c.color ? { backgroundColor: (c.color as any) } : undefined}></span>
+                        <span className="inline-block w-2 h-2 rounded-full mr-1" style={{ backgroundColor: resolveCourseColor({ color: c.color, title: label }) }}></span>
                         {label || '—'}
                       </button>
                     );

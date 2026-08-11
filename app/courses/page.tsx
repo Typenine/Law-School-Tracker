@@ -1,7 +1,7 @@
 "use client";
 import { useEffect, useMemo, useState } from 'react';
 import type { Course, Semester } from '@/lib/types';
-import { courseColorClass } from '@/lib/colors';
+import { resolveCourseColor } from '@/lib/colors';
 import AddCourseWizard from '@/components/AddCourseWizard';
 import TaskBacklogEntry from '@/components/TaskBacklogEntry';
 import EditCourseModal from '@/components/EditCourseModal';
@@ -330,7 +330,7 @@ export default function CoursesPage() {
                   <tr key={c.id} className="border-t border-[#1b2344]">
                     <td className="py-2 pr-4">
                       <div className="flex items-center gap-2">
-                        <span className={`inline-block w-3 h-3 rounded-full ${c.color ? '' : courseColorClass(c.title, 'bg')}`} style={c.color ? { backgroundColor: c.color } : undefined}></span>
+                        <span className="inline-block w-3 h-3 rounded-full" style={{ backgroundColor: resolveCourseColor(c) }}></span>
                         <div>
                           <div className="font-medium">{c.title}</div>
                           {c.code && <div className="text-xs text-slate-400">{c.code}</div>}

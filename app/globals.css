@@ -2,7 +2,8 @@
 @tailwind components;
 @tailwind utilities;
 
-/* Dark theme (default) */
+/* The app is dark-only: there is no theme toggle anywhere in the UI, so a
+   .light palette is dead weight rather than a real mode anyone can reach. */
 :root, .dark {
   --bg: #0b1020;
   --bg-secondary: #11162b;
@@ -16,39 +17,14 @@
   --hover-bg: rgba(255, 255, 255, 0.05);
 }
 
-/* Light theme */
-.light {
-  --bg: #f8fafc;
-  --bg-secondary: #ffffff;
-  --card: #ffffff;
-  --card-border: #e2e8f0;
-  --muted: #64748b;
-  --text: #1e293b;
-  --text-secondary: rgba(30, 41, 59, 0.7);
-  --accent: #2563eb;
-  --input-bg: #f1f5f9;
-  --hover-bg: rgba(0, 0, 0, 0.05);
-}
-
 html, body {
   height: 100%;
 }
 
-/* Dark theme body */
-.dark body {
+body {
   background: radial-gradient(1200px 800px at 20% -10%, #162047 0%, transparent 60%),
               radial-gradient(800px 600px at 95% 0%, #273064 0%, transparent 55%),
               linear-gradient(180deg, #0a0f1f 0%, #0b1020 100%);
-  color: var(--text);
-}
-
-/* Light theme body */
-.light body {
-  background: linear-gradient(180deg, #f8fafc 0%, #f1f5f9 100%);
-  color: var(--text);
-}
-
-body {
   color: var(--text);
 }
 
@@ -73,68 +49,17 @@ a { color: var(--accent); }
 
 /* Card styles */
 .card {
-  background: var(--card);
+  background: rgba(17, 22, 43, 0.75);
   border: 1px solid var(--card-border);
   border-radius: 14px;
   backdrop-filter: blur(10px);
-}
-.dark .card {
-  background: rgba(17, 22, 43, 0.75);
   box-shadow: 0 10px 30px rgba(0,0,0,0.35), inset 0 0 0 1px rgba(110,168,254,0.06);
 }
-.light .card {
-  box-shadow: 0 4px 12px rgba(0,0,0,0.08);
-}
 
-/* Input styles for theme */
 input, textarea, select {
   background-color: var(--input-bg);
   border-color: var(--card-border);
   color: var(--text);
-}
-
-/* Light mode specific overrides */
-.light table {
-  color: var(--text);
-}
-.light th {
-  color: var(--muted);
-}
-.light td {
-  color: var(--text);
-  border-color: var(--card-border);
-}
-.light .border-\[\#1b2344\] {
-  border-color: var(--card-border) !important;
-}
-.light .bg-\[\#0b1020\] {
-  background-color: var(--input-bg) !important;
-}
-.light .bg-\[\#11162b\] {
-  background-color: var(--card) !important;
-}
-.light .text-slate-300\/60,
-.light .text-slate-300\/70,
-.light .text-slate-300\/80,
-.light .text-slate-400,
-.light .text-slate-500 {
-  color: var(--muted) !important;
-}
-.light .text-slate-200 {
-  color: var(--text) !important;
-}
-.light .hover\:bg-\[\#1b2344\]:hover {
-  background-color: var(--hover-bg) !important;
-}
-.light .hover\:bg-white\/5:hover {
-  background-color: var(--hover-bg) !important;
-}
-.light button {
-  color: var(--text);
-}
-.light .card, .light [class*="card"] {
-  background-color: var(--card);
-  border-color: var(--card-border);
 }
 
 /* Mobile responsiveness */
