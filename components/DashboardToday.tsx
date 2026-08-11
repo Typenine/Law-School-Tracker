@@ -1,7 +1,7 @@
 "use client";
 import { useEffect, useMemo, useState } from 'react';
 import type { Task, Course, CourseMeetingBlock } from '@/lib/types';
-import { courseColorClass } from '@/lib/colors';
+import { resolveCourseColor } from '@/lib/colors';
 import { onTasksChanged } from '@/lib/taskBus';
 import { useTasks } from '@/lib/useTasks';
 import { useSemester } from '@/lib/useSemester';
@@ -102,7 +102,7 @@ export default function DashboardToday() {
               <ul className="space-y-1">
                 {classesToday.map(c => (
                   <li key={c.key} className="flex items-center gap-2">
-                    <span className={`inline-block w-2.5 h-2.5 rounded-full ${courseColorClass(c.title || c.code || '', 'bg')}`}></span>
+                    <span className="inline-block w-2.5 h-2.5 rounded-full" style={{ backgroundColor: resolveCourseColor({ title: c.title || c.code }) }}></span>
                     <span className="text-sm">{fmtTime(c.startMin)}–{fmtTime(c.endMin)} · {c.title}{c.code ? ` (${c.code})` : ''}{c.location ? ` · ${c.location}` : ''}</span>
                   </li>
                 ))}
@@ -118,7 +118,7 @@ export default function DashboardToday() {
                 {tasksToday.sort((a,b) => a.title.localeCompare(b.title)).map(t => (
                   <li key={t.id} className="flex items-center gap-2">
                     <input type="checkbox" checked={t.status === 'done'} onChange={e => toggleDone(t.id, e.target.checked)} />
-                    {t.course ? <span className={`inline-block w-2.5 h-2.5 rounded-full ${courseColorClass(t.course, 'bg')}`}></span> : null}
+                    {t.course ? <span className="inline-block w-2.5 h-2.5 rounded-full" style={{ backgroundColor: resolveCourseColor({ title: t.course }) }}></span> : null}
                     <span className={`text-sm ${t.status === 'done' ? 'line-through text-slate-400' : ''}`}>{t.title}</span>
                     {typeof t.estimatedMinutes === 'number' ? <span className="text-xs text-slate-300/70">· {t.estimatedMinutes}m</span> : null}
                   </li>

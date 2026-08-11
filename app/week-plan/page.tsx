@@ -7,7 +7,8 @@ import { useSessions } from "@/lib/useSessions";
 import { useCourses } from "@/lib/useCourses";
 import { useSchedule, useAvailability, clearScheduleDirty, isScheduleDirty } from "@/lib/useSchedule";
 import { apiFetch } from "@/lib/apiClient";
-import { notifyToast } from "@/lib/toastBus";
+import { notifyToast } from '@/lib/toastBus';
+import { fallbackCourseColor } from '@/lib/colors';
 type BacklogItem = {
   id: string;
   title: string;
@@ -96,8 +97,6 @@ function fmt12Input(s?: string | null): string {
 }
 function minutesToHM(min: number): string { const n = Math.max(0, Math.round(Number(min)||0)); const h = Math.floor(n/60); const m = n % 60; return `${h}:${String(m).padStart(2,'0')}`; }
 
-function hueFromString(s: string): number { let h = 0; for (let i=0;i<s.length;i++) { h = (h * 31 + s.charCodeAt(i)) >>> 0; } return h % 360; }
-function courseColor(c?: string | null): string { const key = (c||'').trim().toLowerCase(); if (!key) return 'hsl(215 16% 47%)'; const h = hueFromString(key); return `hsl(${h} 70% 55%)`; }
 function normCourseKey(name?: string | null): string {
   let x = (name || '').toString().toLowerCase().trim();
   if (!x) return '';
@@ -396,7 +395,7 @@ export default function WeekPlanPage() {
       const k = normCourseKey(raw);
       try { if (typeof window !== 'undefined' && k === 'internship') { const ls = window.localStorage.getItem('internshipColor'); if (ls) return ls; } } catch {}
       try { if (typeof window !== 'undefined' && k === 'sports law review') { const ls = window.localStorage.getItem('sportsLawReviewColor'); if (ls) return ls; } } catch {}
-      return map[k] || courseColor(raw || '');
+      return map[k] || fallbackCourseColor(raw);
     };
   }, [courses]);
 

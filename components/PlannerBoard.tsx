@@ -1,7 +1,7 @@
 "use client";
 import { useEffect, useMemo, useState } from 'react';
 import { Task, StudySession } from '@/lib/types';
-import { courseColorClass } from '@/lib/colors';
+import { resolveCourseColor } from '@/lib/colors';
 import TaskAddForm from '@/components/TaskAddForm';
 import { notifyTasksChanged, onTasksChanged } from '@/lib/taskBus';
 import { onSemesterChanged } from '@/lib/semesterBus';
@@ -337,7 +337,7 @@ export default function PlannerBoard() {
                 {buckets[d.key].map(t => (
                   <li key={t.id} draggable onDragStart={(e) => onDragStart(e, t)} className="border border-[#1b2344] rounded p-2 cursor-move">
                     <div className="text-sm font-medium flex items-center gap-2">
-                      {t.course ? <span className={`inline-block w-2.5 h-2.5 rounded-full ${courseColorClass(t.course, 'bg')}`}></span> : null}
+                      {t.course ? <span className="inline-block w-2.5 h-2.5 rounded-full" style={{ backgroundColor: resolveCourseColor({ title: t.course }) }}></span> : null}
                       <span className="truncate">{t.title}</span>
                       <label className="ml-auto text-xs inline-flex items-center gap-1"><input type="checkbox" checked={t.status === 'done'} onChange={e => toggleDone(t.id, e.target.checked)} /> Done</label>
                     </div>

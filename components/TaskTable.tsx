@@ -12,6 +12,7 @@ import { onSemesterChanged } from '@/lib/semesterBus';
 import { notifySessionsChanged } from '@/lib/sessionsBus';
 import { apiFetch } from '@/lib/apiClient';
 import { notifyToast } from '@/lib/toastBus';
+import { fallbackCourseColor } from '@/lib/colors';
 
 function fmtHM(min: number | null | undefined): string {
   const n = Math.max(0, Math.round(Number(min) || 0));
@@ -57,8 +58,6 @@ function minutesPerPage(): number {
   return !isNaN(n) && n > 0 ? n : 3;
 }
 
-function hueFromString(s: string): number { let h = 0; for (let i=0;i<s.length;i++) { h = (h * 31 + s.charCodeAt(i)) >>> 0; } return h % 360; }
-function fallbackCourseHsl(name?: string | null): string { const key=(name||'').toString().trim().toLowerCase(); if (!key) return 'hsl(215 16% 47%)'; const h=hueFromString(key); return `hsl(${h} 70% 55%)`; }
 
 // Sanitize corrupted page ranges like "599[1808612" back to "599–612"
 function sanitizeTitle(title: string): string {
@@ -271,7 +270,7 @@ export default function TaskTable() {
       const k = normCourseKey(raw);
       try { if (typeof window !== 'undefined' && k === 'internship') { const ls = window.localStorage.getItem('internshipColor'); if (ls) return ls; } } catch {}
       try { if (typeof window !== 'undefined' && k === 'sports law review') { const ls = window.localStorage.getItem('sportsLawReviewColor'); if (ls) return ls; } } catch {}
-      return map[k] || fallbackCourseHsl(raw || '');
+      return map[k] || fallbackCourseColor(raw);
     };
   }, [courses]);
 

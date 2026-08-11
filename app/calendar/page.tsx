@@ -41,9 +41,6 @@ function extractPageRanges(title: string): string[] {
   } catch { return []; }
 }
 
-// Fallback course color as HSL string for left stripe
-function hueFromString(s: string): number { let h = 0; for (let i=0;i<s.length;i++) { h = (h * 31 + s.charCodeAt(i)) >>> 0; } return h % 360; }
-function fallbackCourseHsl(name?: string | null): string { const key=(name||'').toString().trim().toLowerCase(); if (!key) return 'hsl(215 16% 47%)'; const h=hueFromString(key); return `hsl(${h} 70% 55%)`; }
 function fmtYmd(d: Date) {
   const yyyy = d.getFullYear();
   const mm = String(d.getMonth()+1).padStart(2,'0');
@@ -872,7 +869,7 @@ export default function CalendarPage() {
                       <>
                         {visible.map(t => {
                           const key = (t.course || '').toLowerCase();
-                          const stripe = courseColors[key] || fallbackCourseHsl(t.course || '');
+                          const stripe = resolveCourseColor({ color: courseColors[key], title: t.course });
                           return (
                             <li key={t.id} className="text-[11px] cursor-pointer rounded border border-[#2a3b6e] bg-[#0b1020] px-2 py-1.5" style={{ borderLeft: `3px solid ${stripe}` }} draggable onDragStart={(e) => onDragStart(e, t)} onClick={(e) => { e.stopPropagation(); openEdit(t); }}>
                               <div className="min-w-0">

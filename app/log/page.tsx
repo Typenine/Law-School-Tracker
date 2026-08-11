@@ -6,6 +6,7 @@ import { useSessions } from '@/lib/useSessions';
 import { notifySessionsChanged } from '@/lib/sessionsBus';
 import { apiFetch } from '@/lib/apiClient';
 import { notifyToast } from '@/lib/toastBus';
+import { fallbackCourseColor } from '@/lib/colors';
 
 // Simple helpers
 function chicagoYmd(d: Date): string {
@@ -59,9 +60,6 @@ function focusColor(f: number | null): string {
   return 'bg-red-500';
 }
 
-// Course color helpers
-function hueFromString(s: string): number { let h = 0; for (let i=0;i<s.length;i++) { h = (h * 31 + s.charCodeAt(i)) >>> 0; } return h % 360; }
-function fallbackCourseHsl(name?: string | null): string { const key=(name||'').toString().trim().toLowerCase(); if (!key) return 'hsl(215 16% 47%)'; const h=hueFromString(key); return `hsl(${h} 70% 55%)`; }
 
 export default function LogPage() {
   const { tasks, loading: tasksLoading } = useTasks();
@@ -193,7 +191,7 @@ export default function LogPage() {
       const k = normCourseKey(raw);
       try { if (typeof window !== 'undefined' && k === 'internship') { const ls = window.localStorage.getItem('internshipColor'); if (ls) return ls; } } catch {}
       try { if (typeof window !== 'undefined' && k === 'sports law review') { const ls = window.localStorage.getItem('sportsLawReviewColor'); if (ls) return ls; } } catch {}
-      return map[k] || fallbackCourseHsl(raw || '');
+      return map[k] || fallbackCourseColor(raw);
     };
   }, [courses]);
 
