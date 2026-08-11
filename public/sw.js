@@ -1,11 +1,14 @@
 // Service worker for Law School Tracker - Offline Support
-// Version: 2.0
+// Version: 3.0 - stopped the static-asset cache-first fallback from also
+// catching unlisted /api/ routes (Notes, GPT Actions), which caused a
+// deleted/created note to flash and then be overwritten by a stale cached
+// list response.
 
 const DISABLE_SW = false; // Enable caching for offline support
 
-const CACHE_NAME = 'lst-v2';
-const STATIC_CACHE = 'lst-static-v2';
-const API_CACHE = 'lst-api-v2';
+const CACHE_NAME = 'lst-v3';
+const STATIC_CACHE = 'lst-static-v3';
+const API_CACHE = 'lst-api-v3';
 
 const APP_SHELL = [
   '/',
@@ -146,6 +149,17 @@ self.addEventListener('fetch', (event) => {
       }
     })());
     return;
+  }
+
+  // Everything under /api/ that isn't explicitly whitelisted above (Notes,
+  // GPT Actions, etc.) must never be served cache-first: those endpoints
+  // already send their own no-store headers because their data changes on
+  // every request. Falling into the static-asset branch below used to cache
+  // the first /api/notes response and replay it forever - a note deleted
+  // locally would reappear the moment the app's own refresh fetch resolved
+  // to that stale cached body instead of the network.
+  if (url.pathname.startsWith('/api/')) {
+    return; // let the network handle it, uncached
   }
 
   // For static assets, cache-first
