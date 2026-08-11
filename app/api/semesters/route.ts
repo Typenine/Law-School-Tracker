@@ -67,6 +67,26 @@ export async function POST(req: NextRequest) {
   }
 }
 
+export async function DELETE(req: NextRequest) {
+  const id = new URL(req.url).searchParams.get('id')?.trim();
+  if (!id) {
+    return NextResponse.json({ error: 'id is required' }, { status: 400 });
+  }
+  try {
+    const deleted = await mutateSemesters(semesters => {
+      const next = semesters.filter(s => s.id !== id);
+      return { semesters: next, result: next.length !== semesters.length };
+    });
+    if (!deleted) return NextResponse.json({ error: 'Semester not found.' }, { status: 404 });
+    return NextResponse.json({ deleted: true });
+  } catch (e) {
+    return NextResponse.json(
+      { error: e instanceof Error ? e.message : 'Unable to delete the semester.' },
+      { status: 500 },
+    );
+  }
+}
+
 export async function PUT(req: NextRequest) {
   // Bulk replace all semesters
   let body: any;

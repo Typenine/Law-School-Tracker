@@ -26,6 +26,9 @@ export function htmlToPlainText(html: string): string {
     .replace(/<li([^>]*)class="[^"]*nb-todo[^"]*"([^>]*)>/gi, '\n[ ] ')
     .replace(/<li[^>]*>/gi, '\n• ')
     .replace(/<br\s*\/?>/gi, '\n')
+    // Table cells read as tab-separated columns, one row per line, rather
+    // than every cell's text running together with no boundary at all.
+    .replace(/<\/(td|th)>/gi, '\t')
     .replace(/<\/(p|div|h1|h2|h3|h4|li|tr|blockquote|pre)>/gi, '\n')
     .replace(/<hr\s*\/?>/gi, '\n---\n')
     .replace(/<img[^>]*alt="([^"]+)"[^>]*>/gi, '\n[image: $1]\n')

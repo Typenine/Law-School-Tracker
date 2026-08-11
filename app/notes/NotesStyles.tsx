@@ -82,6 +82,16 @@ export default function NotesStyles() {
       .nb-conflict { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; }
       @media (max-width: 760px) { .nb-conflict { grid-template-columns: 1fr; } }
       .nb-conflict-body { max-height: 42vh; overflow: auto; padding: 10px 12px; border: 1px solid var(--line2); border-radius: 8px; background: var(--s2); font-size: 13px; line-height: 1.55; }
+      .nb-outline-controls { display: flex; gap: 10px; align-items: center; margin-bottom: 12px; }
+      .nb-outline-controls input { flex: 1; }
+      .nb-outline-body { max-height: 62vh; overflow-y: auto; padding: 4px 4px 4px 2px; border: 1px solid var(--line2); border-radius: 8px; background: var(--s2); }
+      .nb-outline-section-head { margin: 16px 12px 6px; padding-bottom: 5px; border-bottom: 1px solid var(--line2); color: var(--text2); font-size: 14px; }
+      .nb-outline-page { margin: 0 12px 16px; padding-bottom: 12px; border-bottom: 1px dashed var(--line); font-size: 13px; line-height: 1.6; }
+      .nb-outline-page h5 { margin: 0 0 2px; color: var(--text); font-size: 13.5px; }
+      .nb-outline-meta { margin: 0 0 6px; color: var(--muted2); font-size: 11px; }
+      .nb-outline-page img { max-width: 100%; }
+      .nb-outline-page table { border-collapse: collapse; }
+      .nb-outline-page td, .nb-outline-page th { border: 1px solid var(--line2); padding: 4px 8px; }
       .nb-conflict-body :is(h1,h2,h3) { font-size: 15px; margin: 8px 0 4px; }
       .nb-conflict-body img { max-width: 100%; height: auto; }
       .nb-aside-head { display: flex; align-items: center; justify-content: space-between; gap: 10px; color: var(--label); font: 500 10px/1 'IBM Plex Mono', monospace; letter-spacing: .1em; text-transform: uppercase; padding-bottom: 7px; }
@@ -197,6 +207,10 @@ export default function NotesStyles() {
       .nb-canvas img { max-width: 100%; height: auto; margin: 8px 0; border-radius: 6px; border: 1px solid var(--line2); }
       .nb-canvas code { padding: 1px 5px; border-radius: 4px; background: var(--s3); font-size: 13px; }
       .nb-canvas ::selection { background: rgba(139,92,246,.4); }
+      .nb-canvas table.nb-table { width: 100%; margin: 4px 0 16px; border-collapse: collapse; }
+      .nb-canvas table.nb-table td, .nb-canvas table.nb-table th { border: 1px solid var(--line2); padding: 7px 10px; text-align: left; vertical-align: top; min-width: 60px; }
+      .nb-canvas table.nb-table th { background: var(--s3); color: var(--text2); font-weight: 600; }
+      .nb-canvas table.nb-table tr:hover td, .nb-canvas table.nb-table tr:hover th { background: var(--hover); }
 
       /* To-do tags */
       .nb-canvas ul.nb-todo-list { padding-left: 6px; list-style: none; }
@@ -218,6 +232,10 @@ export default function NotesStyles() {
       .nb-workspace { position: relative; }
       .nb-block { width: 100%; }
       .nb-search { width: 100%; padding: 7px 10px !important; font-size: 12.5px; }
+      .nb-tag-filter { display: flex; flex-wrap: wrap; gap: 6px; padding: 10px 12px; border-bottom: 1px solid var(--line); }
+      .nb-tag-chip { padding: 4px 9px; border: 1px solid var(--line2); border-radius: 999px; background: var(--s1); color: var(--muted); font-size: 11px; cursor: pointer; }
+      .nb-tag-chip:hover { background: var(--s3); color: var(--text2); }
+      .nb-tag-chip.is-active { border-color: var(--gold); background: var(--gold); color: var(--ink); }
       .nb-pages-list { flex: 1; overflow-y: auto; }
       .nb-pages-note { padding: 9px 13px; color: var(--muted2); font-size: 11px; }
       .nb-pages-empty { padding: 20px 14px; color: var(--muted2); font-size: 12.5px; }

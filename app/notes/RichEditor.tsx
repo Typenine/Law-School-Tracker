@@ -125,6 +125,99 @@ export default function RichEditor({ pageId, initialHtml, onChange, onSaveNow, o
     return null;
   }, []);
 
+  /** The table cell the caret is currently in, if any. */
+  const currentCell = useCallback((): HTMLTableCellElement | null => {
+    const selection = window.getSelection();
+    if (!selection || !selection.anchorNode) return null;
+    let node: Node | null = selection.anchorNode;
+    while (node && node !== editorRef.current) {
+      if (node.nodeType === 1 && /^(TD|TH)$/.test((node as HTMLElement).tagName)) {
+        return node as HTMLTableCellElement;
+      }
+      node = node.parentNode;
+    }
+    return null;
+  }, []);
+
+  const focusCell = useCallback((cell: HTMLElement) => {
+    const selection = window.getSelection();
+    if (!selection) return;
+    const range = document.createRange();
+    range.selectNodeContents(cell);
+    range.collapse(true);
+    selection.removeAllRanges();
+    selection.addRange(range);
+  }, []);
+
+  /** A 3x3 grid with a header row - a plain paragraph follows so there is
+   * always somewhere to type after the table besides inside a cell. */
+  const insertTable = useCallback(() => {
+    const editor = editorRef.current;
+    if (!editor) return;
+    editor.focus();
+    const cols = 3;
+    let html = '<table class="nb-table"><tbody><tr>';
+    for (let c = 0; c < cols; c++) html += '<th><br></th>';
+    html += '</tr>';
+    for (let r = 0; r < 2; r++) {
+      html += '<tr>';
+      for (let c = 0; c < cols; c++) html += '<td><br></td>';
+      html += '</tr>';
+    }
+    html += '</tbody></table><p><br></p>';
+    try { document.execCommand('insertHTML', false, html); } catch {}
+    emit();
+  }, [emit]);
+
+  const addTableRow = useCallback(() => {
+    const cell = currentCell();
+    const row = cell?.closest('tr');
+    if (!row) return;
+    const newRow = document.createElement('tr');
+    for (let i = 0; i < row.children.length; i++) {
+      const td = document.createElement('td');
+      td.innerHTML = '<br>';
+      newRow.appendChild(td);
+    }
+    row.after(newRow);
+    emit();
+  }, [currentCell, emit]);
+
+  const addTableColumn = useCallback(() => {
+    const cell = currentCell();
+    const table = cell?.closest('table');
+    if (!cell || !table) return;
+    const index = Array.from(cell.parentElement!.children).indexOf(cell);
+    table.querySelectorAll('tr').forEach(tr => {
+      const reference = tr.children[index] as HTMLElement | undefined;
+      const created = document.createElement(reference?.tagName === 'TH' ? 'th' : 'td');
+      created.innerHTML = '<br>';
+      if (reference) reference.after(created); else tr.appendChild(created);
+    });
+    emit();
+  }, [currentCell, emit]);
+
+  const deleteTableRow = useCallback(() => {
+    const cell = currentCell();
+    const row = cell?.closest('tr');
+    const table = row?.closest('table');
+    if (!row || !table) return;
+    if (table.querySelectorAll('tr').length <= 1) table.remove();
+    else row.remove();
+    emit();
+  }, [currentCell, emit]);
+
+  const deleteTableColumn = useCallback(() => {
+    const cell = currentCell();
+    const table = cell?.closest('table');
+    if (!cell || !table) return;
+    const index = Array.from(cell.parentElement!.children).indexOf(cell);
+    const rows = table.querySelectorAll('tr');
+    if (rows[0] && rows[0].children.length <= 1) { table.remove(); emit(); return; }
+    rows.forEach(tr => { tr.children[index]?.remove(); });
+    emit();
+  }, [currentCell, emit]);
+
   /** Turn the current block into a to-do item, or back into a paragraph. */
   const toggleTodo = useCallback(() => {
     const editor = editorRef.current;
@@ -174,6 +267,24 @@ export default function RichEditor({ pageId, initialHtml, onChange, onSaveNow, o
   }
 
   function handleKeyDown(event: React.KeyboardEvent<HTMLDivElement>) {
+    // Tab inside a table cell moves between cells, OneNote/spreadsheet-style,
+    // instead of the browser's default of tabbing focus out of the editor
+    // entirely. At the last (or first) cell there is nowhere to go, so the
+    // default is left alone and focus leaves the editor as normal.
+    if (event.key === 'Tab') {
+      const cell = currentCell();
+      const table = cell?.closest('table');
+      if (cell && table) {
+        const cells = Array.from(table.querySelectorAll('td, th'));
+        const index = cells.indexOf(cell);
+        const nextIndex = event.shiftKey ? index - 1 : index + 1;
+        if (nextIndex >= 0 && nextIndex < cells.length) {
+          event.preventDefault();
+          focusCell(cells[nextIndex] as HTMLElement);
+        }
+      }
+      return;
+    }
     const meta = event.metaKey || event.ctrlKey;
     if (!meta) return;
     const key = event.key.toLowerCase();
@@ -371,6 +482,14 @@ export default function RichEditor({ pageId, initialHtml, onChange, onSaveNow, o
             <option value="" disabled>Size</option>
             {SIZES.map(([value, label]) => <option key={value} value={value}>{label}</option>)}
           </select>
+        </div>
+
+        <div className="nb-ribbon-group">
+          <Button title="Insert a table" onClick={insertTable}>⊞</Button>
+          <Button title="Add row below (caret must be in a table)" onClick={addTableRow}>+Row</Button>
+          <Button title="Add column right (caret must be in a table)" onClick={addTableColumn}>+Col</Button>
+          <Button title="Delete row (caret must be in a table)" onClick={deleteTableRow}>−Row</Button>
+          <Button title="Delete column (caret must be in a table)" onClick={deleteTableColumn}>−Col</Button>
         </div>
 
         <div className="nb-ribbon-group">

@@ -35,6 +35,11 @@ export default function SettingsPage() {
   const [semesters, setSemesters] = useState<SemesterInfo[]>([]);
   const [activeSemesterId, setActiveSemesterId] = useState<string | null>(null);
   const [availSaving, setAvailSaving] = useState(false);
+  const [newSemester, setNewSemester] = useState<{
+    name: string; season: 'Spring' | 'Summer' | 'Fall' | 'Winter'; year: string;
+    startDate: string; endDate: string; makeActive: boolean;
+  }>({ name: '', season: 'Fall', year: String(new Date().getFullYear()), startDate: '', endDate: '', makeActive: true });
+  const [creatingSemester, setCreatingSemester] = useState(false);
 
   useEffect(() => {
     if (typeof window === "undefined") return;
@@ -142,6 +147,62 @@ export default function SettingsPage() {
       try { notifyToast({ kind: 'success', message: 'Availability saved.' }); } catch {}
     } catch {}
     setAvailSaving(false);
+  }
+
+  async function createSemester() {
+    const name = newSemester.name.trim() || `${newSemester.season} ${newSemester.year}`;
+    const year = parseInt(newSemester.year, 10);
+    if (!newSemester.startDate || !newSemester.endDate) {
+      try { notifyToast({ kind: 'error', message: 'Start and end dates are required.' }); } catch {}
+      return;
+    }
+    if (newSemester.endDate < newSemester.startDate) {
+      try { notifyToast({ kind: 'error', message: 'End date must be after the start date.' }); } catch {}
+      return;
+    }
+    setCreatingSemester(true);
+    try {
+      const res = await apiFetch<{ semester: SemesterInfo }>('/api/semesters', {
+        method: 'POST',
+        body: {
+          name, season: newSemester.season, year,
+          startDate: newSemester.startDate, endDate: newSemester.endDate,
+          isActive: newSemester.makeActive,
+        },
+      });
+      const created = (res as any)?.semester as SemesterInfo | undefined;
+      if (created) {
+        setSemesters(prev => {
+          const next = newSemester.makeActive ? prev.map(s => ({ ...s, isActive: false })) : prev.slice();
+          return [...next, created];
+        });
+        if (newSemester.makeActive) {
+          setActiveSemesterId(created.id);
+          try { window.localStorage.setItem('currentTerm', created.id); } catch {}
+          try { notifySemesterChanged(); } catch {}
+        }
+        setNewSemester({ name: '', season: 'Fall', year: String(new Date().getFullYear()), startDate: '', endDate: '', makeActive: true });
+        try { notifyToast({ kind: 'success', message: `${created.name} created.` }); } catch {}
+      }
+    } catch {
+      try { notifyToast({ kind: 'error', message: 'Unable to create the semester.' }); } catch {}
+    } finally {
+      setCreatingSemester(false);
+    }
+  }
+
+  async function deleteSemester(id: string) {
+    try {
+      await apiFetch(`/api/semesters?id=${encodeURIComponent(id)}`, { method: 'DELETE' });
+      setSemesters(prev => prev.filter(s => s.id !== id));
+      if (activeSemesterId === id) {
+        setActiveSemesterId(null);
+        try { notifySemesterChanged(); } catch {}
+      }
+      try { notifyToast({ kind: 'success', message: 'Semester deleted.' }); } catch {}
+    } catch {
+      try { notifyToast({ kind: 'error', message: 'Unable to delete the semester.' }); } catch {}
+    }
   }
 
   function applyClassTimesAsBreaks() {
@@ -410,13 +471,84 @@ export default function SettingsPage() {
                       if (sem.breaksByDow) setBreaksByDow(sem.breaksByDow);
                     }} className="px-2 py-1 rounded border border-[#1b2344] text-xs hover:bg-white/5">Set Active</button>
                   )}
+                  <button onClick={() => void deleteSemester(sem.id)} className="px-2 py-1 rounded border border-[#1b2344] text-xs text-rose-400 hover:bg-rose-500/10">Delete</button>
                 </div>
               </div>
             ))}
           </div>
         )}
-        <div className="text-xs text-slate-300/60">
-          To add a new semester, use the Week Plan page and save your availability there.
+
+        <div className="rounded border border-[#1b2344] p-4 space-y-3">
+          <h3 className="text-sm font-medium">New semester</h3>
+          <div className="grid grid-cols-2 md:grid-cols-3 gap-3">
+            <div>
+              <label className="block text-xs text-slate-300/70 mb-1">Name (optional)</label>
+              <input
+                value={newSemester.name}
+                onChange={e => setNewSemester(prev => ({ ...prev, name: e.target.value }))}
+                placeholder={`${newSemester.season} ${newSemester.year}`}
+                className="w-full bg-[#0b1020] border border-[#1b2344] rounded px-3 py-2"
+              />
+            </div>
+            <div>
+              <label className="block text-xs text-slate-300/70 mb-1">Season</label>
+              <select
+                value={newSemester.season}
+                onChange={e => setNewSemester(prev => ({ ...prev, season: e.target.value as typeof prev.season }))}
+                className="w-full bg-[#0b1020] border border-[#1b2344] rounded px-3 py-2"
+              >
+                {(['Spring', 'Summer', 'Fall', 'Winter'] as const).map(s => (
+                  <option key={s} value={s}>{s}</option>
+                ))}
+              </select>
+            </div>
+            <div>
+              <label className="block text-xs text-slate-300/70 mb-1">Year</label>
+              <input
+                type="number"
+                value={newSemester.year}
+                onChange={e => setNewSemester(prev => ({ ...prev, year: e.target.value }))}
+                className="w-full bg-[#0b1020] border border-[#1b2344] rounded px-3 py-2"
+              />
+            </div>
+            <div>
+              <label className="block text-xs text-slate-300/70 mb-1">Start date</label>
+              <input
+                type="date"
+                value={newSemester.startDate}
+                onChange={e => setNewSemester(prev => ({ ...prev, startDate: e.target.value }))}
+                className="w-full bg-[#0b1020] border border-[#1b2344] rounded px-3 py-2"
+              />
+            </div>
+            <div>
+              <label className="block text-xs text-slate-300/70 mb-1">End date</label>
+              <input
+                type="date"
+                value={newSemester.endDate}
+                onChange={e => setNewSemester(prev => ({ ...prev, endDate: e.target.value }))}
+                className="w-full bg-[#0b1020] border border-[#1b2344] rounded px-3 py-2"
+              />
+            </div>
+            <label className="flex items-center gap-2 text-xs text-slate-300/70 self-end pb-2">
+              <input
+                type="checkbox"
+                checked={newSemester.makeActive}
+                onChange={e => setNewSemester(prev => ({ ...prev, makeActive: e.target.checked }))}
+              />
+              Make this the active semester
+            </label>
+          </div>
+          <button
+            onClick={() => void createSemester()}
+            disabled={creatingSemester}
+            className="px-3 py-2 rounded bg-emerald-600 hover:bg-emerald-500 disabled:opacity-60 text-sm"
+          >
+            {creatingSemester ? 'Creating…' : 'Create semester'}
+          </button>
+          <p className="text-xs text-slate-300/60">
+            This sets the exact date range and week numbering Week Plan uses. Without one, the
+            app guesses a generic Aug 15 – Dec 20 fall window.
+          </p>
         </div>
       </section>
     </main>

@@ -5,6 +5,15 @@ import { notifyTasksChanged, onTasksChanged } from '@/lib/taskBus';
 import { useSemester } from '@/lib/useSemester';
 import { tasksClient } from '@/lib/tasksClient';
 
+type NoteResult = {
+  id: string;
+  title: string;
+  course: string | null;
+  notebookName: string | null;
+  section: string;
+  excerpt?: string;
+};
+
 /** Event any component can dispatch on `window` to open the palette. */
 export const COMMAND_PALETTE_EVENT = 'app:command-palette';
 
@@ -19,6 +28,8 @@ export default function CommandPalette() {
   const [open, setOpen] = useState(false);
   const [q, setQ] = useState('');
   const [tasks, setTasks] = useState<Task[]>([]);
+  const [notes, setNotes] = useState<NoteResult[]>([]);
+  const [notesLoading, setNotesLoading] = useState(false);
   const { currentTerm, showAllTerms } = useSemester();
 
   useEffect(() => {
@@ -69,6 +80,30 @@ export default function CommandPalette() {
     return off;
   }, [open]);
 
+  // Notes are searched server-side (title/body/tags), not filtered from a
+  // preloaded list like tasks - a semester's worth of pages is too much to
+  // ship on every palette open. Only queried once there is something to
+  // search for, and debounced so every keystroke does not fire a request.
+  useEffect(() => {
+    if (!open) { setNotes([]); return; }
+    const query = q.trim();
+    if (!query) { setNotes([]); setNotesLoading(false); return; }
+    setNotesLoading(true);
+    const timer = window.setTimeout(async () => {
+      try {
+        const params = new URLSearchParams({ q: query, limit: '8' });
+        const res = await fetch(`/api/notes?${params.toString()}`, { cache: 'no-store' });
+        const data = await res.json();
+        setNotes(Array.isArray(data?.notes) ? (data.notes as NoteResult[]) : []);
+      } catch {
+        setNotes([]);
+      } finally {
+        setNotesLoading(false);
+      }
+    }, 200);
+    return () => window.clearTimeout(timer);
+  }, [open, q]);
+
   const results = useMemo(() => {
     const scoped = tasks.filter(t => (showAllTerms || !currentTerm || (t.term || '') === currentTerm));
     const n = normalize(q);
@@ -92,17 +127,23 @@ export default function CommandPalette() {
     setTasks(prev => prev.map(x => x.id === t.id ? { ...x, dueDate: d.toISOString() } : x));
   }
 
+  function openNote(id: string) {
+    setOpen(false);
+    window.location.href = `/notes?pageId=${encodeURIComponent(id)}`;
+  }
+
   if (!open) return null;
   return (
     <div className="fixed inset-0 z-50 bg-black/50" onClick={() => setOpen(false)}>
       <div className="mx-auto mt-24 max-w-2xl rounded border border-[#1b2344] bg-[#0b1020] p-3" onClick={(e) => e.stopPropagation()}>
-        <input autoFocus value={q} onChange={e => setQ(e.target.value)} placeholder="Search tasks (title/course/notes/tags). Enter to close."
+        <input autoFocus value={q} onChange={e => setQ(e.target.value)} placeholder="Search tasks and notes (title/course/tags). Enter to close."
                onKeyDown={(e) => { if (e.key === 'Enter') setOpen(false); }}
                className="w-full bg-[#0b1020] border border-[#1b2344] rounded px-3 py-2 mb-2" />
         <div className="max-h-96 overflow-y-auto divide-y divide-[#1b2344]">
-          {results.length === 0 ? (
+          {results.length === 0 && notes.length === 0 && !notesLoading ? (
             <div className="text-xs text-slate-300/70 p-2">No results.</div>
-          ) : results.map(t => (
+          ) : null}
+          {results.map(t => (
             <div key={t.id} className="flex items-center justify-between gap-2 p-2">
               <div className="min-w-0">
                 <div className="text-sm truncate">{t.title}</div>
@@ -114,6 +155,28 @@ export default function CommandPalette() {
               </div>
             </div>
           ))}
+          {q.trim() && (notes.length > 0 || notesLoading) ? (
+            <div className="p-2">
+              <div className="text-[10px] uppercase tracking-wide text-slate-300/50 mb-1">
+                Notes{notesLoading ? ' · searching…' : ''}
+              </div>
+              {notes.map(note => (
+                <button
+                  key={note.id}
+                  type="button"
+                  onClick={() => openNote(note.id)}
+                  className="w-full text-left flex items-center justify-between gap-2 py-1.5 hover:bg-white/5 rounded px-1 -mx-1"
+                >
+                  <div className="min-w-0">
+                    <div className="text-sm truncate">{note.title}</div>
+                    <div className="text-xs text-slate-300/70 truncate">
+                      {note.notebookName || note.course || 'Notes'} • {note.section}
+                    </div>
+                  </div>
+                </button>
+              ))}
+            </div>
+          ) : null}
         </div>
       </div>
     </div>

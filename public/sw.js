@@ -1,14 +1,16 @@
 // Service worker for Law School Tracker - Offline Support
-// Version: 3.0 - stopped the static-asset cache-first fallback from also
-// catching unlisted /api/ routes (Notes, GPT Actions), which caused a
-// deleted/created note to flash and then be overwritten by a stale cached
-// list response.
+// Version: 4.0 - Notes GETs are network-first with a cache fallback (only
+// used when the network is actually unreachable), instead of either
+// stale-while-revalidate or the static-asset cache-first fallback. Both of
+// those can hand back a pre-mutation snapshot synchronously, which is what
+// made a deleted/created note flash and then get overwritten by stale data.
 
 const DISABLE_SW = false; // Enable caching for offline support
 
 const CACHE_NAME = 'lst-v3';
 const STATIC_CACHE = 'lst-static-v3';
 const API_CACHE = 'lst-api-v3';
+const NOTES_CACHE = 'lst-notes-v1';
 
 const APP_SHELL = [
   '/',
@@ -151,13 +153,36 @@ self.addEventListener('fetch', (event) => {
     return;
   }
 
-  // Everything under /api/ that isn't explicitly whitelisted above (Notes,
-  // GPT Actions, etc.) must never be served cache-first: those endpoints
+  // Notes: network-first, cache only as a fallback for when the network is
+  // genuinely unreachable (e.g. no wifi during an exam). Unlike
+  // stale-while-revalidate above, this never hands back a cached body while
+  // the network is actually available, so a page that was just deleted or
+  // created cannot be overwritten by a pre-mutation snapshot - the bug that
+  // used to make Notes flicker back to a stale state after every edit.
+  if (req.method === 'GET' && url.pathname.startsWith('/api/notes')) {
+    event.respondWith((async () => {
+      const cache = await caches.open(NOTES_CACHE);
+      try {
+        const res = await fetch(req);
+        if (res.ok) cache.put(req, res.clone());
+        return res;
+      } catch {
+        const cached = await cache.match(req);
+        if (cached) return cached;
+        return new Response(JSON.stringify({ error: 'Offline', offline: true }), {
+          status: 503,
+          headers: { 'Content-Type': 'application/json' },
+        });
+      }
+    })());
+    return;
+  }
+
+  // Everything else under /api/ that isn't explicitly whitelisted above
+  // (GPT Actions, etc.) must never be served from the cache: those endpoints
   // already send their own no-store headers because their data changes on
-  // every request. Falling into the static-asset branch below used to cache
-  // the first /api/notes response and replay it forever - a note deleted
-  // locally would reappear the moment the app's own refresh fetch resolved
-  // to that stale cached body instead of the network.
+  // every request, and falling into the static-asset branch below used to
+  // cache the first response and replay it forever regardless of method.
   if (url.pathname.startsWith('/api/')) {
     return; // let the network handle it, uncached
   }

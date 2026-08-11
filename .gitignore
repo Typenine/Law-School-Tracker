@@ -4,3 +4,5 @@ node_modules/
 .env*
 data/db.json
 !data/.gitkeep
+*.bak
+*.bak[0-9]

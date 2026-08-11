@@ -155,6 +155,21 @@ export default function NotesPage() {
     { trashed: PageSummary[]; archived: PageSummary[]; retentionDays: number } | null
   >(null);
 
+  type OutlineData = {
+    notebook: { id: string; name: string; semester: string | null };
+    tag: string | null;
+    sections: { id: string; name: string; depth: number; pages: {
+      id: string; title: string; classDate: string | null; sourceType: string;
+      topics: string[]; contentHtml: string;
+    }[] }[];
+    unfiled: { id: string; title: string; classDate: string | null; sourceType: string;
+      topics: string[]; contentHtml: string }[];
+  };
+  const [outlineModal, setOutlineModal] = useState<{ notebookId: string; tag: string } | null>(null);
+  const [outlineData, setOutlineData] = useState<OutlineData | null>(null);
+  const [outlineLoading, setOutlineLoading] = useState(false);
+  const [outlineError, setOutlineError] = useState('');
+
   const [notebookModal, setNotebookModal] = useState<NotebookForm | null>(null);
   const [sectionModal, setSectionModal] = useState<SectionForm | null>(null);
   const [importModal, setImportModal] = useState<ImportForm | null>(null);
@@ -246,6 +261,35 @@ export default function NotesPage() {
     // Runs once: the link is read from the URL the page was opened with.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+  // Arriving from a deep link (Command Palette, search result, another page)
+  // pointing straight at one page: open it once notebooks/sections have
+  // loaded, so the tree can reveal the branch it lives in.
+  useEffect(() => {
+    const wanted = new URLSearchParams(window.location.search).get('pageId');
+    if (!wanted || !booted || !notebooks.length) return;
+    let cancelled = false;
+    void (async () => {
+      try {
+        const data = await api(`/api/notes/${encodeURIComponent(wanted)}`);
+        if (cancelled) return;
+        const page = data.note as Page;
+        if (page.notebookId) {
+          setNotebookId(page.notebookId);
+          setSectionId(page.sectionId || '');
+          setSectionName(page.section);
+          revealPath(notebooks.find(item => item.id === page.notebookId), page.sectionId || '');
+          await loadPages(page.notebookId, page.section);
+        }
+        await openPage(page.id);
+      } catch (err) {
+        setError(err instanceof Error ? err.message : 'Unable to open that note.');
+      }
+    })();
+    return () => { cancelled = true; };
+    // Only re-runs once notebooks have loaded; the target itself never changes.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [booted, notebooks]);
   useEffect(() => { dirtyRef.current = dirty; }, [dirty]);
   useEffect(() => { conflictRef.current = conflict; }, [conflict]);
 
@@ -316,7 +360,23 @@ export default function NotesPage() {
     return all.sort((a, b) => termSortKey(b) - termSortKey(a));
   }, [notebooks]);
 
-  const visiblePages = searchResults ?? pages;
+  /** Narrows the page list to one tag at a time; cleared on section/notebook change. */
+  const [activeTag, setActiveTag] = useState('');
+  const unfilteredVisiblePages = searchResults ?? pages;
+  const availableTags = useMemo(() => {
+    const set = new Set<string>();
+    for (const page of unfilteredVisiblePages) for (const topic of page.topics) set.add(topic);
+    return Array.from(set).sort((a, b) => a.localeCompare(b));
+  }, [unfilteredVisiblePages]);
+  const visiblePages = useMemo(
+    () => (activeTag ? unfilteredVisiblePages.filter(page => page.topics.includes(activeTag)) : unfilteredVisiblePages),
+    [unfilteredVisiblePages, activeTag],
+  );
+  // A tag that no longer applies (switched section, or filtered itself out of
+  // the list) should not silently keep the page list empty.
+  useEffect(() => {
+    if (activeTag && !availableTags.includes(activeTag)) setActiveTag('');
+  }, [activeTag, availableTags]);
 
   // ---------------------------------------------------------------- loading
 
@@ -960,6 +1020,39 @@ export default function NotesPage() {
       return null;
     }
   }, []);
+
+  // Fetches whenever the modal opens or its tag filter changes; closing it
+  // (outlineModal -> null) does not need to clear outlineData, since the
+  // modal unmounts and the stale data cannot be shown before a fresh open.
+  useEffect(() => {
+    if (!outlineModal) return;
+    let cancelled = false;
+    setOutlineLoading(true);
+    setOutlineError('');
+    // Debounced: the tag field re-triggers this on every keystroke, and a
+    // semester's worth of pages is too much to recompile on each one.
+    const timer = window.setTimeout(async () => {
+      try {
+        const params = new URLSearchParams({ notebookId: outlineModal.notebookId });
+        if (outlineModal.tag) params.set('tag', outlineModal.tag);
+        const data = await api(`/api/notes/outline?${params.toString()}`);
+        if (cancelled) return;
+        setOutlineData(data.outline as OutlineData);
+      } catch (err) {
+        if (!cancelled) setOutlineError(err instanceof Error ? err.message : 'Unable to build the outline.');
+      } finally {
+        if (!cancelled) setOutlineLoading(false);
+      }
+    }, 300);
+    return () => { cancelled = true; window.clearTimeout(timer); };
+  }, [outlineModal]);
+
+  function printOutline() {
+    if (!outlineModal) return;
+    const params = new URLSearchParams({ notebookId: outlineModal.notebookId, format: 'html' });
+    if (outlineModal.tag) params.set('tag', outlineModal.tag);
+    window.open(`/api/notes/outline?${params.toString()}`, '_blank', 'noopener');
+  }
 
   const loadSetAside = useCallback(async () => {
     try {
@@ -1841,6 +1934,14 @@ export default function NotesPage() {
                       >
                         Export notebook
                       </button>
+                      <button
+                        type="button"
+                        className="nb-chip"
+                        onClick={() => setOutlineModal({ notebookId, tag: '' })}
+                        title="Compile this notebook's pages into one running document"
+                      >
+                        Outline
+                      </button>
                       <button type="button" className="nb-chip" onClick={() => void savePage(true)}>Save now</button>
                     </div>
                   </div>
@@ -1965,6 +2066,20 @@ export default function NotesPage() {
                   aria-label="Search all notes"
                 />
               </div>
+              {availableTags.length > 0 && (
+                <div className="nb-tag-filter" role="group" aria-label="Filter by tag">
+                  {availableTags.map(tag => (
+                    <button
+                      key={tag}
+                      type="button"
+                      className={`nb-tag-chip${activeTag === tag ? ' is-active' : ''}`}
+                      onClick={() => setActiveTag(current => (current === tag ? '' : tag))}
+                    >
+                      {tag}
+                    </button>
+                  ))}
+                </div>
+              )}
               <div className="nb-pages-list">
                 {searchResults && (
                   <div className="nb-pages-note">
@@ -1975,7 +2090,9 @@ export default function NotesPage() {
                   <p className="nb-pages-empty">Loading pages…</p>
                 ) : visiblePages.length === 0 ? (
                   <p className="nb-pages-empty">
-                    {searchResults ? 'Nothing matched that search.' : 'This section has no pages yet.'}
+                    {activeTag
+                      ? `No pages tagged “${activeTag}” here.`
+                      : searchResults ? 'Nothing matched that search.' : 'This section has no pages yet.'}
                   </p>
                 ) : visiblePages.map(page => (
                   <button
@@ -2047,6 +2164,76 @@ export default function NotesPage() {
                   ))}
                 </section>
               ))}
+            </div>
+          </div>
+        </div>
+      )}
+
+      {outlineModal && (
+        <div className="nb-modal-scrim" onMouseDown={event => event.target === event.currentTarget && setOutlineModal(null)}>
+          <div className="nb-modal nb-modal-wide">
+            <div className="nb-modal-head">
+              <div>
+                <h3>{outlineData?.notebook.name || 'Outline'}</h3>
+                <p>
+                  Every page in this notebook, compiled into one running document in tree order.
+                  Narrow it to one tag - for example everything you have marked “outline” - or leave
+                  it blank for the whole notebook.
+                </p>
+              </div>
+              <button type="button" onClick={() => setOutlineModal(null)} aria-label="Close">×</button>
+            </div>
+            <div className="nb-outline-controls">
+              <input
+                value={outlineModal.tag}
+                onChange={event => setOutlineModal(current => current && { ...current, tag: event.target.value })}
+                placeholder="Filter by tag (optional), e.g. outline"
+                aria-label="Filter outline by tag"
+              />
+              <button type="button" className="nb-secondary" onClick={printOutline} disabled={outlineLoading}>
+                Print / Save as PDF
+              </button>
+            </div>
+            <div className="nb-outline-body">
+              {outlineLoading ? (
+                <p className="nb-pages-empty">Compiling…</p>
+              ) : outlineError ? (
+                <p className="nb-pages-empty">{outlineError}</p>
+              ) : !outlineData || (outlineData.sections.length === 0 && outlineData.unfiled.length === 0) ? (
+                <p className="nb-pages-empty">
+                  {outlineModal.tag ? `Nothing tagged “${outlineModal.tag}” yet.` : 'This notebook has no pages yet.'}
+                </p>
+              ) : (
+                <>
+                  {outlineData.sections.map(section => (
+                    <section key={section.id} style={{ marginLeft: section.depth * 16 }}>
+                      <h4 className="nb-outline-section-head">{section.name}</h4>
+                      {section.pages.map(page => (
+                        <article key={page.id} className="nb-outline-page">
+                          <h5>{page.title}</h5>
+                          {(page.classDate || page.topics.length > 0) && (
+                            <p className="nb-outline-meta">
+                              {[page.classDate, page.topics.join(', ')].filter(Boolean).join(' · ')}
+                            </p>
+                          )}
+                          <div dangerouslySetInnerHTML={{ __html: page.contentHtml }} />
+                        </article>
+                      ))}
+                    </section>
+                  ))}
+                  {outlineData.unfiled.length > 0 && (
+                    <section>
+                      <h4 className="nb-outline-section-head">Unfiled</h4>
+                      {outlineData.unfiled.map(page => (
+                        <article key={page.id} className="nb-outline-page">
+                          <h5>{page.title}</h5>
+                          <div dangerouslySetInnerHTML={{ __html: page.contentHtml }} />
+                        </article>
+                      ))}
+                    </section>
+                  )}
+                </>
+              )}
             </div>
           </div>
         </div>
