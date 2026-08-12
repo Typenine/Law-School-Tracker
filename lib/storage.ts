@@ -124,11 +124,30 @@ function getPool(): Pool {
   return pool;
 }
 
+// ---------------------------------------------------------------------------
+// Read-only pool for the GPT connector
+//
+// The GPT Action never needs to write. GPT_DATABASE_URL lets it connect as a
+// separate, SELECT-only Postgres role (see scripts/gpt-readonly-role.sql) so
+// that guarantee is enforced by the database, not just by which functions the
+// route handlers happen to call. Unset, this is exactly getPool() - same
+// connection, same behavior as before this existed.
+// ---------------------------------------------------------------------------
+let gptPool: Pool | null = null;
+export function getGptPool(): Pool {
+  const gptUrl = process.env.GPT_DATABASE_URL?.trim();
+  if (!gptUrl) return getPool();
+  if (!gptPool) {
+    gptPool = new Pool({ connectionString: gptUrl, ssl: gptUrl.includes('sslmode=require') ? { rejectUnauthorized: false } : undefined });
+  }
+  return gptPool;
+}
+
 // Courses
-export async function listCourses(): Promise<Course[]> {
+export async function listCourses(overridePool?: Pool): Promise<Course[]> {
   if (DB_URL) {
     try {
-      const p = getPool();
+      const p = overridePool || getPool();
       type Row = {
         id: string; code: string | null; title: string; instructor: string | null; instructor_email: string | null; room: string | null; location: string | null;
         color: string | null; meeting_days: number[] | null; meeting_start: string | null; meeting_end: string | null; meeting_blocks: any | null;
@@ -884,9 +903,9 @@ function rowToTask(r: any): Task {
   };
 }
 
-export async function listTasks(): Promise<Task[]> {
+export async function listTasks(overridePool?: Pool): Promise<Task[]> {
   if (DB_URL) {
-    const p = getPool();
+    const p = overridePool || getPool();
     type TaskRow = { id: string; title: string; course: string | null; due_date: Date | string; status: 'todo' | 'done'; created_at: Date | string; estimated_minutes: number | null; estimate_origin: string | null; actual_minutes: number | null; priority: number | null; notes: string | null; attachments: string[] | null; depends_on: string[] | null; tags: string[] | null; term: string | null; completed_at: Date | string | null; focus: number | null; pages_read: number | null; activity: string | null; start_time: string | null; end_time: string | null };
     const res = await p.query(`SELECT id, title, course, due_date, status, created_at, estimated_minutes, estimate_origin, actual_minutes, priority, notes, attachments, depends_on, tags, term, completed_at, focus, pages_read, activity, start_time, end_time, original_page_ranges, remaining_page_ranges FROM tasks ORDER BY due_date ASC, COALESCE(start_time,'99:99') ASC`);
     return (res.rows as any[]).map(rowToTask);
@@ -985,9 +1004,9 @@ export async function deleteTask(id: string): Promise<boolean> {
 }
 
 // Sessions
-export async function listSessions(): Promise<StudySession[]> {
+export async function listSessions(overridePool?: Pool): Promise<StudySession[]> {
   if (DB_URL) {
-    const p = getPool();
+    const p = overridePool || getPool();
     type SessionRow = { id: string; task_id: string | null; when_ts: Date | string; minutes: number; focus: number | null; notes: string | null; pages_read: number | null; outline_pages: number | null; practice_qs: number | null; activity: string | null; created_at: Date | string };
     const res = await p.query(`SELECT id, task_id, when_ts, minutes, focus, notes, pages_read, outline_pages, practice_qs, activity, created_at FROM sessions ORDER BY when_ts DESC`);
     const rows = res.rows as unknown as SessionRow[];

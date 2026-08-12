@@ -175,7 +175,7 @@ export default function AddTaskPanel({ onCreated }: Props) {
   }
 
   async function addTask(plan: boolean) {
-    if (!course || !activity || !due) return;
+    if (!activity || !due) return;
     try {
       const dueDt = new Date(due);
       if (dueDt.getTime() < Date.now()) {
@@ -328,8 +328,8 @@ export default function AddTaskPanel({ onCreated }: Props) {
       </div>
 
       <div className="flex flex-wrap gap-2">
-        <button disabled={!course || !activity || !due || saving} onClick={() => addTask(false)} className="px-3 py-2 rounded bg-blue-600 hover:bg-blue-500 disabled:opacity-50">Add</button>
-        <button disabled={!course || !activity || !due || saving} onClick={() => addTask(true)} className="px-3 py-2 rounded bg-emerald-600 hover:bg-emerald-500 disabled:opacity-50">Add & Plan</button>
+        <button disabled={!activity || !due || saving} onClick={() => addTask(false)} className="px-3 py-2 rounded bg-blue-600 hover:bg-blue-500 disabled:opacity-50">Add</button>
+        <button disabled={!activity || !due || saving} onClick={() => addTask(true)} className="px-3 py-2 rounded bg-emerald-600 hover:bg-emerald-500 disabled:opacity-50">Add & Plan</button>
       </div>
     </div>
   );

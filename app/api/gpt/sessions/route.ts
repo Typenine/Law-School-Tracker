@@ -1,5 +1,5 @@
 import { NextRequest } from 'next/server';
-import { ensureSchema, listSessions, listTasks } from '@/lib/storage';
+import { ensureSchema, getGptPool, listSessions, listTasks } from '@/lib/storage';
 import { noStoreJson, requireGptToken } from '@/lib/actionAuth';
 
 export const dynamic = 'force-dynamic';
@@ -35,10 +35,11 @@ export async function GET(req: NextRequest) {
 
     // Sessions record a task, not a course, so the course filter goes through
     // the task each one belongs to.
-    const tasks = await listTasks();
+    const gptPool = getGptPool();
+    const tasks = await listTasks(gptPool);
     const taskById = new Map(tasks.map(task => [task.id, task]));
 
-    const matching = (await listSessions())
+    const matching = (await listSessions(gptPool))
       .filter(session => {
         const when = new Date(session.when);
         if (from && when < from) return false;
@@ -85,9 +86,7 @@ export async function GET(req: NextRequest) {
       averageFocus,
     });
   } catch (error) {
-    return noStoreJson(
-      { error: error instanceof Error ? error.message : 'Unable to load study sessions.' },
-      { status: 500 },
-    );
+    console.error('[gpt/sessions]', error);
+    return noStoreJson({ error: 'Unable to load study sessions. Try again shortly.' }, { status: 500 });
   }
 }

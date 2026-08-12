@@ -1,5 +1,5 @@
 import { NextRequest } from 'next/server';
-import { ensureSchema, listCourses } from '@/lib/storage';
+import { ensureSchema, getGptPool, listCourses } from '@/lib/storage';
 import { noStoreJson, requireGptToken } from '@/lib/actionAuth';
 
 export const dynamic = 'force-dynamic';
@@ -11,7 +11,7 @@ export async function GET(req: NextRequest) {
 
   try {
     await ensureSchema();
-    const courses = (await listCourses()).map(course => ({
+    const courses = (await listCourses(getGptPool())).map(course => ({
       id: course.id,
       code: course.code ?? null,
       title: course.title,
@@ -24,9 +24,7 @@ export async function GET(req: NextRequest) {
     }));
     return noStoreJson({ courses });
   } catch (error) {
-    return noStoreJson(
-      { error: error instanceof Error ? error.message : 'Unable to load courses.' },
-      { status: 500 },
-    );
+    console.error('[gpt/courses]', error);
+    return noStoreJson({ error: 'Unable to load courses. Try again shortly.' }, { status: 500 });
   }
 }

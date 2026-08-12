@@ -1,12 +1,13 @@
 import { NextRequest } from 'next/server';
 import { searchAiNotes } from '@/lib/aiNotes';
-import { noStoreJson, requireGptToken } from '@/lib/actionAuth';
+import { notesGptDb } from '@/lib/notes/db';
+import { noStoreJson, requireNotesToken } from '@/lib/actionAuth';
 
 export const dynamic = 'force-dynamic';
 export const runtime = 'nodejs';
 
 export async function GET(req: NextRequest) {
-  const denied = requireGptToken(req);
+  const denied = requireNotesToken(req);
   if (denied) return denied;
 
   try {
@@ -26,12 +27,10 @@ export async function GET(req: NextRequest) {
       from: params.get('from'),
       to: params.get('to'),
       limit: Number.isFinite(requestedLimit) ? requestedLimit : 12,
-    });
+    }, notesGptDb());
     return noStoreJson({ query, matches, count: matches.length });
   } catch (error) {
-    return noStoreJson(
-      { error: error instanceof Error ? error.message : 'Unable to search notes.' },
-      { status: 500 },
-    );
+    console.error('[gpt/notes]', error);
+    return noStoreJson({ error: 'Unable to search notes. Try again shortly.' }, { status: 500 });
   }
 }

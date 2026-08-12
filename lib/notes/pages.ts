@@ -1,4 +1,5 @@
 import { randomUUID } from 'crypto';
+import type { Pool } from 'pg';
 import {
   addNoteFilters,
   clampLimit,
@@ -112,13 +113,13 @@ export async function createAiNote(input: {
   return toNote(result.rows[0]);
 }
 
-export async function listAiNotes(input: NoteFilters = {}): Promise<AiNoteSummary[]> {
+export async function listAiNotes(input: NoteFilters = {}, overridePool?: Pool): Promise<AiNoteSummary[]> {
   await ensureNotesSchema();
   const clauses: string[] = [];
   const values: unknown[] = [];
   addNoteFilters(input, clauses, values);
   values.push(clampLimit(input.limit, 500));
-  const result = await notesDb().query(
+  const result = await (overridePool || notesDb()).query(
     `SELECT note.*, notebook.name AS notebook_name, LEFT(note.content,500) AS preview_text
      FROM ai_notes note
      LEFT JOIN ai_note_notebooks notebook ON notebook.id=note.notebook_id
@@ -130,9 +131,9 @@ export async function listAiNotes(input: NoteFilters = {}): Promise<AiNoteSummar
   return result.rows.map(toNoteSummary);
 }
 
-export async function getAiNote(id: string): Promise<AiNote | null> {
+export async function getAiNote(id: string, overridePool?: Pool): Promise<AiNote | null> {
   await ensureNotesSchema();
-  const result = await notesDb().query(
+  const result = await (overridePool || notesDb()).query(
     `SELECT note.*, notebook.name AS notebook_name
      FROM ai_notes note
      LEFT JOIN ai_note_notebooks notebook ON notebook.id=note.notebook_id
@@ -271,9 +272,9 @@ export async function restoreAiNote(id: string): Promise<AiNote | null> {
 }
 
 /** Pages per assignment, so the task list can show a count on every row. */
-export async function countNotesByTask(): Promise<Record<string, number>> {
+export async function countNotesByTask(overridePool?: Pool): Promise<Record<string, number>> {
   await ensureNotesSchema();
-  const result = await notesDb().query(
+  const result = await (overridePool || notesDb()).query(
     `SELECT task_id, COUNT(*)::int AS pages FROM ai_notes
      WHERE task_id IS NOT NULL AND deleted_at IS NULL AND archived = FALSE
      GROUP BY task_id`,
@@ -419,10 +420,10 @@ export async function reorderAiNotes(input: {
   }
 }
 
-export async function searchAiNotes(query: string, input: NoteFilters = {}): Promise<AiNoteSearchResult[]> {
+export async function searchAiNotes(query: string, input: NoteFilters = {}, overridePool?: Pool): Promise<AiNoteSearchResult[]> {
   await ensureNotesSchema();
   const q = query.trim();
-  if (!q) return (await listAiNotes(input)).map(note => ({ ...note, excerpt: note.preview, score: 0 }));
+  if (!q) return (await listAiNotes(input, overridePool)).map(note => ({ ...note, excerpt: note.preview, score: 0 }));
   const clauses: string[] = [];
   const values: unknown[] = [q];
   addNoteFilters(input, clauses, values);
@@ -434,7 +435,7 @@ export async function searchAiNotes(query: string, input: NoteFilters = {}): Pro
     OR array_to_string(note.topics,' ') ILIKE '%' || $1 || '%'
   )`);
   values.push(clampLimit(input.limit, 100, 12));
-  const result = await notesDb().query(
+  const result = await (overridePool || notesDb()).query(
     `SELECT note.*, notebook.name AS notebook_name,
        ts_rank_cd(
          to_tsvector('english',COALESCE(note.title,'') || ' ' || COALESCE(note.content,'')),

@@ -1,6 +1,7 @@
 import { NextRequest } from 'next/server';
-import { ensureSchema, listTasks } from '@/lib/storage';
+import { ensureSchema, getGptPool, listTasks } from '@/lib/storage';
 import { countNotesByTask } from '@/lib/aiNotes';
+import { notesGptDb } from '@/lib/notes/db';
 import { noStoreJson, requireGptToken } from '@/lib/actionAuth';
 
 export const dynamic = 'force-dynamic';
@@ -30,9 +31,9 @@ export async function GET(req: NextRequest) {
 
     // How many note pages each assignment has, so the assistant knows there is
     // something to read before it goes looking.
-    const noteCounts = await countNotesByTask().catch(() => ({} as Record<string, number>));
+    const noteCounts = await countNotesByTask(notesGptDb()).catch(() => ({} as Record<string, number>));
 
-    const assignments = (await listTasks())
+    const assignments = (await listTasks(getGptPool()))
       .filter(task => !status || status === 'all' || task.status === status)
       .filter(task => !course || (task.course || '').toLowerCase().includes(course))
       .filter(task => {
@@ -61,9 +62,7 @@ export async function GET(req: NextRequest) {
 
     return noStoreJson({ assignments, count: assignments.length });
   } catch (error) {
-    return noStoreJson(
-      { error: error instanceof Error ? error.message : 'Unable to load assignments.' },
-      { status: 500 },
-    );
+    console.error('[gpt/assignments]', error);
+    return noStoreJson({ error: 'Unable to load assignments. Try again shortly.' }, { status: 500 });
   }
 }

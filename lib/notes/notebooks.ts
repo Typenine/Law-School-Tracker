@@ -1,4 +1,5 @@
 import { randomUUID } from 'crypto';
+import type { Pool } from 'pg';
 import {
   cleanText,
   ensureNotesSchema,
@@ -70,9 +71,9 @@ export async function createNotebook(input: {
   return notebook;
 }
 
-export async function listNotebooks(archived = false): Promise<NoteNotebook[]> {
+export async function listNotebooks(archived = false, overridePool?: Pool): Promise<NoteNotebook[]> {
   await ensureNotesSchema();
-  const result = await notesDb().query(
+  const result = await (overridePool || notesDb()).query(
     `SELECT notebook.*, COUNT(note.id)::int AS note_count,
        COALESCE(
          (SELECT ARRAY_AGG(section.name ORDER BY section.position, LOWER(section.name))

@@ -27,6 +27,26 @@ export function notesDb(): Pool {
   return pool;
 }
 
+/**
+ * Read-only pool for the GPT connector's note endpoints (searchNotes, getNote,
+ * listNotebooks). GPT_DATABASE_URL, when set, connects as a separate
+ * SELECT-only role (see scripts/gpt-readonly-role.sql) so notes - the most
+ * sensitive thing the Action reads - stay unwritable at the database layer.
+ * Unset, this is exactly notesDb().
+ */
+let gptNotesPool: Pool | null = null;
+export function notesGptDb(): Pool {
+  const gptUrl = process.env.GPT_DATABASE_URL?.trim();
+  if (!gptUrl) return notesDb();
+  if (!gptNotesPool) {
+    gptNotesPool = new Pool({
+      connectionString: gptUrl,
+      ssl: gptUrl.includes('sslmode=require') ? { rejectUnauthorized: false } : undefined,
+    });
+  }
+  return gptNotesPool;
+}
+
 /** The notes schema check runs on every notes request; do the work once. */
 let notesSchemaReady: Promise<void> | null = null;
 

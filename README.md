@@ -66,6 +66,14 @@ Set these Vercel environment variables before using the feature:
 
 The Notes page itself needs no token — it uses the same access model as the rest of the tracker.
 
+### Hardening (optional)
+
+Three more Vercel environment variables, none required, that narrow what a leaked credential could reach:
+
+- `LAW_SCHOOL_NOTES_TOKEN`: a second bearer token that scopes `searchNotes`, `getNote`, and `listNotebooks` separately from `listCourses`/`listAssignments`/`listStudySessions`. Falls back to `LAW_SCHOOL_GPT_TOKEN` when unset, so setting it is purely additive. Configure the GPT Action's Bearer token as this value instead if you want notes access scoped independently.
+- `GPT_DATABASE_URL`: a connection string for a Postgres role with `SELECT`-only grants, used exclusively by the connector's routes. Run [`scripts/gpt-readonly-role.sql`](scripts/gpt-readonly-role.sql) once against your database to create that role, then point this at it. Falls back to `DATABASE_URL` when unset, so the connector keeps working today without it — but on that fallback, a bug that ever tried to write through these routes would succeed instead of being rejected by the database.
+- Repeated bad bearer tokens from the same IP get a `429` for a few minutes rather than an unlimited number of guesses. This is a best-effort, per-instance throttle (it resets on cold start) — a long, random `LAW_SCHOOL_GPT_TOKEN`/`LAW_SCHOOL_NOTES_TOKEN` is still what actually makes guessing infeasible.
+
 After deployment:
 
 1. Copy the OpenAPI schema URL shown on the Notes page.
@@ -98,6 +106,8 @@ and a section id from `listNotebooks` narrows a search to one exact branch.
 - A stale Action still points at the old operation list; re-import the schema.
 - The schema's `servers` URL is derived from the forwarded host headers. Fetch
   `/api/gpt/openapi` and check `servers[0].url` is the public site.
+- If you set `LAW_SCHOOL_NOTES_TOKEN`, the notes operations (`searchNotes`, `getNote`, `listNotebooks`) need the Action configured with that value specifically — the old `LAW_SCHOOL_GPT_TOKEN` will now 401 on just those three.
+- A `429` means repeated bad tokens tripped the short-lived lockout described above; wait a few minutes, or confirm the token configured in the Action actually matches the deployment's.
 
 ## Import Sessions (CSV)
 - Use Settings → Import Data (CSV) to import study sessions with mapping, preview, deduplication, and append/replace modes.

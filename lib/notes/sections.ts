@@ -1,4 +1,5 @@
 import { randomUUID } from 'crypto';
+import type { Pool } from 'pg';
 import { cleanText, ensureNotesSchema, notesDb, toSection } from './db';
 import type { NoteSection } from './types';
 
@@ -24,9 +25,9 @@ export async function listSections(notebookId: string): Promise<NoteSection[]> {
   return result.rows.map(toSection);
 }
 
-export async function listAllSections(): Promise<NoteSection[]> {
+export async function listAllSections(overridePool?: Pool): Promise<NoteSection[]> {
   await ensureNotesSchema();
-  const result = await notesDb().query(
+  const result = await (overridePool || notesDb()).query(
     `${SECTION_SELECT} ORDER BY section.notebook_id, COALESCE(section.parent_id, ''), section.position, LOWER(section.name)`,
   );
   return result.rows.map(toSection);

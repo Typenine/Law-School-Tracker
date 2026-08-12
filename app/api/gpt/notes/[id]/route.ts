@@ -1,6 +1,7 @@
 import { NextRequest } from 'next/server';
 import { getAiNote } from '@/lib/aiNotes';
-import { noStoreJson, requireGptToken } from '@/lib/actionAuth';
+import { notesGptDb } from '@/lib/notes/db';
+import { noStoreJson, requireNotesToken } from '@/lib/actionAuth';
 
 export const dynamic = 'force-dynamic';
 export const runtime = 'nodejs';
@@ -9,11 +10,11 @@ export async function GET(
   req: NextRequest,
   { params }: { params: { id: string } },
 ) {
-  const denied = requireGptToken(req);
+  const denied = requireNotesToken(req);
   if (denied) return denied;
 
   try {
-    const note = await getAiNote(params.id);
+    const note = await getAiNote(params.id, notesGptDb());
     if (!note) return noStoreJson({ error: 'Note not found.' }, { status: 404 });
     // The GPT reads prose, not editor markup. Images survive the strip as
     // "[image: alt]" markers in the text; the URLs come back alongside so a
@@ -23,9 +24,7 @@ export async function GET(
       .map(match => match[1]);
     return noStoreJson({ note: { ...readable, images } });
   } catch (error) {
-    return noStoreJson(
-      { error: error instanceof Error ? error.message : 'Unable to load note.' },
-      { status: 500 },
-    );
+    console.error('[gpt/notes/[id]]', error);
+    return noStoreJson({ error: 'Unable to load note. Try again shortly.' }, { status: 500 });
   }
 }

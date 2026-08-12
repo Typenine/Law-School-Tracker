@@ -1,6 +1,7 @@
 import { NextRequest } from 'next/server';
 import { listAllSections, listNotebooks } from '@/lib/aiNotes';
-import { noStoreJson, requireGptToken } from '@/lib/actionAuth';
+import { notesGptDb } from '@/lib/notes/db';
+import { noStoreJson, requireNotesToken } from '@/lib/actionAuth';
 
 export const dynamic = 'force-dynamic';
 export const runtime = 'nodejs';
@@ -15,11 +16,12 @@ export const runtime = 'nodejs';
  * branch instead of guessing at names.
  */
 export async function GET(req: NextRequest) {
-  const denied = requireGptToken(req);
+  const denied = requireNotesToken(req);
   if (denied) return denied;
 
   try {
-    const [notebooks, sections] = await Promise.all([listNotebooks(), listAllSections()]);
+    const gptDb = notesGptDb();
+    const [notebooks, sections] = await Promise.all([listNotebooks(false, gptDb), listAllSections(gptDb)]);
 
     const branch = (notebookId: string, parentId: string | null): unknown[] =>
       sections
@@ -43,9 +45,7 @@ export async function GET(req: NextRequest) {
       })),
     });
   } catch (error) {
-    return noStoreJson(
-      { error: error instanceof Error ? error.message : 'Unable to load notebooks.' },
-      { status: 500 },
-    );
+    console.error('[gpt/notebooks]', error);
+    return noStoreJson({ error: 'Unable to load notebooks. Try again shortly.' }, { status: 500 });
   }
 }
