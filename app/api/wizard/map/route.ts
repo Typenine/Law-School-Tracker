@@ -1,11 +1,31 @@
 import { ensureSchema } from '@/lib/storage';
 import * as chrono from 'chrono-node';
-import { endOfDay } from 'date-fns';
 import type { WizardPreview, Session, Reading, WizardTask } from '@/lib/wizard_types';
 import type { ReadingPriority, TaskType } from '@/lib/wizard_types';
 
 export const dynamic = 'force-dynamic';
 export const runtime = 'nodejs';
+
+/** Calendar date as the machine's local clock sees it — never routed through
+ *  toISOString(), which reports UTC and silently rolls the date across a
+ *  timezone boundary (a syllabus's "August 17" was landing on the 18th for
+ *  anyone west of UTC). */
+function ymdLocal(d: Date): string {
+  const y = d.getFullYear();
+  const m = String(d.getMonth() + 1).padStart(2, '0');
+  const day = String(d.getDate()).padStart(2, '0');
+  return `${y}-${m}-${day}`;
+}
+
+/** A bare "YYYY-MM-DD" parsed as local midnight, not `new Date(str)`'s UTC
+ *  midnight — otherwise the course-start reference date used to resolve
+ *  every session date is itself already a day off west of UTC. */
+function parseLocalDateOnly(s: string | null | undefined): Date | null {
+  if (!s) return null;
+  const m = /^(\d{4})-(\d{2})-(\d{2})/.exec(s);
+  if (!m) return null;
+  return new Date(parseInt(m[1], 10), parseInt(m[2], 10) - 1, parseInt(m[3], 10));
+}
 
 function pagesOrSections(line: string): string | null {
   const m = /(pp?\.)\s*[^;,.]+|\bpages?\s*[^;,.]+|\bchs?\.?\s*\d+(?:\s*[-–—]\s*\d+)?|\bch(?:apter)?\.?\s*\d+(?:\s*[-–—]\s*\d+)?|§+\s*[^;,.]+/i.exec(line);
@@ -39,8 +59,8 @@ export async function POST(req: Request) {
   const rows: string[][] = Array.isArray(body?.rows) ? body.rows : [];
   const map = body?.mapping || {};
   const tz = (body?.timezone as string) || 'America/Chicago';
-  const courseStart: Date | null = body?.courseStart ? new Date(body.courseStart) : null;
-  const courseEnd: Date | null = body?.courseEnd ? new Date(body.courseEnd) : null;
+  const courseStart: Date | null = parseLocalDateOnly(body?.courseStart);
+  const courseEnd: Date | null = parseLocalDateOnly(body?.courseEnd);
   const dateCol = Number.isInteger(map.dateCol) ? map.dateCol : 0;
   const topicCol = Number.isInteger(map.topicCol) ? map.topicCol : 1;
   const readingsCol = Number.isInteger(map.readingsCol) ? map.readingsCol : 2;
@@ -63,7 +83,13 @@ export async function POST(req: Request) {
 
     let when: Date | null = null;
     const ref = courseStart ?? new Date();
-    const ps = chrono.parse(dc, ref, { forwardDate: true });
+    // With a known course start, a session date one day before it (a syllabus's
+    // first class often lands right at that boundary) should resolve to the
+    // nearest occurrence, not necessarily this year's — forwardDate otherwise
+    // rolls it a full year ahead. Without a course start, there is no anchor
+    // to disambiguate against, so keep preferring the upcoming occurrence.
+    const dateOpts = { forwardDate: !courseStart };
+    const ps = chrono.parse(dc, ref, dateOpts);
     if (ps.length) {
       const p = ps[0];
       when = p.end ? p.end.date() : (p.start ? p.start.date() : p.date());
@@ -71,13 +97,13 @@ export async function POST(req: Request) {
 
     if (!when) {
       // Try alternative: date hidden in concatenated cell
-      const p2 = chrono.parse([dc, tp, rd, as].filter(Boolean).join(' | '), ref, { forwardDate: true });
+      const p2 = chrono.parse([dc, tp, rd, as].filter(Boolean).join(' | '), ref, dateOpts);
       if (p2.length) when = p2[0].end ? p2[0].end.date() : (p2[0].start ? p2[0].start.date() : p2[0].date());
     }
 
     let key: string | null = null;
     if (when) {
-      key = endOfDay(when).toISOString().slice(0,10);
+      key = ymdLocal(when);
     } else if (currentKey) {
       key = currentKey; // attach non-date rows to current session
     } else {
@@ -86,7 +112,10 @@ export async function POST(req: Request) {
 
     let s = byDateKey.get(key);
     if (!s) {
-      s = { date: key, sequence_number: seq++, topic: null, readings: [], assignments_due: [], notes: null, canceled: /no class|cancell?ed/i.test(dc), source_ref: `row:${i}`, confidence: confidence(0.9) } as Session;
+      // "No class" is usually written in the topic/description cell, not the
+      // date cell itself, so check the whole row rather than just dc.
+      const canceled = /no class|cancell?ed/i.test([dc, tp, rd, as].join(' '));
+      s = { date: key, sequence_number: seq++, topic: null, readings: [], assignments_due: [], notes: null, canceled, source_ref: `row:${i}`, confidence: confidence(0.9) } as Session;
       byDateKey.set(key, s);
       sessions.push(s);
     }

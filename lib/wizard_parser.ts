@@ -1,8 +1,17 @@
 import * as chrono from 'chrono-node';
-import { endOfDay } from 'date-fns';
 import type { WizardCourse, WizardPreview, Session, Reading, WizardTask, ReadingPriority, TaskType } from './wizard_types';
 import type { NewCourseInput } from './types';
 import { parseCourseMetaFromText } from './parser';
+
+/** Calendar date as the machine's local clock sees it — never routed through
+ *  toISOString(), which reports UTC and silently rolls the date across a
+ *  timezone boundary. */
+function ymdLocal(d: Date): string {
+  const y = d.getFullYear();
+  const m = String(d.getMonth() + 1).padStart(2, '0');
+  const day = String(d.getDate()).padStart(2, '0');
+  return `${y}-${m}-${day}`;
+}
 
 function unwrapHyphenation(s: string): string {
   return s.replace(/([A-Za-z])-[\r\n]+([a-z])/g, '$1$2');
@@ -77,8 +86,7 @@ export function buildWizardPreview(rawText: string, courseHint?: string | null, 
     const looksDate = ps.length > 0 && (ps[0].text.length / Math.max(1, line.length)) > 0.3;
     if (looksDate) {
       const d = ps[0].end ? ps[0].end.date() : (ps[0].start ? ps[0].start.date() : ps[0].date());
-      const dateISO = endOfDay(d).toISOString();
-      currentSession = { date: dateISO.slice(0,10), sequence_number: seq++, topic: null, readings: [], assignments_due: [], notes: null, canceled: /no class|cancell?ed/i.test(line), source_ref: `line:${i}`, confidence: confidence(0.9) };
+      currentSession = { date: ymdLocal(d), sequence_number: seq++, topic: null, readings: [], assignments_due: [], notes: null, canceled: /no class|cancell?ed/i.test(line), source_ref: `line:${i}`, confidence: confidence(0.9) };
       sessions.push(currentSession);
       continue;
     }

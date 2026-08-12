@@ -9,6 +9,16 @@ export default function HelpPage() {
       </section>
 
       <section className="card p-5 space-y-3">
+        <h3 className="text-lg font-medium">Import from Syllabus</h3>
+        <ul className="list-disc list-inside space-y-1 text-sm">
+          <li>On <b>Courses</b>, click <b>Import syllabus</b> and upload a PDF, DOCX, or TXT syllabus.</li>
+          <li>Map which columns are the date, topic, readings, and assignments, then review the generated reading and assignment tasks — grouped by class date, each with a checkbox — before creating anything.</li>
+          <li>Choose to create a new course or add the tasks to an existing one, then <b>Create course &amp; tasks</b>.</li>
+          <li>The parser is best-effort: check the rows flagged <i>low-confidence</i>, and uncheck anything that looks wrong before creating.</li>
+        </ul>
+      </section>
+
+      <section className="card p-5 space-y-3">
         <h3 className="text-lg font-medium">Inbox (Tasks) & CSV Import</h3>
         <ul className="list-disc list-inside space-y-1 text-sm">
           <li><b>Inbox Quick Add</b>: On the <b>Tasks</b> page, use <b>Quick Add (Inbox)</b> to capture items in one line. Example: <i>T&amp;E: Read 599–622 (24p) – due Fri</i>. Estimation uses your historical pace with a fallback minutes/page from Settings.</li>

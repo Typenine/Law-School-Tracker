@@ -1,7 +1,21 @@
 "use client";
-import { useState, useEffect } from 'react';
+import { Suspense, useState, useEffect } from 'react';
+import { useSearchParams } from 'next/navigation';
+import WizardCreateStep from '@/components/WizardCreateStep';
 
 export default function WizardPreviewPage() {
+  return (
+    <Suspense fallback={null}>
+      <WizardPreviewInner />
+    </Suspense>
+  );
+}
+
+function WizardPreviewInner() {
+  const searchParams = useSearchParams();
+  const initialSemester = searchParams.get('semester') || undefined;
+  const initialYear = searchParams.get('year') || undefined;
+
   const [file, setFile] = useState<File | null>(null);
   const [course, setCourse] = useState('');
   const [tz, setTz] = useState('America/Chicago');
@@ -30,12 +44,13 @@ export default function WizardPreviewPage() {
 
   return (
     <main className="space-y-4">
-      <h1 className="text-xl font-semibold">Import Wizard (Preview)</h1>
+      <h1 className="text-xl font-semibold">Import from Syllabus</h1>
+      <p className="text-sm text-slate-300/70">Upload a syllabus and turn its reading schedule into a course with tasks already on the calendar — instead of typing in fifteen weeks by hand.</p>
       <div className="card p-4 space-y-3">
         <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
           <div>
-            <label className="block text-sm mb-1">Course (optional)</label>
-            <input value={course} onChange={e => setCourse(e.target.value)} className="w-full bg-[#0b1020] border border-[#1b2344] rounded px-3 py-2" />
+            <label className="block text-sm mb-1">Course name (optional)</label>
+            <input value={course} onChange={e => setCourse(e.target.value)} placeholder="Used as a starting point — you can change it before creating" className="w-full bg-[#0b1020] border border-[#1b2344] rounded px-3 py-2" />
           </div>
           <div>
             <label className="block text-sm mb-1">Timezone</label>
@@ -43,31 +58,30 @@ export default function WizardPreviewPage() {
             <p className="text-xs text-slate-300/70 mt-1">Default America/Chicago</p>
           </div>
           <div>
-            <label className="block text-sm mb-1">Source file</label>
+            <label className="block text-sm mb-1">Syllabus file</label>
             <input type="file" accept=".pdf,.docx,.txt" onChange={e => setFile(e.target.files?.[0] || null)} className="w-full" />
           </div>
         </div>
         <div>
-          <button onClick={onUpload} className="px-4 py-2 rounded bg-blue-600 hover:bg-blue-500 disabled:opacity-50" disabled={!file || loading}>{loading ? 'Processing…' : 'Preview'}</button>
+          <button onClick={onUpload} className="px-4 py-2 rounded bg-blue-600 hover:bg-blue-500 disabled:opacity-50" disabled={!file || loading}>{loading ? 'Reading…' : 'Read syllabus'}</button>
         </div>
         {error && <div className="text-sm text-rose-400">{error}</div>}
       </div>
       {data && (
         <>
-          <div className="card p-4">
-            <h2 className="text-lg font-medium mb-2">Prep Preview</h2>
-            <div className="text-sm text-slate-300/80 mb-2">Detected course meta and quick parse. Proceed to Mapping to teach the system your table columns.</div>
-            <pre className="text-[11px] whitespace-pre-wrap bg-[#0b1020] border border-[#1b2344] rounded p-2">{JSON.stringify(data.preview, null, 2)}</pre>
-          </div>
+          <details className="card p-4">
+            <summary className="cursor-pointer text-sm text-slate-300/80">Detected course details (click to expand)</summary>
+            <pre className="mt-2 text-[11px] whitespace-pre-wrap bg-[#0b1020] border border-[#1b2344] rounded p-2">{JSON.stringify(data.preview, null, 2)}</pre>
+          </details>
 
-          <MappingPanel data={data} tz={tz} />
+          <MappingPanel data={data} tz={tz} courseHint={course} initialSemester={initialSemester} initialYear={initialYear} />
         </>
       )}
     </main>
   );
 }
 
-function MappingPanel({ data, tz }: { data: any; tz: string }) {
+function MappingPanel({ data, tz, courseHint, initialSemester, initialYear }: { data: any; tz: string; courseHint: string; initialSemester?: string; initialYear?: string }) {
   const [dateCol, setDateCol] = useState<number>(0);
   const [topicCol, setTopicCol] = useState<number>(1);
   const [readingsCol, setReadingsCol] = useState<number>(1);
@@ -117,6 +131,7 @@ function MappingPanel({ data, tz }: { data: any; tz: string }) {
   }
 
   return (
+    <>
     <div className="card p-4 space-y-3">
       <h2 className="text-lg font-medium">Mapping</h2>
       <div className="text-sm text-slate-300/80">Select which columns correspond to Date, Topic, Readings, Assignments. Then Apply to all rows.</div>
@@ -147,14 +162,22 @@ function MappingPanel({ data, tz }: { data: any; tz: string }) {
       </div>
       {error && <div className="text-sm text-rose-400">{error}</div>}
       {mapped && (
-        <div className="mt-2">
-          <div className="text-sm text-slate-300/80 mb-1">Review (counts)</div>
-          <div className="text-sm">Sessions: {mapped.sessions?.length || 0} · Readings: {mapped.readings?.length || 0} · Tasks: {mapped.tasks?.length || 0}</div>
-          <div className="text-sm">Low-confidence: {mapped.lowConfidence?.length || 0}</div>
-          <pre className="mt-2 text-[11px] whitespace-pre-wrap bg-[#0b1020] border border-[#1b2344] rounded p-2">{JSON.stringify(mapped, null, 2)}</pre>
+        <div className="mt-2 text-sm text-slate-300/80">
+          Sessions: {mapped.sessions?.length || 0} · Readings: {mapped.readings?.length || 0} · Explicit tasks: {mapped.tasks?.length || 0}
+          {mapped.lowConfidence?.length ? ` · ${mapped.lowConfidence.length} low-confidence` : ''}
         </div>
       )}
     </div>
+    {mapped && (
+      <WizardCreateStep
+        mapped={mapped}
+        previewCourse={data?.preview?.course || null}
+        courseHint={courseHint}
+        initialSemester={initialSemester}
+        initialYear={initialYear}
+      />
+    )}
+    </>
   );
 }
 

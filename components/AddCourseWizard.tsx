@@ -1,11 +1,16 @@
 "use client";
 import { useState, useRef } from 'react';
+import Link from 'next/link';
 import type { Course, Semester } from '@/lib/types';
 import TimePickerField from '@/components/TimePickerField';
 
 interface AddCourseWizardProps {
   onCourseAdded: (course: Course) => void;
   onClose: () => void;
+  /** Pre-fills step 3 so opening this from "Add {term} course" doesn't make
+   *  the user re-select the term the button already named. */
+  initialSemester?: Semester;
+  initialYear?: number;
 }
 
 const SEMESTERS: Semester[] = ['Spring', 'Summer', 'Fall'];
@@ -15,7 +20,7 @@ const COLORS = [
   '#16a34a', '#0891b2', '#c2410c', '#9333ea', '#0d9488'
 ];
 
-export default function AddCourseWizard({ onCourseAdded, onClose }: AddCourseWizardProps) {
+export default function AddCourseWizard({ onCourseAdded, onClose, initialSemester, initialYear }: AddCourseWizardProps) {
   const [step, setStep] = useState(1);
   const [course, setCourse] = useState<Partial<Course>>({
     title: '',
@@ -26,8 +31,8 @@ export default function AddCourseWizard({ onCourseAdded, onClose }: AddCourseWiz
     meetingDays: [],
     meetingStart: '',
     meetingEnd: '',
-    semester: undefined,
-    year: new Date().getFullYear(),
+    semester: initialSemester,
+    year: initialYear || new Date().getFullYear(),
   });
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
@@ -188,8 +193,16 @@ export default function AddCourseWizard({ onCourseAdded, onClose }: AddCourseWiz
           {/* Step 1: Basic Info */}
           {step === 1 && (
             <div className="space-y-4">
-              <h3 className="text-lg font-medium mb-4">Course Information</h3>
-              
+              <div className="flex items-center justify-between mb-4">
+                <h3 className="text-lg font-medium">Course Information</h3>
+                <Link
+                  href={initialSemester ? `/wizard?semester=${initialSemester}&year=${course.year || ''}` : '/wizard'}
+                  className="text-xs text-blue-400 hover:text-blue-300 underline"
+                >
+                  Have a syllabus? Import it instead →
+                </Link>
+              </div>
+
               <div>
                 <label className="block text-sm font-medium mb-2">Course Title *</label>
                 <input

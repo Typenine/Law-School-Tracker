@@ -225,6 +225,12 @@ export default function CoursesPage() {
         <h2 className="text-lg font-medium">Courses</h2>
         <div className="flex gap-2">
           <button onClick={() => setShowBacklog(true)} className="px-3 py-1 rounded border border-[#1b2344] text-sm hover:bg-[#1b2344]">Add Historical Task</button>
+          <a
+            href={term ? `/wizard?semester=${term.season}&year=${term.year}` : '/wizard'}
+            className="px-3 py-1 rounded border border-[#1b2344] text-sm hover:bg-[#1b2344]"
+          >
+            Import syllabus
+          </a>
           <button onClick={() => setShowWizard(true)} className="px-3 py-1 rounded bg-blue-600 hover:bg-blue-500 text-white text-sm">Add Course</button>
           <button onClick={refresh} className="px-2 py-1 rounded border border-[#1b2344]">Refresh</button>
         </div>
@@ -295,6 +301,12 @@ export default function CoursesPage() {
             <button onClick={() => setShowWizard(true)} className="px-4 py-2 rounded bg-blue-600 hover:bg-blue-500 text-white">
               {termFilter === 'current' && term ? `Add ${term.name} course` : 'Add Your First Course'}
             </button>
+            <a
+              href={termFilter === 'current' && term ? `/wizard?semester=${term.season}&year=${term.year}` : '/wizard'}
+              className="px-4 py-2 rounded border border-[#1b2344] hover:bg-[#1b2344]"
+            >
+              Import from syllabus
+            </a>
             {termFilter === 'current' && archivedCount > 0 && (
               <button onClick={() => setTermFilter('archived')} className="px-4 py-2 rounded border border-[#1b2344] hover:bg-[#1b2344]">
                 View archived
@@ -514,6 +526,8 @@ export default function CoursesPage() {
       {/* Modals */}
       {showWizard && (
         <AddCourseWizard
+          initialSemester={term?.season}
+          initialYear={term?.year}
           onCourseAdded={async (course) => {
             setCourses(prev => [...prev, course].sort((a, b) => (a.title || '').localeCompare(b.title || '')));
             await refresh();
