@@ -344,7 +344,7 @@ export default function CoursesPage() {
                       <div className="flex items-center gap-2">
                         <span className="inline-block w-3 h-3 rounded-full" style={{ backgroundColor: resolveCourseColor(c) }}></span>
                         <div>
-                          <div className="font-medium">{c.title}</div>
+                          <a href={`/courses/${c.id}`} className="font-medium hover:underline">{c.title}</a>
                           {c.code && <div className="text-xs text-slate-400">{c.code}</div>}
                           {c.instructor && <div className="text-xs text-slate-400">{c.instructor}</div>}
                         </div>
