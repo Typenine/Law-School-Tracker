@@ -18,6 +18,7 @@ export async function POST(req: NextRequest) {
   const schema = z.object({
     title: z.string().min(1),
     course: z.string().trim().min(1).nullable().optional(),
+    courseId: z.string().trim().min(1).nullable().optional(),
     dueDate: z.string().min(1), // ISO string from client
     status: z.enum(['todo', 'done']).optional(),
     startTime: z.string().trim().nullable().optional().or(z.literal('')).transform(v => v === '' ? null : v),
@@ -43,6 +44,7 @@ export async function POST(req: NextRequest) {
     title: body.title,
     dueDate: body.dueDate,
     course: body.course ?? null,
+    courseId: body.courseId ?? null,
     status: body.status ?? 'todo',
     startTime: body.startTime ?? null,
     endTime: body.endTime ?? null,

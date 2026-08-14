@@ -4,6 +4,8 @@ export interface Task {
   id: string;
   title: string;
   course?: string | null;
+  /** Real reference to a Course row, when the task was created/linked from one. Course renames stay in sync through this; `course` (the text label) remains for tasks created without a course picker. */
+  courseId?: string | null;
   dueDate: string; // ISO string
   status: TaskStatus;
   createdAt: string; // ISO
@@ -106,9 +108,34 @@ export interface CourseMeetingBlock {
   location?: string | null;
 }
 
+export type CourseDocumentCategory = 'syllabus' | 'slides' | 'reading' | 'other';
+
+export interface CourseDocument {
+  id: string;
+  courseId: string;
+  title: string;
+  filename: string;
+  mimeType: string;
+  size: number;
+  url: string;
+  category: CourseDocumentCategory;
+  createdAt: string; // ISO
+}
+
+export interface NewCourseDocumentInput {
+  courseId: string;
+  title: string;
+  filename: string;
+  mimeType: string;
+  size: number;
+  url: string;
+  category?: CourseDocumentCategory;
+}
+
 export interface NewTaskInput {
   title: string;
   course?: string | null;
+  courseId?: string | null;
   dueDate: string; // ISO
   status?: TaskStatus;
   startTime?: string | null; // HH:MM 24h
@@ -130,6 +157,7 @@ export interface NewTaskInput {
 export interface UpdateTaskInput {
   title?: string;
   course?: string | null;
+  courseId?: string | null;
   dueDate?: string; // ISO
   status?: TaskStatus;
   startTime?: string | null; // HH:MM 24h

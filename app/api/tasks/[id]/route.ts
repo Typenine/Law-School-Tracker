@@ -11,6 +11,7 @@ export async function PATCH(req: NextRequest, { params }: { params: { id: string
   const schema = z.object({
     title: z.string().min(1).optional(),
     course: z.string().trim().min(1).nullable().optional(),
+    courseId: z.string().trim().min(1).nullable().optional(),
     dueDate: z.string().optional(),
     status: z.enum(['todo', 'done']).optional(),
     startTime: z.string().trim().nullable().optional().or(z.literal('')).transform(v => v === '' ? null : v),

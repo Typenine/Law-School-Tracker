@@ -3,7 +3,7 @@ import path from 'path';
 import { Pool } from 'pg';
 import { randomUUID as nodeRandomUUID } from 'crypto';
 import { put, list, del } from '@vercel/blob';
-import { Course, NewCourseInput, NewSessionInput, NewTaskInput, StudySession, Task, UpdateCourseInput, UpdateTaskInput } from './types';
+import { Course, CourseDocument, NewCourseDocumentInput, NewCourseInput, NewSessionInput, NewTaskInput, StudySession, Task, UpdateCourseInput, UpdateTaskInput } from './types';
 
 function resolveDbUrl(): string | null {
   // Prefer DATABASE_URL, else fall back to Vercel Postgres envs
@@ -324,6 +324,79 @@ export async function deleteCourse(id: string): Promise<boolean> {
   });
 }
 
+// Course documents (syllabus, slides, etc.)
+function rowToCourseDocument(r: any): CourseDocument {
+  return {
+    id: r.id, courseId: r.course_id, title: r.title, filename: r.filename,
+    mimeType: r.mime_type, size: r.size, url: r.url,
+    category: (r.category as any) || 'other',
+    createdAt: new Date(r.created_at).toISOString(),
+  };
+}
+
+export async function listCourseDocuments(courseId: string): Promise<CourseDocument[]> {
+  if (DB_URL) {
+    const p = getPool();
+    const res = await p.query(
+      `SELECT id, course_id, title, filename, mime_type, size, url, category, created_at FROM course_documents WHERE course_id=$1 ORDER BY created_at DESC`,
+      [courseId],
+    );
+    return res.rows.map(rowToCourseDocument);
+  }
+  const json = await readJson();
+  return (json.documents || [])
+    .filter(d => d.courseId === courseId)
+    .sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
+}
+
+export async function getCourseDocument(id: string): Promise<CourseDocument | null> {
+  if (DB_URL) {
+    const p = getPool();
+    const res = await p.query(
+      `SELECT id, course_id, title, filename, mime_type, size, url, category, created_at FROM course_documents WHERE id=$1`,
+      [id],
+    );
+    if (!res.rowCount) return null;
+    return rowToCourseDocument(res.rows[0]);
+  }
+  const json = await readJson();
+  return (json.documents || []).find(d => d.id === id) || null;
+}
+
+export async function createCourseDocument(input: NewCourseDocumentInput): Promise<CourseDocument> {
+  const now = new Date().toISOString();
+  const category = input.category || 'other';
+  if (DB_URL) {
+    const p = getPool();
+    const id = uuid();
+    const res = await p.query(
+      `INSERT INTO course_documents (id, course_id, title, filename, mime_type, size, url, category, created_at)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+       RETURNING id, course_id, title, filename, mime_type, size, url, category, created_at`,
+      [id, input.courseId, input.title, input.filename, input.mimeType, input.size, input.url, category, new Date(now)],
+    );
+    return rowToCourseDocument(res.rows[0]);
+  }
+  return mutateJson(db => {
+    const doc: CourseDocument = { id: uuid(), createdAt: now, ...input, category };
+    db.documents = [...(db.documents || []), doc];
+    return doc;
+  });
+}
+
+export async function deleteCourseDocument(id: string): Promise<boolean> {
+  if (DB_URL) {
+    const p = getPool();
+    const res = await p.query(`DELETE FROM course_documents WHERE id=$1`, [id]);
+    return res.rowCount > 0;
+  }
+  return mutateJson(db => {
+    const before = (db.documents || []).length;
+    db.documents = (db.documents || []).filter(d => d.id !== id);
+    return db.documents.length < before;
+  });
+}
+
 // One-time helper to migrate JSON/Blob courses into DB if DB is empty
 export async function migrateCoursesToDbIfEmpty() {
   if (!DB_URL) return;
@@ -490,6 +563,9 @@ async function applySchema(): Promise<void> {
     // always read these, but there was nowhere to store them.
     `ALTER TABLE tasks ADD COLUMN IF NOT EXISTS original_page_ranges text`,
     `ALTER TABLE tasks ADD COLUMN IF NOT EXISTS remaining_page_ranges text`,
+    // Real reference to courses(id), so renaming a course doesn't orphan its
+    // tasks the way matching on the free-text `course` label used to.
+    `ALTER TABLE tasks ADD COLUMN IF NOT EXISTS course_id uuid REFERENCES courses(id) ON DELETE SET NULL`,
     `CREATE TABLE IF NOT EXISTS courses (
        id uuid PRIMARY KEY,
        code text,
@@ -517,6 +593,17 @@ async function applySchema(): Promise<void> {
     `ALTER TABLE courses ADD COLUMN IF NOT EXISTS override_enabled boolean`,
     `ALTER TABLE courses ADD COLUMN IF NOT EXISTS override_mpp double precision`,
     `ALTER TABLE courses ADD COLUMN IF NOT EXISTS default_activity text`,
+    `CREATE TABLE IF NOT EXISTS course_documents (
+       id uuid PRIMARY KEY,
+       course_id uuid NOT NULL REFERENCES courses(id) ON DELETE CASCADE,
+       title text NOT NULL,
+       filename text NOT NULL,
+       mime_type text NOT NULL,
+       size integer NOT NULL,
+       url text NOT NULL,
+       created_at timestamptz NOT NULL DEFAULT now()
+     )`,
+    `ALTER TABLE course_documents ADD COLUMN IF NOT EXISTS category text NOT NULL DEFAULT 'other'`,
     // Settings key/value store (single-user)
     `CREATE TABLE IF NOT EXISTS settings (
        key text PRIMARY KEY,
@@ -596,7 +683,7 @@ function uuid() {
   return (globalThis as any).crypto?.randomUUID?.() || nodeRandomUUID();
 }
 
-type JsonStore = { tasks: Task[]; sessions: StudySession[]; courses: Course[]; scheduleBlocks?: Array<{ id: string; taskId: string; day: string; plannedMinutes: number; guessed?: boolean; title: string; course: string; pages?: number | null; priority?: number | null; catchup?: boolean }>; settings?: Record<string, any> };
+type JsonStore = { tasks: Task[]; sessions: StudySession[]; courses: Course[]; documents?: CourseDocument[]; scheduleBlocks?: Array<{ id: string; taskId: string; day: string; plannedMinutes: number; guessed?: boolean; title: string; course: string; pages?: number | null; priority?: number | null; catchup?: boolean }>; settings?: Record<string, any> };
 
 async function readJson(): Promise<JsonStore> {
   // On Vercel without DB, we REQUIRE Blob store. No local fallback.
@@ -618,6 +705,7 @@ async function readJson(): Promise<JsonStore> {
         if (!('tasks' in data)) data.tasks = [];
         if (!('sessions' in data)) data.sessions = [];
         if (!('scheduleBlocks' in data)) data.scheduleBlocks = [];
+        if (!('documents' in data)) data.documents = [];
         if (!('settings' in data)) data.settings = {};
         return data;
       }
@@ -646,11 +734,12 @@ async function readJson(): Promise<JsonStore> {
         if (!('tasks' in data)) data.tasks = [];
         if (!('sessions' in data)) data.sessions = [];
         if (!('scheduleBlocks' in data)) data.scheduleBlocks = [];
+        if (!('documents' in data)) data.documents = [];
         if (!('settings' in data)) data.settings = {};
         return data;
       }
       // Initialize if no existing blob
-      const empty: JsonStore = { tasks: [], sessions: [], courses: [], scheduleBlocks: [], settings: {} };
+      const empty: JsonStore = { tasks: [], sessions: [], courses: [], documents: [], scheduleBlocks: [], settings: {} };
       await writeJson(empty);
       return empty;
     } catch (err) {
@@ -668,11 +757,12 @@ async function readJson(): Promise<JsonStore> {
     if (!('tasks' in data)) data.tasks = [];
     if (!('sessions' in data)) data.sessions = [];
     if (!('scheduleBlocks' in data)) data.scheduleBlocks = [];
+    if (!('documents' in data)) data.documents = [];
     if (!('settings' in data)) data.settings = {};
     return data as JsonStore;
   } catch (e: any) {
     if (e.code === 'ENOENT') {
-      const empty: JsonStore = { tasks: [], sessions: [], courses: [], scheduleBlocks: [], settings: {} };
+      const empty: JsonStore = { tasks: [], sessions: [], courses: [], documents: [], scheduleBlocks: [], settings: {} };
       await fs.mkdir(path.dirname(DATA_FILE), { recursive: true });
       await fs.writeFile(DATA_FILE, JSON.stringify(empty, null, 2), 'utf8');
       return empty;
@@ -689,7 +779,7 @@ async function writeJson(data: JsonStore) {
     }
     try {
       const rev = Date.now();
-      const payload = { tasks: data.tasks || [], sessions: data.sessions || [], courses: data.courses || [], scheduleBlocks: data.scheduleBlocks || [], settings: data.settings || {}, __rev: rev } as any;
+      const payload = { tasks: data.tasks || [], sessions: data.sessions || [], courses: data.courses || [], documents: data.documents || [], scheduleBlocks: data.scheduleBlocks || [], settings: data.settings || {}, __rev: rev } as any;
       await put('db.json', JSON.stringify(payload, null, 2), {
         access: 'public',
         contentType: 'application/json',
@@ -729,7 +819,7 @@ async function writeJson(data: JsonStore) {
   }
   // Local file storage (development or fallback)
   await fs.mkdir(path.dirname(DATA_FILE), { recursive: true });
-  const payload = { tasks: data.tasks || [], sessions: data.sessions || [], courses: data.courses || [], scheduleBlocks: data.scheduleBlocks || [], settings: data.settings || {}, __rev: Date.now() } as any;
+  const payload = { tasks: data.tasks || [], sessions: data.sessions || [], courses: data.courses || [], documents: data.documents || [], scheduleBlocks: data.scheduleBlocks || [], settings: data.settings || {}, __rev: Date.now() } as any;
   await fs.writeFile(DATA_FILE, JSON.stringify(payload, null, 2), 'utf8');
 }
 
@@ -880,6 +970,7 @@ function rowToTask(r: any): Task {
     id: r.id,
     title: r.title,
     course: r.course,
+    courseId: r.course_id ?? null,
     dueDate: new Date(r.due_date).toISOString(),
     status: r.status,
     createdAt: new Date(r.created_at).toISOString(),
@@ -906,8 +997,8 @@ function rowToTask(r: any): Task {
 export async function listTasks(overridePool?: Pool): Promise<Task[]> {
   if (DB_URL) {
     const p = overridePool || getPool();
-    type TaskRow = { id: string; title: string; course: string | null; due_date: Date | string; status: 'todo' | 'done'; created_at: Date | string; estimated_minutes: number | null; estimate_origin: string | null; actual_minutes: number | null; priority: number | null; notes: string | null; attachments: string[] | null; depends_on: string[] | null; tags: string[] | null; term: string | null; completed_at: Date | string | null; focus: number | null; pages_read: number | null; activity: string | null; start_time: string | null; end_time: string | null };
-    const res = await p.query(`SELECT id, title, course, due_date, status, created_at, estimated_minutes, estimate_origin, actual_minutes, priority, notes, attachments, depends_on, tags, term, completed_at, focus, pages_read, activity, start_time, end_time, original_page_ranges, remaining_page_ranges FROM tasks ORDER BY due_date ASC, COALESCE(start_time,'99:99') ASC`);
+    type TaskRow = { id: string; title: string; course: string | null; course_id: string | null; due_date: Date | string; status: 'todo' | 'done'; created_at: Date | string; estimated_minutes: number | null; estimate_origin: string | null; actual_minutes: number | null; priority: number | null; notes: string | null; attachments: string[] | null; depends_on: string[] | null; tags: string[] | null; term: string | null; completed_at: Date | string | null; focus: number | null; pages_read: number | null; activity: string | null; start_time: string | null; end_time: string | null };
+    const res = await p.query(`SELECT id, title, course, course_id, due_date, status, created_at, estimated_minutes, estimate_origin, actual_minutes, priority, notes, attachments, depends_on, tags, term, completed_at, focus, pages_read, activity, start_time, end_time, original_page_ranges, remaining_page_ranges FROM tasks ORDER BY due_date ASC, COALESCE(start_time,'99:99') ASC`);
     return (res.rows as any[]).map(rowToTask);
   }
   const db = await readJson();
@@ -920,14 +1011,14 @@ export async function createTask(input: NewTaskInput): Promise<Task> {
     const p = getPool();
     const id = uuid();
     const res = await p.query(
-      `INSERT INTO tasks (id, title, course, due_date, status, created_at, estimated_minutes, estimate_origin, priority, notes, attachments, depends_on, tags, term, start_time, end_time, pages_read, activity, original_page_ranges, remaining_page_ranges)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20)
-       RETURNING id, title, course, due_date, status, created_at, estimated_minutes, estimate_origin, actual_minutes, completed_at, focus, priority, notes, attachments, depends_on, tags, term, start_time, end_time, pages_read, activity, original_page_ranges, remaining_page_ranges`,
-      [id, input.title, input.course ?? null, new Date(input.dueDate), input.status ?? 'todo', new Date(now), input.estimatedMinutes ?? null, (input as any).estimateOrigin ?? null, input.priority ?? null, input.notes ?? null, input.attachments ?? null, input.dependsOn ?? null, input.tags ?? null, input.term ?? null, (input as any).startTime ?? null, (input as any).endTime ?? null, (input as any).pagesRead ?? null, (input as any).activity ?? null, input.originalPageRanges ?? null, input.remainingPageRanges ?? null]
+      `INSERT INTO tasks (id, title, course, course_id, due_date, status, created_at, estimated_minutes, estimate_origin, priority, notes, attachments, depends_on, tags, term, start_time, end_time, pages_read, activity, original_page_ranges, remaining_page_ranges)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21)
+       RETURNING id, title, course, course_id, due_date, status, created_at, estimated_minutes, estimate_origin, actual_minutes, completed_at, focus, priority, notes, attachments, depends_on, tags, term, start_time, end_time, pages_read, activity, original_page_ranges, remaining_page_ranges`,
+      [id, input.title, input.course ?? null, input.courseId ?? null, new Date(input.dueDate), input.status ?? 'todo', new Date(now), input.estimatedMinutes ?? null, (input as any).estimateOrigin ?? null, input.priority ?? null, input.notes ?? null, input.attachments ?? null, input.dependsOn ?? null, input.tags ?? null, input.term ?? null, (input as any).startTime ?? null, (input as any).endTime ?? null, (input as any).pagesRead ?? null, (input as any).activity ?? null, input.originalPageRanges ?? null, input.remainingPageRanges ?? null]
     );
     return rowToTask(res.rows[0]);
   }
-  const task: Task = { id: uuid(), title: input.title, course: input.course ?? null, dueDate: input.dueDate, status: input.status ?? 'todo', createdAt: now, startTime: (input as any).startTime ?? null, endTime: (input as any).endTime ?? null, estimatedMinutes: input.estimatedMinutes ?? null, estimateOrigin: (input as any).estimateOrigin ?? null, priority: input.priority ?? null, notes: input.notes ?? null, attachments: input.attachments ?? null, dependsOn: input.dependsOn ?? null, tags: input.tags ?? null, term: input.term ?? null, pagesRead: (input as any).pagesRead ?? null, activity: (input as any).activity ?? null, originalPageRanges: input.originalPageRanges ?? null, remainingPageRanges: input.remainingPageRanges ?? null };
+  const task: Task = { id: uuid(), title: input.title, course: input.course ?? null, courseId: input.courseId ?? null, dueDate: input.dueDate, status: input.status ?? 'todo', createdAt: now, startTime: (input as any).startTime ?? null, endTime: (input as any).endTime ?? null, estimatedMinutes: input.estimatedMinutes ?? null, estimateOrigin: (input as any).estimateOrigin ?? null, priority: input.priority ?? null, notes: input.notes ?? null, attachments: input.attachments ?? null, dependsOn: input.dependsOn ?? null, tags: input.tags ?? null, term: input.term ?? null, pagesRead: (input as any).pagesRead ?? null, activity: (input as any).activity ?? null, originalPageRanges: input.originalPageRanges ?? null, remainingPageRanges: input.remainingPageRanges ?? null };
   await mutateJson(db => { db.tasks.push(task); });
   return task;
 }
@@ -941,6 +1032,7 @@ export async function updateTask(id: string, patch: UpdateTaskInput): Promise<Ta
     let idx = 1;
     if (patch.title !== undefined) { fields.push(`title = $${idx++}`); values.push(patch.title); }
     if (patch.course !== undefined) { fields.push(`course = $${idx++}`); values.push(patch.course); }
+    if (patch.courseId !== undefined) { fields.push(`course_id = $${idx++}`); values.push(patch.courseId); }
     if (patch.dueDate !== undefined) { fields.push(`due_date = $${idx++}`); values.push(new Date(patch.dueDate)); }
     if (patch.status !== undefined) { fields.push(`status = $${idx++}`); values.push(patch.status); }
     if (patch.estimatedMinutes !== undefined) { fields.push(`estimated_minutes = $${idx++}`); values.push(patch.estimatedMinutes); }
@@ -965,12 +1057,12 @@ export async function updateTask(id: string, patch: UpdateTaskInput): Promise<Ta
     if ((patch as any).startTime !== undefined) { fields.push(`start_time = $${idx++}`); values.push((patch as any).startTime); }
     if ((patch as any).endTime !== undefined) { fields.push(`end_time = $${idx++}`); values.push((patch as any).endTime); }
     if (!fields.length) {
-      const cur = await p.query(`SELECT id, title, course, due_date, status, created_at, estimated_minutes, estimate_origin, actual_minutes, completed_at, focus, priority, notes, attachments, depends_on, tags, term, start_time, end_time, pages_read, activity, original_page_ranges, remaining_page_ranges FROM tasks WHERE id=$1`, [id]);
+      const cur = await p.query(`SELECT id, title, course, course_id, due_date, status, created_at, estimated_minutes, estimate_origin, actual_minutes, completed_at, focus, priority, notes, attachments, depends_on, tags, term, start_time, end_time, pages_read, activity, original_page_ranges, remaining_page_ranges FROM tasks WHERE id=$1`, [id]);
       if (!cur.rowCount) return null;
       const r = cur.rows[0];
       return rowToTask(r);
     }
-    const q = `UPDATE tasks SET ${fields.join(', ')} WHERE id = $${idx} RETURNING id, title, course, due_date, status, created_at, estimated_minutes, estimate_origin, actual_minutes, completed_at, focus, priority, notes, attachments, depends_on, tags, term, start_time, end_time, pages_read, activity, original_page_ranges, remaining_page_ranges`;
+    const q = `UPDATE tasks SET ${fields.join(', ')} WHERE id = $${idx} RETURNING id, title, course, course_id, due_date, status, created_at, estimated_minutes, estimate_origin, actual_minutes, completed_at, focus, priority, notes, attachments, depends_on, tags, term, start_time, end_time, pages_read, activity, original_page_ranges, remaining_page_ranges`;
     values.push(id);
     const res = await p.query(q, values);
     if (!res.rowCount) return null;

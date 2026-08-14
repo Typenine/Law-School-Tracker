@@ -643,8 +643,12 @@ export default function NotesPage() {
           loadNotebooks(controller.signal),
           loadSections(controller.signal),
         ]);
+        // A course page can deep-link straight into its notebook.
+        const wantedNotebook = new URLSearchParams(window.location.search).get('notebookId') || '';
         const remembered = window.localStorage.getItem('notesLastNotebook') || '';
-        const first = loadedNotebooks.find(item => item.id === remembered) || loadedNotebooks[0];
+        const first = loadedNotebooks.find(item => item.id === wantedNotebook)
+          || loadedNotebooks.find(item => item.id === remembered)
+          || loadedNotebooks[0];
         if (first) setNotebookId(first.id);
       } catch (err) {
         setError(controller.signal.aborted
