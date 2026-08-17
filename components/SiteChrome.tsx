@@ -13,6 +13,7 @@ import { courseInTerm } from '@/lib/semester';
 import ConnectivityStatus from '@/components/ConnectivityStatus';
 import CourseCommandCenter from '@/components/CourseCommandCenter';
 import TaskDeepLinkDrawer from '@/components/TaskDeepLinkDrawer';
+import WeeklyReviewSummary from '@/components/WeeklyReviewSummary';
 
 type NavItem = { href: string; icon: string; label: string; count?: 'tasks' | 'courses' };
 
@@ -132,10 +133,7 @@ export default function SiteChrome({ children, brandMark }: { children: React.Re
       const hours = Number(settings.weeklyGoalHours);
       if (hours > 0) { setTargetMinutes(Math.round(hours * 60)); return; }
       setTargetMinutes(1440);
-    } catch {
-      // Keep the last server-confirmed/default value; localStorage is no longer
-      // authoritative for durable planning settings.
-    }
+    } catch {}
   }, []);
 
   useEffect(() => {
@@ -193,7 +191,11 @@ export default function SiteChrome({ children, brandMark }: { children: React.Re
         <div className="lst-heading"><h1 className="lst-title">{title}</h1><p className="lst-sub">{subtitleOverride || defaultSubtitle}</p></div>
         <div className="lst-actions"><button className="lst-search" type="button" onClick={openCommandPalette}><span>Search or jump to…</span><kbd>⌘K</kbd></button><Link href={addHref} className="lst-add">{addLabel}</Link></div>
       </header>
-      <main className="lst-content">{courseDetail ? <CourseCommandCenter courseId={decodeURIComponent(courseDetail[1])} /> : null}{children}</main>
+      <main className="lst-content">
+        {courseDetail ? <CourseCommandCenter courseId={decodeURIComponent(courseDetail[1])} /> : null}
+        {pathname === '/review' ? <WeeklyReviewSummary /> : null}
+        {children}
+      </main>
     </div>
     <ConnectivityStatus />
     <Suspense fallback={null}><TaskDeepLinkDrawer /></Suspense>
