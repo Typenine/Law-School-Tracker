@@ -9,7 +9,12 @@ export async function GET() {
     await ensureSchema();
     await ensureTaskV2Schema();
     const [workspace, courses] = await Promise.all([getTaskWorkspace(), listCourses()]);
-    return Response.json({ ...workspace, courses });
+    const workspaceVersion = new Date().toISOString();
+    return Response.json({
+      ...workspace,
+      tasks: workspace.tasks.map(task => ({ ...task, updatedAt: workspaceVersion })),
+      courses,
+    });
   } catch (error) {
     console.error('[task workspace]', error);
     return Response.json({ error: 'Unable to load the task workspace.' }, { status: 500 });
