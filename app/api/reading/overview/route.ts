@@ -1,5 +1,6 @@
 import { NextRequest } from 'next/server';
 import { listAiNotes } from '@/lib/aiNotes';
+import { activeSemesterId } from '@/lib/collections';
 import { ensureSchema } from '@/lib/storage';
 import { ensureTaskV2Schema, getTaskWorkspace } from '@/lib/taskV2';
 
@@ -10,9 +11,11 @@ export async function GET(req: NextRequest) {
   await ensureSchema();
   await ensureTaskV2Schema();
   const includeDone = req.nextUrl.searchParams.get('includeDone') === 'true';
-  const [workspace, notes] = await Promise.all([
+  const showAllTerms = req.nextUrl.searchParams.get('allTerms') === 'true';
+  const [workspace, notes, activeTerm] = await Promise.all([
     getTaskWorkspace(),
     listAiNotes({ limit: 500 }).catch(() => []),
+    activeSemesterId(),
   ]);
   const notesByTask = new Map<string, typeof notes>();
   for (const note of notes) {
@@ -22,6 +25,7 @@ export async function GET(req: NextRequest) {
     notesByTask.set(note.taskId, list);
   }
   const readings = workspace.tasks
+    .filter(task => showAllTerms || !activeTerm || !task.term || task.term === activeTerm)
     .filter(task => task.workflowState !== 'canceled')
     .filter(task => includeDone || task.workflowState !== 'done')
     .filter(task => Boolean(task.reading))
@@ -55,6 +59,7 @@ export async function GET(req: NextRequest) {
 
   return Response.json({
     generatedAt: new Date().toISOString(),
+    activeTerm,
     summary: {
       readings: readings.filter(r => r.workflowState !== 'done').length,
       assignedPages: readings.reduce((sum, r) => sum + (r.assignedPages || 0), 0),
