@@ -1,20 +1,15 @@
--- Read-only Postgres role for the ChatGPT connector (app/api/gpt/*).
+-- Read-only Postgres role for the ChatGPT connector's READ operations.
 --
--- The connector's routes are all read-only in application code already, but
--- that is only a guarantee until the next bug. This role makes it a
--- guarantee the database enforces: even a coding mistake that tried to
--- INSERT/UPDATE/DELETE through this role would be rejected by Postgres.
+-- Search, retrieval, workspace overview, assignments, courses, sessions and
+-- notebook navigation use GPT_DATABASE_URL when it is configured. The narrow
+-- write actions (create a study note, append to a note, link an assignment)
+-- intentionally use the application's normal database connection instead and
+-- are separately constrained by their route handlers. There is no GPT delete
+-- action.
 --
--- Run this once against your production database (e.g. via the Neon /
--- Supabase / Vercel Postgres SQL console, or `psql "$DATABASE_URL" -f
--- scripts/gpt-readonly-role.sql` after filling in a real password below).
--- Then set GPT_DATABASE_URL in your Vercel project to a connection string
--- using this role's credentials, on the same host/database as DATABASE_URL.
---
--- Safe to re-run: CREATE ROLE is the only non-idempotent statement, guarded
--- below. Everything else (GRANT) can be re-applied freely, which also means
--- re-running this after adding a new table the connector should read is the
--- way to extend its access.
+-- Run this once against production after filling in a real password, then set
+-- GPT_DATABASE_URL in Vercel to a connection string using this role on the same
+-- host/database as DATABASE_URL.
 
 DO $$
 BEGIN
@@ -27,8 +22,9 @@ $$;
 GRANT CONNECT ON DATABASE current_database() TO law_school_gpt_ro;
 GRANT USAGE ON SCHEMA public TO law_school_gpt_ro;
 
--- Exactly the tables the GPT connector's routes read from. Not settings,
--- schedule_blocks, or ai_note_migrations - the connector never touches those.
+-- Exactly the user-data tables needed by connector reads. The semantic-search
+-- embedding cache is derived data and is managed through the normal app role,
+-- so this SELECT-only role does not need access to it.
 GRANT SELECT ON
   tasks,
   courses,
@@ -37,6 +33,3 @@ GRANT SELECT ON
   ai_note_notebooks,
   ai_note_sections
 TO law_school_gpt_ro;
-
--- No sequences to grant: every id here is a client-generated UUID, and this
--- role never writes anyway.
