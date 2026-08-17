@@ -1,5 +1,6 @@
 import { NextRequest } from 'next/server';
 import { ensureSchema, listTasks } from '@/lib/storage';
+import { clearStoredTaskTimer } from '@/lib/taskTimersV2';
 import { completeTaskWithoutSession, ensureTaskV2Schema, reopenTask } from '@/lib/taskV2';
 import { createHmac } from 'crypto';
 
@@ -30,6 +31,9 @@ export async function GET(req: NextRequest, { params }: { params: { id: string }
   if (!task) return new Response('Not found', { status: 404 });
   const nextStatus = task.status === 'done' ? 'todo' : 'done';
   if (task.status === 'done') await reopenTask(id);
-  else await completeTaskWithoutSession(id);
+  else {
+    await completeTaskWithoutSession(id);
+    await clearStoredTaskTimer(id);
+  }
   return Response.redirect(`${origin}/?toggled=${encodeURIComponent(id)}&status=${nextStatus}`, 302);
 }
