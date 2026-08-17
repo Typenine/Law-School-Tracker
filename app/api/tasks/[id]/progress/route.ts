@@ -2,6 +2,7 @@ import { NextRequest } from 'next/server';
 import { z } from 'zod';
 import { ensureSchema, listScheduleBlocks } from '@/lib/storage';
 import { recordTaskProgress } from '@/lib/taskProgress';
+import { clearStoredTaskTimer } from '@/lib/taskTimersV2';
 import { captureCompletionSnapshot, ensureTaskV2Schema, markWorkflowAfterProgress, reconcileTaskSchedule } from '@/lib/taskV2';
 
 export const dynamic = 'force-dynamic';
@@ -28,6 +29,7 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
     const result = await recordTaskProgress(params.id, parsed.data);
     const done = result.task.status === 'done';
     await markWorkflowAfterProgress(params.id, done);
+    if (done) await clearStoredTaskTimer(params.id);
     if (!done && !parsed.data.moveToDay && hadPlan) await reconcileTaskSchedule(params.id, { onlyIfScheduled: true });
     return Response.json({ ...result, scheduleReconciled: !done && !parsed.data.moveToDay && hadPlan });
   } catch (error: any) {
