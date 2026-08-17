@@ -455,7 +455,7 @@ function zscoreTrim(values: number[]): number[] {
   return values.filter(v => Math.abs(v - mean) <= 2 * sd);
 }
 
-async function recomputeLearnedMppForCourse(courseTitle: string): Promise<void> {
+export async function recomputeLearnedMppForCourse(courseTitle: string): Promise<void> {
   if (!courseTitle) return;
   const alpha = 0.3;
   if (DB_URL) {

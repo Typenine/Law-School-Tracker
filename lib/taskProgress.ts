@@ -4,7 +4,7 @@ import { Pool } from 'pg';
 import type { StudySession, Task } from './types';
 import { countPages, formatPageRanges, parsePageRanges, subtractPages, validateCompletedPages } from './pageRanges';
 import { canonicalPageRanges, courseReadingPace, readingMetrics, taskOriginalRanges, taskRemainingRanges } from './reading';
-import { createSession, listCourses, listScheduleBlocks, listSessions, listTasks, replaceAllScheduleBlocks, updateTask } from './storage';
+import { createSession, listCourses, listScheduleBlocks, listSessions, listTasks, recomputeLearnedMppForCourse, replaceAllScheduleBlocks, updateTask } from './storage';
 
 export type TaskProgressInput = {
   mode: 'partial' | 'finish';
@@ -76,7 +76,7 @@ async function recordDb(taskId: string, input: TaskProgressInput) {
     const remainingBefore = taskRemainingRanges(task);
     const isReading = task.activity === 'reading' || Boolean(original || remainingBefore);
     let completedInput = canonicalPageRanges(input.pagesCompleted) || null;
-    if (isReading && input.mode === 'finish' && !completedInput) completedInput = remainingBefore || original;
+    if (isReading && input.mode === 'finish') completedInput = remainingBefore || original;
     let remainingAfter = remainingBefore;
     let pagesThisSession = 0;
     if (isReading && completedInput && remainingBefore) {
@@ -102,9 +102,12 @@ async function recordDb(taskId: string, input: TaskProgressInput) {
       await client.query(`INSERT INTO schedule_blocks (id, task_id, day, planned_minutes, guessed, title, course, pages, priority, catchup) VALUES ($1,$2,$3::date,$4,$5,$6,$7,$8,$9,FALSE)`, [`progress-${randomUUID()}`, taskId, input.moveToDay, estimated, pace.source === 'default', task.title, task.course || '', remainingPages || null, task.priority ?? null]);
     }
     await client.query('COMMIT');
+    if (pagesThisSession > 0 && task.course) await recomputeLearnedMppForCourse(task.course).catch(() => undefined);
     const updated = rowToTask(updatedRes.rows[0]);
     const session = sessionFromRow(sessionRes.rows[0]);
-    return { task: updated, session, reading: readingMetrics(updated, [{ ...session }], course) };
+    const reading = readingMetrics(updated, [{ ...session }], course);
+    reading.loggedMinutes = totalLogged;
+    return { task: updated, session, reading };
   } catch (error) {
     await client.query('ROLLBACK').catch(() => undefined);
     throw error;
@@ -123,7 +126,7 @@ async function recordFallback(taskId: string, input: TaskProgressInput) {
   const remainingBefore = taskRemainingRanges(task);
   const isReading = task.activity === 'reading' || Boolean(original || remainingBefore);
   let completedInput = canonicalPageRanges(input.pagesCompleted) || null;
-  if (isReading && input.mode === 'finish' && !completedInput) completedInput = remainingBefore || original;
+  if (isReading && input.mode === 'finish') completedInput = remainingBefore || original;
   let remainingAfter = remainingBefore;
   let pagesThisSession = 0;
   if (isReading && completedInput && remainingBefore) {
