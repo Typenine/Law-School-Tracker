@@ -1,0 +1,28 @@
+name: Finalize reading tracker v2
+
+on:
+  push:
+    branches: [feature/reading-tracker-v2]
+
+permissions:
+  contents: write
+
+jobs:
+  apply:
+    if: ${{ github.actor != 'github-actions[bot]' }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: feature/reading-tracker-v2
+          fetch-depth: 0
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - run: python scripts/finalize_reading_v2.py
+      - run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add lib/storage.ts lib/taskProgress.ts components/SiteChrome.tsx
+          git commit -m "Harden reading progress and navigation"
+          git push origin HEAD:feature/reading-tracker-v2
