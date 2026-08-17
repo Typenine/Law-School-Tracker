@@ -14,17 +14,6 @@ function bearerToken(req: NextRequest): string | null {
   return match?.[1]?.trim() || null;
 }
 
-// ---------------------------------------------------------------------------
-// Failed-auth throttle
-//
-// A bad bearer token is rejected in constant time, but nothing stopped a
-// script from just trying again and again. This tracks failures per client
-// IP in memory and locks that IP out for a while once it crosses a threshold.
-// It resets on cold start and is per-instance, not global, so on Vercel it is
-// a best-effort speed bump rather than a hard guarantee - but it still stops
-// a naive brute-force script hitting a warm instance, which is the realistic
-// threat here.
-// ---------------------------------------------------------------------------
 const FAILED_AUTH_WINDOW_MS = 5 * 60 * 1000;
 const FAILED_AUTH_MAX = 20;
 const failuresByClient = new Map<string, { count: number; windowStart: number }>();
@@ -53,9 +42,6 @@ function recordFailure(key: string): void {
   } else {
     entry.count += 1;
   }
-  // Bound memory use: an unbounded map of client keys is itself a resource
-  // for an attacker to grow, so sweep stale entries once the map gets large
-  // rather than tracking every IP forever.
   if (failuresByClient.size > 1000) {
     for (const [k, v] of failuresByClient) {
       if (now - v.windowStart > FAILED_AUTH_WINDOW_MS) failuresByClient.delete(k);
@@ -67,8 +53,9 @@ function clearFailures(key: string): void {
   failuresByClient.delete(key);
 }
 
-function checkBearerToken(req: NextRequest, envVar: string, configured: string | undefined): Response | null {
-  if (!configured) {
+function checkBearerTokens(req: NextRequest, envVar: string, configuredValues: Array<string | undefined>): Response | null {
+  const configured = Array.from(new Set(configuredValues.map(value => value?.trim()).filter((value): value is string => Boolean(value))));
+  if (!configured.length) {
     return Response.json({ error: `${envVar} is not configured.` }, { status: 503 });
   }
   const key = clientKey(req);
@@ -79,7 +66,8 @@ function checkBearerToken(req: NextRequest, envVar: string, configured: string |
     );
   }
   const supplied = bearerToken(req);
-  if (!supplied || !safeEqual(supplied, configured)) {
+  const valid = Boolean(supplied) && configured.some(secret => safeEqual(supplied as string, secret));
+  if (!valid) {
     recordFailure(key);
     return Response.json({ error: 'Unauthorized.' }, { status: 401 });
   }
@@ -88,23 +76,20 @@ function checkBearerToken(req: NextRequest, envVar: string, configured: string |
 }
 
 export function requireGptToken(req: NextRequest): Response | null {
-  const configured = process.env.LAW_SCHOOL_GPT_TOKEN?.trim();
-  return checkBearerToken(req, 'LAW_SCHOOL_GPT_TOKEN', configured);
+  return checkBearerTokens(req, 'LAW_SCHOOL_GPT_TOKEN', [process.env.LAW_SCHOOL_GPT_TOKEN]);
 }
 
 /**
- * Guards the notes-specific GPT endpoints (searchNotes, getNote,
- * listNotebooks). Accepts a dedicated LAW_SCHOOL_NOTES_TOKEN so notes - the
- * most sensitive thing this Action reads - can be scoped to a token separate
- * from the one that lists courses and assignments. Falls back to
- * LAW_SCHOOL_GPT_TOKEN when unset, so existing single-token setups keep
- * working unchanged.
+ * Notes may have a dedicated secret, but the general connector token is always
+ * accepted too. A GPT Action has one authentication configuration for the
+ * whole OpenAPI schema, so setting LAW_SCHOOL_NOTES_TOKEN must not make the
+ * notes operations unreachable from the same connector.
  */
 export function requireNotesToken(req: NextRequest): Response | null {
-  const configured = (
-    process.env.LAW_SCHOOL_NOTES_TOKEN || process.env.LAW_SCHOOL_GPT_TOKEN
-  )?.trim();
-  return checkBearerToken(req, 'LAW_SCHOOL_NOTES_TOKEN', configured);
+  return checkBearerTokens(req, 'LAW_SCHOOL_GPT_TOKEN or LAW_SCHOOL_NOTES_TOKEN', [
+    process.env.LAW_SCHOOL_GPT_TOKEN,
+    process.env.LAW_SCHOOL_NOTES_TOKEN,
+  ]);
 }
 
 export function noStoreJson(data: unknown, init?: ResponseInit): Response {
