@@ -1,7 +1,9 @@
+
 import { NextRequest } from 'next/server';
-import { createTask, ensureSchema, listTasks } from '@/lib/storage';
+import { createTask, ensureSchema, listCourses, listTasks } from '@/lib/storage';
 import { activeSemesterId } from '@/lib/collections';
 import { NewTaskInput } from '@/lib/types';
+import { normalizeReadingTaskInput } from '@/lib/reading';
 import { z } from 'zod';
 
 export const dynamic = 'force-dynamic';
@@ -19,7 +21,7 @@ export async function POST(req: NextRequest) {
     title: z.string().min(1),
     course: z.string().trim().min(1).nullable().optional(),
     courseId: z.string().trim().min(1).nullable().optional(),
-    dueDate: z.string().min(1), // ISO string from client
+    dueDate: z.string().min(1),
     status: z.enum(['todo', 'done']).optional(),
     startTime: z.string().trim().nullable().optional().or(z.literal('')).transform(v => v === '' ? null : v),
     endTime: z.string().trim().nullable().optional().or(z.literal('')).transform(v => v === '' ? null : v),
@@ -38,28 +40,8 @@ export async function POST(req: NextRequest) {
   });
   const parsed = schema.safeParse(await req.json());
   if (!parsed.success) return new Response('Invalid task body', { status: 400 });
-  const body = parsed.data as NewTaskInput;
-  const defaultTerm = body.term ?? await activeSemesterId();
-  const t = await createTask({
-    title: body.title,
-    dueDate: body.dueDate,
-    course: body.course ?? null,
-    courseId: body.courseId ?? null,
-    status: body.status ?? 'todo',
-    startTime: body.startTime ?? null,
-    endTime: body.endTime ?? null,
-    estimatedMinutes: body.estimatedMinutes ?? null,
-    estimateOrigin: (body as any).estimateOrigin ?? null,
-    priority: body.priority ?? null,
-    notes: body.notes ?? null,
-    attachments: body.attachments ?? null,
-    dependsOn: body.dependsOn ?? null,
-    tags: body.tags ?? null,
-    term: defaultTerm ?? null,
-    pagesRead: (body as any).pagesRead ?? null,
-    activity: (body as any).activity ?? null,
-    originalPageRanges: body.originalPageRanges ?? null,
-    remainingPageRanges: body.remainingPageRanges ?? null,
-  });
-  return Response.json({ task: t }, { status: 201 });
+  const normalized = normalizeReadingTaskInput(parsed.data as NewTaskInput, await listCourses());
+  const defaultTerm = normalized.term ?? await activeSemesterId();
+  const task = await createTask({ ...normalized, term: defaultTerm ?? null });
+  return Response.json({ task }, { status: 201 });
 }

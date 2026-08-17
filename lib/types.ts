@@ -22,7 +22,7 @@ export interface Task {
   term?: string | null;
   completedAt?: string | null; // ISO when marked done
   focus?: number | null; // 1-10 focus level when completed
-  pagesRead?: number | null; // pages read for this task
+  pagesRead?: number | null; // assigned page count for reading tasks; session.pagesRead records actual pages completed
   activity?: string | null; // reading|review|outline|practice|other
   // Partial completion tracking
   originalPageRanges?: string | null; // original pages to read, e.g., "241-250, 107-111"
