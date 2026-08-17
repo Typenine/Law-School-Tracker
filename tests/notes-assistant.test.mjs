@@ -13,6 +13,8 @@ const section = async (notebookId, name, parentId = null) =>
   (await app.api('POST', '/api/notes/sections', { notebookId, name, parentId })).body.section;
 const page = async (notebookId, sectionId, title, content = '') =>
   (await app.api('POST', '/api/notes', { notebookId, sectionId, title, content })).body.note;
+const gptWrite = (method, path, body) =>
+  app.api(method, path, body, { Authorization: `Bearer ${app.token}` });
 
 async function library() {
   const fall = await notebook('Fall 2026');
@@ -25,7 +27,7 @@ async function library() {
   await page(fall.id, briefWeek.id, 'Palsgraf brief', 'proximate cause and the zone of danger');
   await page(fall.id, classWeek.id, 'Evidence lecture 1', 'relevance conditioned on fact');
   await page(spring.id, null, 'Erie doctrine', 'vertical choice of law federalism');
-  return { fall, spring, evidence, briefs, briefWeek, classWeek };
+  return { fall, spring, evidence, briefs, classes, briefWeek, classWeek };
 }
 
 describe('what the assistant can see', () => {
@@ -56,6 +58,16 @@ describe('what the assistant can see', () => {
     assert.ok(branch.body.matches.every(n => n.sectionId === briefWeek.id));
   });
 
+  it('searches a parent section recursively and returns a readable location path', async () => {
+    const { briefs, briefWeek } = await library();
+    const { status, body } = await app.gpt(`/api/gpt/notes?sectionId=${briefs.id}&q=proximate&limit=100`);
+    assert.equal(status, 200);
+    assert.deepEqual(body.matches.map(n => n.title), ['Palsgraf brief']);
+    assert.ok(body.searchedSectionIds.includes(briefs.id));
+    assert.ok(body.searchedSectionIds.includes(briefWeek.id));
+    assert.match(body.matches[0].locationPath, /Fall 2026 \/ Evidence \/ Case briefs \/ Week 1/);
+  });
+
   it('can ask for one notebook', async () => {
     const { spring } = await library();
     const { body } = await app.gpt(`/api/gpt/notes?notebookId=${spring.id}&limit=500`);
@@ -69,6 +81,20 @@ describe('what the assistant can see', () => {
       `/api/gpt/notes?notebookId=${fall.id}&sectionId=${classWeek.id}&q=relevance&limit=500`,
     );
     assert.deepEqual(body.matches.map(n => n.title), ['Evidence lecture 1']);
+    assert.ok(['lexical', 'hybrid'].includes(body.retrievalMode));
+  });
+
+  it('filters by source type and topic', async () => {
+    const fall = await notebook('Evidence');
+    const cases = await section(fall.id, 'Case Briefs');
+    await app.api('POST', '/api/notes', {
+      notebookId: fall.id, sectionId: cases.id, title: 'Old Chief', content: 'Rule 403 stipulation', sourceType: 'case-brief', topics: ['403', 'relevance'],
+    });
+    await app.api('POST', '/api/notes', {
+      notebookId: fall.id, sectionId: cases.id, title: 'Lecture', content: 'Rule 403 lecture', sourceType: 'class-notes', topics: ['relevance'],
+    });
+    const { body } = await app.gpt('/api/gpt/notes?q=403&sourceType=case-brief&topic=403&limit=100');
+    assert.deepEqual(body.matches.map(n => n.title), ['Old Chief']);
   });
 
   it('never sees a page in the trash', async () => {
@@ -78,15 +104,28 @@ describe('what the assistant can see', () => {
 
     const { body } = await app.gpt('/api/gpt/notes?q=loquitur&limit=500');
     assert.equal(body.count, 0);
+    assert.equal((await app.gpt(`/api/gpt/notes/${binned.id}`)).status, 404);
+  });
+
+  it('can fetch several full notes at once for synthesis', async () => {
+    const { fall, briefWeek, classWeek } = await library();
+    const first = await page(fall.id, briefWeek.id, 'Brief A', 'first full body');
+    const second = await page(fall.id, classWeek.id, 'Lecture B', 'second full body');
+    const { status, body } = await app.gpt(`/api/gpt/notes/batch?ids=${first.id},${second.id}`);
+    assert.equal(status, 200);
+    assert.equal(body.count, 2);
+    assert.deepEqual(new Set(body.notes.map(note => note.content)), new Set(['first full body', 'second full body']));
+    assert.ok(body.notes.every(note => note.locationPath));
   });
 
   it('publishes a spec that describes how to navigate', async () => {
     const { body } = await app.api('GET', '/api/gpt/openapi');
     const spec = JSON.stringify(body);
     assert.ok(spec.includes('listNotebooks'), 'the hierarchy endpoint is advertised');
-    for (const parameter of ['"notebookId"', '"sectionId"', '"section"', '"taskId"']) {
+    for (const parameter of ['"notebookId"', '"sectionId"', '"section"', '"taskId"', '"sourceType"', '"topic"']) {
       assert.ok(spec.includes(parameter), `the spec documents ${parameter}`);
     }
+    assert.match(body.info.description, /course\/notebook > nested sections > pages/);
   });
 
   it('can go from a reading assignment to the notes on it', async () => {
@@ -142,11 +181,50 @@ describe('what the assistant can see', () => {
     assert.equal((await app.api('GET', '/api/gpt/sessions')).status, 401, 'and it needs the token');
   });
 
+  it('provides a study-planning overview', async () => {
+    const fall = await notebook('Evidence');
+    const classNotes = await section(fall.id, 'Class Notes');
+    await page(fall.id, classNotes.id, 'Recent Evidence Notes', 'character evidence');
+    await app.api('POST', '/api/tasks', {
+      title: 'Evidence reading', course: 'Evidence', dueDate: new Date(Date.now() + 2 * 864e5).toISOString(),
+    });
+    const { status, body } = await app.gpt('/api/gpt/overview?days=7&recentNotes=5');
+    assert.equal(status, 200);
+    assert.ok(body.upcomingAssignments.some(task => task.title === 'Evidence reading'));
+    assert.ok(body.recentNotes.some(note => note.title === 'Recent Evidence Notes'));
+    assert.equal(typeof body.studyLast7Days.totalMinutes, 'number');
+  });
+
+  it('only performs the narrow write actions the connector advertises', async () => {
+    const book = await notebook('Evidence');
+    const outlines = await section(book.id, 'Outlines');
+    const task = await app.api('POST', '/api/tasks', {
+      title: 'Review hearsay', course: 'Evidence', dueDate: new Date(Date.now() + 864e5).toISOString(),
+    });
+    const taskId = task.body?.task?.id || task.body?.id;
+
+    const created = await gptWrite('POST', '/api/gpt/notes/create', {
+      title: 'Generated Hearsay Quiz', notebookId: book.id, sectionId: outlines.id,
+      content: 'Question 1: identify hearsay.', sourceType: 'outline', topics: ['hearsay'],
+    });
+    assert.equal(created.status, 201);
+    const noteId = created.body.note.id;
+
+    const appended = await gptWrite('POST', `/api/gpt/notes/${noteId}/append`, {
+      heading: 'Answer key', content: 'Answer 1: analyze statement, declarant, and purpose.',
+    });
+    assert.equal(appended.status, 200);
+    assert.match(appended.body.note.content, /Answer 1/);
+
+    const linked = await gptWrite('POST', `/api/gpt/notes/${noteId}/link-assignment`, { taskId });
+    assert.equal(linked.status, 200);
+    assert.equal(linked.body.note.taskId, taskId);
+    assert.equal((await app.api('POST', '/api/gpt/notes/create', { title: 'No token', notebookId: book.id, content: 'x' })).status, 401);
+  });
+
   it('publishes a schema that resolves, so the import does not bounce', async () => {
     const { body: spec } = await app.api('GET', '/api/gpt/openapi');
 
-    // A single dangling $ref makes ChatGPT reject the whole Action at import
-    // time, which looks from the outside like the connector returning nothing.
     const refs = [];
     const walk = (node) => {
       if (!node || typeof node !== 'object') return;
@@ -168,7 +246,6 @@ describe('what the assistant can see', () => {
       }
     }
 
-    // Every operation the assistant can call needs a unique id.
     const ids = [];
     for (const item of Object.values(spec.paths)) {
       for (const operation of Object.values(item)) {
@@ -179,14 +256,15 @@ describe('what the assistant can see', () => {
     assert.equal(new Set(ids).size, ids.length, `duplicate operationId in ${ids.join(', ')}`);
     assert.deepEqual(
       ids.sort(),
-      ['getNote', 'listAssignments', 'listCourses', 'listNotebooks', 'listStudySessions', 'searchNotes'],
+      [
+        'appendToNote', 'createStudyNote', 'getNote', 'getNotes', 'getWorkspaceOverview',
+        'linkNoteToAssignment', 'listAssignments', 'listCourses', 'listNotebooks',
+        'listStudySessions', 'searchNotes',
+      ],
     );
   });
 
   it('advertises a callback URL the assistant can actually reach', async () => {
-    // Behind a proxy the request origin is not the public one. Whatever lands
-    // in `servers` is what ChatGPT calls, so it has to follow the forwarded
-    // headers rather than the socket this process was handed.
     const response = await fetch(`${app.base}/api/gpt/openapi`, {
       headers: { 'x-forwarded-host': 'law-school-tracker.example.app', 'x-forwarded-proto': 'https' },
     });
