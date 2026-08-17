@@ -75,8 +75,8 @@ async function spawnApp(port, url) {
   };
 }
 
-/** Every table the notes feature owns. */
-const NOTES_TABLES = ['ai_notes', 'ai_note_sections', 'ai_note_notebooks'];
+/** Every table the notes feature owns, including the derived semantic index. */
+const NOTES_TABLES = ['ai_note_embedding_chunks', 'ai_notes', 'ai_note_sections', 'ai_note_notebooks'];
 
 export async function startApp() {
   const url = connectionString();
