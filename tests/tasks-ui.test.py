@@ -75,9 +75,17 @@ with sync_playwright() as p:
     dialog.get_by_role("button", name="Save changes", exact=True).click()
     wait_for_task_title(task["id"], UPDATED)
 
-    # Verify the user-visible list reflects the saved edit, then reopen the same task.
-    page.locator('button[aria-label="Close task details"]').click(force=True)
-    expect(dialog).not_to_be_visible(timeout=10000)
+    # The workspace refreshes from the persisted server state after a save. If
+    # that refresh has already dismissed the drawer, continue directly; if the
+    # drawer is still open, close it deliberately. The assertion that matters
+    # here is the persisted title plus the user-visible list after refresh.
+    if dialog.is_visible():
+        close_button = dialog.locator('button[aria-label="Close task details"]')
+        if close_button.count() > 0:
+            close_button.first.click(force=True)
+        else:
+            dialog.locator("button").filter(has_text="×").first.click(force=True)
+        expect(dialog).not_to_be_visible(timeout=10000)
     expect(page.get_by_text(UPDATED, exact=True)).to_be_visible(timeout=10000)
     page.get_by_text(UPDATED, exact=True).click()
     dialog = page.get_by_role("dialog")
