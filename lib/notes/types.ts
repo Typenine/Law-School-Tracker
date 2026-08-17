@@ -6,6 +6,8 @@ export type NoteSourceType =
   | 'professor-material'
   | 'other';
 
+export type NoteSearchSort = 'relevance' | 'recent' | 'oldest' | 'class-date';
+
 export interface NoteNotebook {
   id: string;
   name: string;
@@ -81,11 +83,19 @@ export interface NoteFilters {
   semester?: string | null;
   section?: string | null;
   sectionId?: string | null;
+  /** Exact section ids, used when a connector search expands a branch recursively. */
+  sectionIds?: string[] | null;
   taskId?: string | null;
+  sourceType?: NoteSourceType | null;
+  /** Case-insensitive exact topic/tag match. */
+  topic?: string | null;
+  /** Restrict results to pinned pages. */
+  pinnedOnly?: boolean;
   from?: string | null;
   to?: string | null;
   archived?: boolean;
   /** True to look inside the trash instead of past it. */
   deleted?: boolean;
+  sort?: NoteSearchSort;
   limit?: number;
 }
