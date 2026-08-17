@@ -14,8 +14,15 @@ export async function GET(req: NextRequest) {
   await ensureTaskV2Schema();
   const includeCanceled = req.nextUrl.searchParams.get('includeCanceled') === 'true';
   const includeBlocked = req.nextUrl.searchParams.get('includeBlocked') === 'true';
-  const tasks = await listVisibleTasks({ includeCanceled, includeBlocked });
-  return Response.json({ tasks });
+  const showAllTerms = req.nextUrl.searchParams.get('allTerms') === 'true';
+  const [allTasks, activeTerm] = await Promise.all([
+    listVisibleTasks({ includeCanceled, includeBlocked }),
+    activeSemesterId(),
+  ]);
+  const tasks = showAllTerms || !activeTerm
+    ? allTasks
+    : allTasks.filter(task => !task.term || task.term === activeTerm);
+  return Response.json({ tasks, activeTerm });
 }
 
 export async function POST(req: NextRequest) {
