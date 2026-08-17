@@ -52,17 +52,17 @@ with sync_playwright() as p:
     page.get_by_text(TITLE, exact=True).click()
     dialog = page.get_by_role("dialog")
     expect(dialog).to_be_visible()
-    for tab in ["Overview", "Progress", "Sessions", "Notes", "Schedule", "Details"]:
+    for tab in ["overview", "progress", "sessions", "notes", "schedule", "details"]:
         expect(dialog.get_by_role("button", name=tab, exact=True)).to_be_visible()
 
-    dialog.get_by_role("button", name="Details", exact=True).click()
+    dialog.get_by_role("button", name="details", exact=True).click()
     title_input = dialog.locator('input[type="text"]').first
     expect(title_input).to_have_value(TITLE)
     title_input.fill(UPDATED)
     dialog.get_by_role("button", name="Save changes", exact=True).click()
     expect(dialog.get_by_text(UPDATED, exact=True)).to_be_visible(timeout=10000)
 
-    dialog.get_by_role("button", name="Progress", exact=True).click()
+    dialog.get_by_role("button", name="progress", exact=True).click()
     step_input = dialog.get_by_placeholder("Add a step…")
     step_input.fill("Draft issue statement")
     dialog.get_by_role("button", name="Add", exact=True).click()
@@ -75,10 +75,10 @@ with sync_playwright() as p:
     expect(duration).to_be_visible()
     duration.fill("20")
     page.get_by_role("button", name="Log Progress", exact=True).click()
-    dialog.get_by_role("button", name="Overview", exact=True).click()
+    dialog.get_by_role("button", name="overview", exact=True).click()
     expect(dialog.get_by_text("20m", exact=True)).to_be_visible(timeout=10000)
 
-    dialog.get_by_role("button", name="Details", exact=True).click()
+    dialog.get_by_role("button", name="details", exact=True).click()
     dialog.get_by_role("button", name="Move to Trash", exact=True).click()
     expect(dialog).not_to_be_visible(timeout=10000)
     expect(page.get_by_text(UPDATED, exact=True)).not_to_be_visible(timeout=10000)
