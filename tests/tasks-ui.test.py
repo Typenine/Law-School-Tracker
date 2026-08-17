@@ -71,10 +71,13 @@ with sync_playwright() as p:
     expect(dialog.get_by_text("100%", exact=True)).to_be_visible(timeout=10000)
 
     dialog.get_by_role("button", name="Log partial progress", exact=True).click()
-    duration = page.get_by_placeholder("e.g., 45, 1h30m, 1:30")
+    log_dialog = page.get_by_role("dialog").filter(has_text="Log Partial Progress")
+    expect(log_dialog).to_be_visible(timeout=10000)
+    duration = log_dialog.locator('input[type="text"]').first
     expect(duration).to_be_visible()
     duration.fill("20")
-    page.get_by_role("button", name="Log Progress", exact=True).click()
+    log_dialog.get_by_role("button", name="Log Progress", exact=True).click()
+    expect(log_dialog).not_to_be_visible(timeout=10000)
     dialog.get_by_role("button", name="overview", exact=True).click()
     expect(dialog.get_by_text("20m", exact=True)).to_be_visible(timeout=10000)
 
