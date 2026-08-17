@@ -1,5 +1,6 @@
 import { NextRequest } from 'next/server';
 import { ensureSchema, getGptPool, listCourses, listSessions } from '@/lib/storage';
+import { activeSemesterId } from '@/lib/collections';
 import { countNotesByTask, hybridSearchAiNotes, listNotebooks } from '@/lib/aiNotes';
 import { notesGptDb } from '@/lib/notes/db';
 import { readingMetrics } from '@/lib/reading';
@@ -22,14 +23,16 @@ export async function GET(req: NextRequest) {
     const recentLimit = boundedInteger(req.nextUrl.searchParams.get('recentNotes'), 8, 1, 20);
     const now = new Date(); const horizon = new Date(now.getTime() + days * 864e5); const sevenDaysAgo = new Date(now.getTime() - 7 * 864e5);
     const gptPool = getGptPool(); const notePool = notesGptDb();
-    const [courses, tasks, sessions, notebooks, noteCounts, recentNotes] = await Promise.all([
+    const [courses, allTasks, sessions, notebooks, noteCounts, recentNotes, activeTerm] = await Promise.all([
       listCourses(gptPool),
       listVisibleTasks({ includeBlocked: true, overridePool: gptPool }),
       listSessions(gptPool),
       listNotebooks(false, notePool),
       countNotesByTask(notePool).catch(() => ({} as Record<string, number>)),
       hybridSearchAiNotes('', { sort: 'recent', limit: recentLimit }, notePool),
+      activeSemesterId(),
     ]);
+    const tasks = activeTerm ? allTasks.filter(task => !task.term || task.term === activeTerm) : allTasks;
     const taskById = new Map(tasks.map(task => [String(task.id), task]));
     const summarizeTask = (task: any) => {
       const blockers = (task.dependsOn || []).map(String).filter((id: string) => taskById.get(id)?.status !== 'done').map((id: string) => ({ id, title: taskById.get(id)?.title || 'Missing prerequisite' }));
@@ -56,7 +59,7 @@ export async function GET(req: NextRequest) {
     const scored = recentSessions.filter(session => typeof session.focus === 'number'); const totalMinutes = recentSessions.reduce((sum,s)=>sum+(Number(s.minutes)||0),0);
     const openReadings = openTasks.filter(task => task.activity === 'reading' || task.originalPageRanges || task.remainingPageRanges).map(task => summarizeTask(task));
     return noStoreJson({
-      generatedAt: now.toISOString(), planningHorizonDays: days,
+      generatedAt: now.toISOString(), planningHorizonDays: days, activeTerm,
       semesters: Array.from(new Set([...courses.map(c=>c.semester).filter(Boolean), ...notebooks.map(n=>n.semester).filter(Boolean)])),
       courses: courses.map(course => ({ id:course.id, code:course.code??null, title:course.title, instructor:course.instructor??null, semester:course.semester??null, year:course.year??null, startDate:course.startDate??null, endDate:course.endDate??null })),
       upcomingAssignments, overdueAssignments, openReadings,
