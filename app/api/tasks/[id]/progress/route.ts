@@ -1,15 +1,16 @@
-
 import { NextRequest } from 'next/server';
 import { z } from 'zod';
 import { ensureSchema, listScheduleBlocks } from '@/lib/storage';
 import { recordTaskProgress } from '@/lib/taskProgress';
-import { smartSplitTaskSchedule } from '@/lib/readingSchedule';
+import { clearStoredTaskTimer } from '@/lib/taskTimersV2';
+import { captureCompletionSnapshot, ensureTaskV2Schema, markWorkflowAfterProgress, reconcileTaskSchedule } from '@/lib/taskV2';
 
 export const dynamic = 'force-dynamic';
 export const runtime = 'nodejs';
 
 export async function POST(req: NextRequest, { params }: { params: { id: string } }) {
   await ensureSchema();
+  await ensureTaskV2Schema();
   const schema = z.object({
     mode: z.enum(['partial', 'finish']),
     minutes: z.number().int().min(1).max(1440),
@@ -23,13 +24,14 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
   if (!parsed.success) return Response.json({ error: 'Invalid progress entry.' }, { status: 400 });
   try {
     const beforeBlocks = await listScheduleBlocks().catch(() => []);
-    const hadSplitPlan = beforeBlocks.filter(block => block.taskId === params.id).length > 1;
+    const hadPlan = beforeBlocks.some(block => String(block.taskId) === String(params.id));
+    if (parsed.data.mode === 'finish') await captureCompletionSnapshot(params.id);
     const result = await recordTaskProgress(params.id, parsed.data);
-    let schedule = null;
-    if (result.task.status !== 'done' && !parsed.data.moveToDay && hadSplitPlan && result.reading.remainingPages > 0) {
-      schedule = await smartSplitTaskSchedule(params.id).catch(() => null);
-    }
-    return Response.json({ ...result, schedule });
+    const done = result.task.status === 'done';
+    await markWorkflowAfterProgress(params.id, done);
+    if (done) await clearStoredTaskTimer(params.id);
+    if (!done && !parsed.data.moveToDay && hadPlan) await reconcileTaskSchedule(params.id, { onlyIfScheduled: true });
+    return Response.json({ ...result, scheduleReconciled: !done && !parsed.data.moveToDay && hadPlan });
   } catch (error: any) {
     const status = Number(error?.status) || 500;
     if (status >= 500) console.error('[task progress]', error);

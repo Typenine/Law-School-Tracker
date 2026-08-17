@@ -5,12 +5,16 @@ on:
     branches: [main]
   pull_request:
 
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   check:
     runs-on: ubuntu-latest
 
-    # The notes tests drive the real API against a real database, because the
-    # bugs worth catching have all been about what Postgres actually does.
+    # The integration tests drive the real API against a real database, because
+    # the bugs worth catching have all been about what Postgres actually does.
     services:
       postgres:
         image: postgres:16
@@ -73,6 +77,11 @@ jobs:
         env:
           NOTES_E2E_BASE_URL: http://127.0.0.1:3000
         run: python tests/notes-ui.test.py
+
+      - name: Audit Tasks interface in Chromium
+        env:
+          TASKS_E2E_BASE_URL: http://127.0.0.1:3000
+        run: python tests/tasks-ui.test.py
 
       - name: Show server log after browser failure
         if: failure()

@@ -1,22 +1,33 @@
-
 import { NextRequest } from 'next/server';
-import { createTask, ensureSchema, listCourses, listTasks } from '@/lib/storage';
+import { createTask, ensureSchema, listCourses } from '@/lib/storage';
 import { activeSemesterId } from '@/lib/collections';
 import { NewTaskInput } from '@/lib/types';
 import { normalizeReadingTaskInput } from '@/lib/reading';
+import { ensureTaskV2Schema, listVisibleTasks } from '@/lib/taskV2';
 import { z } from 'zod';
 
 export const dynamic = 'force-dynamic';
 export const runtime = 'nodejs';
 
-export async function GET() {
+export async function GET(req: NextRequest) {
   await ensureSchema();
-  const tasks = await listTasks();
-  return Response.json({ tasks });
+  await ensureTaskV2Schema();
+  const includeCanceled = req.nextUrl.searchParams.get('includeCanceled') === 'true';
+  const includeBlocked = req.nextUrl.searchParams.get('includeBlocked') === 'true';
+  const showAllTerms = req.nextUrl.searchParams.get('allTerms') === 'true';
+  const [allTasks, activeTerm] = await Promise.all([
+    listVisibleTasks({ includeCanceled, includeBlocked }),
+    activeSemesterId(),
+  ]);
+  const tasks = showAllTerms || !activeTerm
+    ? allTasks
+    : allTasks.filter(task => !task.term || task.term === activeTerm);
+  return Response.json({ tasks, activeTerm });
 }
 
 export async function POST(req: NextRequest) {
   await ensureSchema();
+  await ensureTaskV2Schema();
   const schema = z.object({
     title: z.string().min(1),
     course: z.string().trim().min(1).nullable().optional(),
