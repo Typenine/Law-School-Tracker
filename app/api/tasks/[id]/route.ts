@@ -2,6 +2,7 @@ import { NextRequest } from 'next/server';
 import { ensureSchema, listTasks } from '@/lib/storage';
 import { UpdateTaskInput } from '@/lib/types';
 import { canonicalPageRanges } from '@/lib/reading';
+import { clearStoredTaskTimer } from '@/lib/taskTimersV2';
 import { completeTaskWithoutSession, editTaskStructured, ensureTaskV2Schema, purgeTask, reconcileDependents, reopenTask, trashTask } from '@/lib/taskV2';
 import { z } from 'zod';
 
@@ -39,9 +40,6 @@ export async function PATCH(req: NextRequest, { params }: { params: { id: string
   if (!parsed.success) return Response.json({ error: 'Invalid patch body' }, { status: 400 });
   const body = parsed.data as UpdateTaskInput;
   try {
-    // Structured reading ranges are authoritative. Keep an auto-generated page
-    // label in the human title synchronized, without rewriting custom titles
-    // that do not contain a page specification.
     if (body.originalPageRanges !== undefined && body.title === undefined) {
       const current = (await listTasks()).find(task => String(task.id) === String(params.id));
       const normalized = canonicalPageRanges(body.originalPageRanges);
@@ -54,6 +52,7 @@ export async function PATCH(req: NextRequest, { params }: { params: { id: string
 
     if (body.status === 'done') {
       const task = await completeTaskWithoutSession(params.id);
+      await clearStoredTaskTimer(params.id);
       const { status: _status, ...rest } = body as any;
       const updated = Object.keys(rest).length ? await editTaskStructured(params.id, rest as UpdateTaskInput) : task;
       return Response.json({ task: updated });
@@ -85,6 +84,7 @@ export async function DELETE(req: NextRequest, { params }: { params: { id: strin
   try {
     if (req.nextUrl.searchParams.get('purge') === 'true') await purgeTask(params.id);
     else await trashTask(params.id);
+    await clearStoredTaskTimer(params.id);
     await reconcileDependents(params.id);
     return new Response(null, { status: 204 });
   } catch (error: any) {
