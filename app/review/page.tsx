@@ -1,136 +1,294 @@
-﻿"use client";
-import { useMemo, useState } from "react";
-import { getSessionCourse, buildTasksById } from "@/lib/courseMatching";
-import { useTasks } from "@/lib/useTasks";
-import { useSessions } from "@/lib/useSessions";
-import { useCourses } from "@/lib/useCourses";
+"use client";
 
-type Task = { id: string; title: string; course?: string | null };
-type Session = { id: string; taskId?: string | null; when: string; minutes: number; focus?: number | null; notes?: string | null; activity?: string | null; pagesRead?: number | null };
-type Course = { id: string; title: string; semester?: string | null; year?: number | null; startDate?: string | null; endDate?: string | null };
+import Link from 'next/link';
+import { useEffect, useMemo, useState } from 'react';
+import { apiFetch } from '@/lib/apiClient';
+import { useCourses } from '@/lib/useCourses';
+import { useSessions } from '@/lib/useSessions';
+import { useSchedule } from '@/lib/useSchedule';
+import type { Course, StudySession, Task } from '@/lib/types';
 
-function chicagoYmd(d: Date): string {
-  const f = new Intl.DateTimeFormat("en-US", { timeZone: "America/Chicago", year: "numeric", month: "2-digit", day: "2-digit" });
-  const p = f.formatToParts(d);
-  return (p.find(x => x.type === "year")?.value || "") + "-" + (p.find(x => x.type === "month")?.value || "") + "-" + (p.find(x => x.type === "day")?.value || "");
+type WorkspaceTask = Task & {
+  workflowState?: 'not-started' | 'in-progress' | 'done' | 'canceled';
+  displayState?: string;
+  blocked?: boolean;
+  atRisk?: boolean;
+  atRiskReason?: string | null;
+  loggedMinutes?: number;
+  remainingMinutes?: number;
+  percentComplete?: number;
+  sessionCount?: number;
+  averageFocus?: number | null;
+  reading?: { assignedPages?: number; completedPages?: number; remainingPages?: number; percentComplete?: number; paceMinutesPerPage?: number | null } | null;
+};
+
+type Workspace = { tasks: WorkspaceTask[]; summary?: Record<string, number>; activeTerm?: string | null };
+
+type Period = '7d' | '14d' | '30d' | '90d' | 'semester' | 'all';
+
+function chicagoYmd(value: Date | string) {
+  const d = typeof value === 'string' ? new Date(value) : value;
+  return new Intl.DateTimeFormat('en-CA', { timeZone: 'America/Chicago', year: 'numeric', month: '2-digit', day: '2-digit' }).format(d);
 }
-
-function fmtHM(min: number): string {
-  const n = Math.max(0, Math.round(min || 0));
+function fmtMin(value: number) {
+  const n = Math.max(0, Math.round(value || 0));
   const h = Math.floor(n / 60), m = n % 60;
-  if (h > 0 && m > 0) return h + "h " + m + "m";
-  if (h > 0) return h + "h";
-  return m + "m";
+  return h ? `${h}h${m ? ` ${m}m` : ''}` : `${m}m`;
 }
-
-function focusColor(f: number): string {
-  if (f >= 8) return "text-emerald-400";
-  if (f >= 6) return "text-blue-400";
-  if (f >= 4) return "text-amber-400";
-  return "text-rose-400";
+function pct(value: number) { return `${Math.round(value)}%`; }
+function startOfWeek(date = new Date()) {
+  const d = new Date(date); d.setHours(0, 0, 0, 0); d.setDate(d.getDate() - ((d.getDay() + 6) % 7)); return d;
+}
+function weekKey(value: Date | string) { return chicagoYmd(startOfWeek(typeof value === 'string' ? new Date(value) : value)); }
+function sessionCourse(session: StudySession, tasks: Map<string, WorkspaceTask>) {
+  const task = session.taskId ? tasks.get(String(session.taskId)) : null;
+  return (task?.course || '').trim() || 'Unassigned';
 }
 
 export default function ReviewPage() {
-  const { tasks, loading: tasksLoading } = useTasks();
   const { sessions, loading: sessionsLoading } = useSessions();
   const { courses, loading: coursesLoading } = useCourses();
-  const [period, setPeriod] = useState<string>("7d");
-  const loading = tasksLoading || sessionsLoading || coursesLoading;
+  const { blocks, loading: scheduleLoading } = useSchedule();
+  const [workspace, setWorkspace] = useState<Workspace>({ tasks: [] });
+  const [workspaceLoading, setWorkspaceLoading] = useState(true);
+  const [period, setPeriod] = useState<Period>('30d');
 
-  const semesters = useMemo(() => {
-    const set = new Set<string>();
-    for (const c of courses) if (c.semester && c.year) set.add(c.semester + " " + c.year);
-    return Array.from(set).sort((a, b) => b.localeCompare(a));
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      setWorkspaceLoading(true);
+      try {
+        const data = await apiFetch<Workspace>('/api/tasks/workspace?allTerms=true');
+        if (!cancelled) setWorkspace(data);
+      } finally { if (!cancelled) setWorkspaceLoading(false); }
+    })();
+    return () => { cancelled = true; };
+  }, []);
+
+  const loading = sessionsLoading || coursesLoading || scheduleLoading || workspaceLoading;
+  const taskMap = useMemo(() => new Map(workspace.tasks.map(task => [String(task.id), task])), [workspace.tasks]);
+  const currentCourses = useMemo(() => {
+    const today = chicagoYmd(new Date());
+    return courses.filter(course => {
+      if (course.startDate && chicagoYmd(course.startDate) > today) return false;
+      if (course.endDate && chicagoYmd(course.endDate) < today) return false;
+      return true;
+    });
   }, [courses]);
 
-  const tasksById = useMemo(() => buildTasksById(tasks), [tasks]);
-
-  const filteredSessions = useMemo(() => {
-    if (period === "all") return sessions;
-    if (period.includes(" ")) {
-      const semCourses = courses.filter(c => (c.semester + " " + c.year) === period);
-      if (semCourses.length > 0) {
-        let minD = "9999-12-31", maxD = "0000-01-01";
-        for (const c of semCourses) { if (c.startDate && c.startDate < minD) minD = c.startDate; if (c.endDate && c.endDate > maxD) maxD = c.endDate; }
-        return sessions.filter(s => { const ymd = chicagoYmd(new Date(s.when)); return ymd >= minD && ymd <= maxD; });
-      }
+  const cutoff = useMemo(() => {
+    if (period === 'all') return null;
+    if (period === 'semester') {
+      const starts = currentCourses.map(c => c.startDate).filter(Boolean).map(String).sort();
+      return starts.length ? new Date(starts[0]) : null;
     }
-    const days = period === "7d" ? 7 : period === "14d" ? 14 : period === "30d" ? 30 : period === "90d" ? 90 : 365;
-    const cutoff = new Date(); cutoff.setDate(cutoff.getDate() - days);
-    return sessions.filter(s => chicagoYmd(new Date(s.when)) >= chicagoYmd(cutoff));
-  }, [sessions, period, courses]);
+    const days = period === '7d' ? 7 : period === '14d' ? 14 : period === '30d' ? 30 : 90;
+    const d = new Date(); d.setDate(d.getDate() - days); return d;
+  }, [period, currentCourses]);
 
-  const summaryStats = useMemo(() => {
-    let totalMinutes = 0, totalSessions = 0, totalPages = 0, focusSum = 0, focusCount = 0;
-    for (const s of filteredSessions) {
-      totalMinutes += s.minutes || 0; totalSessions++; totalPages += s.pagesRead || 0;
-      if (typeof s.focus === "number" && s.focus > 0) { focusSum += s.focus; focusCount++; }
-    }
-    return { totalMinutes, totalSessions, totalPages, avgFocus: focusCount > 0 ? focusSum / focusCount : 0 };
-  }, [filteredSessions]);
+  const filteredSessions = useMemo(() => sessions.filter(session => !cutoff || new Date(session.when) >= cutoff), [sessions, cutoff]);
+  const filteredTaskIds = useMemo(() => new Set(filteredSessions.map(s => String(s.taskId || '')).filter(Boolean)), [filteredSessions]);
+
+  const summary = useMemo(() => {
+    const totalMinutes = filteredSessions.reduce((sum, s) => sum + Math.max(0, Number(s.minutes) || 0), 0);
+    const pages = filteredSessions.reduce((sum, s) => sum + Math.max(0, Number(s.pagesRead) || 0), 0);
+    const practice = filteredSessions.reduce((sum, s) => sum + Math.max(0, Number(s.practiceQs) || 0), 0);
+    const focus = filteredSessions.map(s => Number(s.focus)).filter(n => n > 0);
+    const done = workspace.tasks.filter(t => t.workflowState === 'done' && (filteredTaskIds.has(String(t.id)) || !cutoff || new Date(t.completedAt || t.dueDate) >= cutoff));
+    const relevant = workspace.tasks.filter(t => t.workflowState !== 'canceled' && (filteredTaskIds.has(String(t.id)) || !cutoff || new Date(t.dueDate) >= cutoff));
+    return {
+      totalMinutes, pages, practice,
+      sessions: filteredSessions.length,
+      avgFocus: focus.length ? focus.reduce((a, b) => a + b, 0) / focus.length : 0,
+      completionRate: relevant.length ? (done.length / relevant.length) * 100 : 0,
+    };
+  }, [filteredSessions, workspace.tasks, filteredTaskIds, cutoff]);
+
+  const thisWeek = useMemo(() => {
+    const start = startOfWeek();
+    const actual = sessions.filter(s => new Date(s.when) >= start).reduce((sum, s) => sum + Math.max(0, Number(s.minutes) || 0), 0);
+    const planned = blocks.filter(b => new Date(`${b.day}T12:00:00`) >= start).reduce((sum, b) => sum + Math.max(0, Number(b.plannedMinutes) || 0), 0);
+    return { actual, planned, variance: actual - planned };
+  }, [sessions, blocks]);
+
+  const estimateAccuracy = useMemo(() => {
+    const rows = workspace.tasks.filter(t => t.workflowState === 'done' && Number(t.estimatedMinutes) > 0);
+    const data = rows.map(task => {
+      const actual = Number(task.actualMinutes) > 0 ? Number(task.actualMinutes) : sessions.filter(s => String(s.taskId || '') === String(task.id)).reduce((sum, s) => sum + Math.max(0, Number(s.minutes) || 0), 0);
+      return actual > 0 ? { task, actual, estimated: Number(task.estimatedMinutes) } : null;
+    }).filter(Boolean) as Array<{ task: WorkspaceTask; actual: number; estimated: number }>;
+    if (!data.length) return { averageError: 0, sample: 0, rows: [] as typeof data };
+    const averageError = data.reduce((sum, row) => sum + Math.abs(row.actual - row.estimated) / Math.max(1, row.estimated), 0) / data.length * 100;
+    return { averageError, sample: data.length, rows: data.sort((a, b) => Math.abs(b.actual - b.estimated) - Math.abs(a.actual - a.estimated)).slice(0, 5) };
+  }, [workspace.tasks, sessions]);
 
   const byCourse = useMemo(() => {
-    const map = new Map<string, { minutes: number; sessions: number; pages: number; focusSum: number; focusCount: number }>();
+    const map = new Map<string, { minutes: number; pages: number; sessions: number; focus: number[]; practice: number }>();
     for (const s of filteredSessions) {
-      const c = getSessionCourse(s, tasksById);
-      const e = map.get(c) || { minutes: 0, sessions: 0, pages: 0, focusSum: 0, focusCount: 0 };
-      e.minutes += s.minutes || 0; e.sessions++; e.pages += s.pagesRead || 0;
-      if (typeof s.focus === "number" && s.focus > 0) { e.focusSum += s.focus; e.focusCount++; }
-      map.set(c, e);
+      const course = sessionCourse(s, taskMap);
+      const row = map.get(course) || { minutes: 0, pages: 0, sessions: 0, focus: [], practice: 0 };
+      row.minutes += Math.max(0, Number(s.minutes) || 0);
+      row.pages += Math.max(0, Number(s.pagesRead) || 0);
+      row.practice += Math.max(0, Number(s.practiceQs) || 0);
+      row.sessions += 1;
+      if (Number(s.focus) > 0) row.focus.push(Number(s.focus));
+      map.set(course, row);
     }
-    return Array.from(map.entries()).map(([course, v]) => ({
-      course, minutes: v.minutes, sessions: v.sessions, pages: v.pages,
-      avgFocus: v.focusCount > 0 ? v.focusSum / v.focusCount : 0,
-      minutesPerPage: v.pages > 0 ? v.minutes / v.pages : 0,
+    return Array.from(map.entries()).map(([course, row]) => ({
+      course, ...row,
+      avgFocus: row.focus.length ? row.focus.reduce((a, b) => a + b, 0) / row.focus.length : 0,
+      mpp: row.pages ? row.minutes / row.pages : 0,
+      share: summary.totalMinutes ? row.minutes / summary.totalMinutes * 100 : 0,
     })).sort((a, b) => b.minutes - a.minutes);
-  }, [filteredSessions, tasksById]);
+  }, [filteredSessions, taskMap, summary.totalMinutes]);
 
-  if (loading) return <main className="p-6"><div className="text-slate-400">Loading...</div></main>;
+  const activeCourseMap = useMemo(() => new Map(currentCourses.map(course => [course.title.toLowerCase(), course])), [currentCourses]);
+  const neglected = useMemo(() => {
+    const last14 = new Date(); last14.setDate(last14.getDate() - 14);
+    return currentCourses.map(course => {
+      const taskIds = new Set(workspace.tasks.filter(t => t.courseId === course.id || (t.course || '').toLowerCase() === course.title.toLowerCase()).map(t => String(t.id)));
+      const minutes = sessions.filter(s => s.taskId && taskIds.has(String(s.taskId)) && new Date(s.when) >= last14).reduce((sum, s) => sum + Math.max(0, Number(s.minutes) || 0), 0);
+      const open = workspace.tasks.filter(t => (t.courseId === course.id || (t.course || '').toLowerCase() === course.title.toLowerCase()) && !['done', 'canceled'].includes(t.workflowState || '')).length;
+      return { course, minutes, open };
+    }).filter(item => item.open > 0).sort((a, b) => a.minutes - b.minutes).slice(0, 4);
+  }, [currentCourses, workspace.tasks, sessions]);
+
+  const focusByHour = useMemo(() => {
+    const buckets = new Map<number, number[]>();
+    for (const s of filteredSessions) {
+      const focus = Number(s.focus);
+      if (!(focus > 0)) continue;
+      const hour = new Date(s.when).getHours();
+      const arr = buckets.get(hour) || []; arr.push(focus); buckets.set(hour, arr);
+    }
+    return Array.from(buckets.entries()).map(([hour, values]) => ({ hour, focus: values.reduce((a, b) => a + b, 0) / values.length, count: values.length })).sort((a, b) => b.focus - a.focus);
+  }, [filteredSessions]);
+
+  const weekly = useMemo(() => {
+    const keys: string[] = [];
+    const start = startOfWeek();
+    for (let i = 7; i >= 0; i--) { const d = new Date(start); d.setDate(d.getDate() - i * 7); keys.push(chicagoYmd(d)); }
+    const map = new Map(keys.map(key => [key, 0]));
+    for (const s of sessions) { const key = weekKey(s.when); if (map.has(key)) map.set(key, (map.get(key) || 0) + Math.max(0, Number(s.minutes) || 0)); }
+    return keys.map(key => ({ key, minutes: map.get(key) || 0 }));
+  }, [sessions]);
+  const weeklyMax = Math.max(1, ...weekly.map(item => item.minutes));
+
+  const risks = useMemo(() => workspace.tasks.filter(t => t.atRisk && !['done', 'canceled'].includes(t.workflowState || '')).sort((a, b) => new Date(a.dueDate).getTime() - new Date(b.dueDate).getTime()).slice(0, 6), [workspace.tasks]);
+
+  if (loading) return <div className="p-6 text-slate-400">Loading performance data…</div>;
 
   return (
-    <main className="space-y-6">
-      <div className="flex items-center justify-between flex-wrap gap-2">
-        <h1 className="text-2xl font-bold">Review</h1>
-        <div className="flex flex-wrap gap-2 items-center">
-          {["7d", "14d", "30d", "90d", "all"].map(p => (
-            <button key={p} onClick={() => setPeriod(p)} className={"px-3 py-1.5 rounded-lg text-sm font-medium transition " + (period === p ? "bg-blue-600 text-white" : "bg-[#1b2344] text-slate-300 hover:bg-[#252d4a]")}>{p === "all" ? "All" : p}</button>
-          ))}
-          {semesters.length > 0 && (
-            <select value={period.includes(" ") ? period : ""} onChange={e => { if (e.target.value) setPeriod(e.target.value); }} className="px-3 py-1.5 rounded-lg text-sm bg-[#1b2344] text-slate-300 border-0 cursor-pointer">
-              <option value="">Semester</option>
-              {semesters.map(s => <option key={s} value={s}>{s}</option>)}
-            </select>
-          )}
+    <main className="space-y-5">
+      <section className="flex flex-wrap items-center justify-between gap-3">
+        <div>
+          <h2 className="text-xl font-medium">Performance analytics</h2>
+          <p className="text-sm text-slate-400 mt-1">Actual work, plan accuracy, course balance, pace, focus, and risk.</p>
         </div>
-      </div>
-      <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
-        <div className="card p-4"><div className="text-slate-400 text-xs uppercase mb-1">Total Time</div><div className="text-2xl font-bold">{fmtHM(summaryStats.totalMinutes)}</div></div>
-        <div className="card p-4"><div className="text-slate-400 text-xs uppercase mb-1">Sessions</div><div className="text-2xl font-bold">{summaryStats.totalSessions}</div></div>
-        <div className="card p-4"><div className="text-slate-400 text-xs uppercase mb-1">Pages Read</div><div className="text-2xl font-bold">{summaryStats.totalPages}</div></div>
-        <div className="card p-4"><div className="text-slate-400 text-xs uppercase mb-1">Avg Focus</div><div className={"text-2xl font-bold " + (summaryStats.avgFocus > 0 ? focusColor(summaryStats.avgFocus) : "")}>{summaryStats.avgFocus > 0 ? summaryStats.avgFocus.toFixed(1) + "/10" : "-"}</div></div>
-      </div>
-      <div className="card p-4">
-        <h2 className="text-lg font-semibold mb-3">By Course</h2>
-        {byCourse.length === 0 ? <div className="text-slate-400 text-sm">No sessions</div> : (
-          <div className="space-y-3">
-            {byCourse.slice(0, 8).map(c => (
-              <div key={c.course} className="space-y-1">
-                <div className="flex justify-between"><span className="font-medium truncate max-w-[60%]">{c.course}</span><span className="text-slate-300">{fmtHM(c.minutes)}</span></div>
-                <div className="flex gap-4 text-xs text-slate-400"><span>{c.sessions} sessions</span>{c.pages > 0 && <span>{c.pages} pages</span>}{c.avgFocus > 0 && <span className={focusColor(c.avgFocus)}>Focus: {c.avgFocus.toFixed(1)}</span>}</div>
-                <div className="h-1.5 bg-slate-700 rounded-full overflow-hidden"><div className="h-full bg-blue-500 rounded-full" style={{ width: Math.min(100, (c.minutes / (summaryStats.totalMinutes || 1)) * 100) + "%" }} /></div>
-              </div>
-            ))}
-          </div>
-        )}
-      </div>
-      {byCourse.some(c => c.pages > 0) && (
+        <div className="flex flex-wrap gap-2">
+          {(['7d','14d','30d','90d','semester','all'] as Period[]).map(value => <button key={value} onClick={() => setPeriod(value)} className={`px-3 py-1.5 rounded border text-xs ${period === value ? 'border-[#ffcc00] text-[#ffcc00]' : 'border-white/10 text-slate-300'}`}>{value === 'semester' ? 'Semester' : value === 'all' ? 'All time' : value}</button>)}
+        </div>
+      </section>
+
+      <section className="grid grid-cols-2 lg:grid-cols-6 gap-3">
+        <Metric label="Study time" value={fmtMin(summary.totalMinutes)} />
+        <Metric label="Sessions" value={String(summary.sessions)} />
+        <Metric label="Pages" value={String(summary.pages)} />
+        <Metric label="Practice Qs" value={String(summary.practice)} />
+        <Metric label="Avg focus" value={summary.avgFocus ? `${summary.avgFocus.toFixed(1)}/10` : '—'} />
+        <Metric label="Completion" value={summary.completionRate ? pct(summary.completionRate) : '—'} />
+      </section>
+
+      <section className="grid lg:grid-cols-3 gap-4">
         <div className="card p-4">
-          <h2 className="text-lg font-semibold mb-3">Reading Pace</h2>
-          <table className="w-full text-sm"><thead className="text-left text-slate-400"><tr><th className="py-2 pr-4">Course</th><th className="py-2 pr-4">Time</th><th className="py-2 pr-4">Pages</th><th className="py-2 pr-4">Min/Page</th></tr></thead>
-            <tbody>{byCourse.filter(c => c.pages > 0).map(c => (<tr key={c.course} className="border-t border-[#1b2344]"><td className="py-2 pr-4">{c.course}</td><td className="py-2 pr-4">{fmtHM(c.minutes)}</td><td className="py-2 pr-4">{c.pages}</td><td className="py-2 pr-4 font-medium">{c.minutesPerPage.toFixed(1)}</td></tr>))}</tbody>
-          </table>
+          <div className="text-xs uppercase tracking-wide text-slate-400">This week: planned vs actual</div>
+          <div className="mt-3 flex items-end gap-5"><div><div className="text-2xl font-medium">{fmtMin(thisWeek.actual)}</div><div className="text-xs text-slate-400">actual</div></div><div><div className="text-xl">{fmtMin(thisWeek.planned)}</div><div className="text-xs text-slate-400">planned</div></div></div>
+          <div className={`mt-3 text-sm ${thisWeek.variance >= 0 ? 'text-emerald-300' : 'text-amber-300'}`}>{thisWeek.variance >= 0 ? '+' : ''}{fmtMin(Math.abs(thisWeek.variance))} {thisWeek.variance >= 0 ? 'above plan' : 'behind plan'}</div>
         </div>
-      )}
+        <div className="card p-4">
+          <div className="text-xs uppercase tracking-wide text-slate-400">Estimate accuracy</div>
+          <div className="mt-3 text-2xl font-medium">{estimateAccuracy.sample ? `${estimateAccuracy.averageError.toFixed(0)}%` : '—'}</div>
+          <div className="text-xs text-slate-400 mt-1">mean absolute error · {estimateAccuracy.sample} completed task{estimateAccuracy.sample === 1 ? '' : 's'}</div>
+        </div>
+        <div className="card p-4">
+          <div className="text-xs uppercase tracking-wide text-slate-400">Risk right now</div>
+          <div className="mt-3 text-2xl font-medium">{risks.length}</div>
+          <div className="text-xs text-slate-400 mt-1">active tasks currently flagged at risk</div>
+          <Link href="/tasks?view=at-risk" className="inline-block mt-3 text-xs">Open at-risk tasks →</Link>
+        </div>
+      </section>
+
+      <section className="grid xl:grid-cols-[1.4fr_1fr] gap-4">
+        <div className="card p-4">
+          <div className="flex items-center justify-between gap-2"><h3 className="text-lg font-medium">Course distribution</h3><span className="text-xs text-slate-500">selected period</span></div>
+          <div className="mt-4 space-y-4">
+            {byCourse.length ? byCourse.map(row => {
+              const course = activeCourseMap.get(row.course.toLowerCase());
+              return <div key={row.course}>
+                <div className="flex justify-between gap-3 text-sm"><span>{course ? <Link href={`/courses/${course.id}`}>{row.course}</Link> : row.course}</span><span className="text-slate-300">{fmtMin(row.minutes)} · {pct(row.share)}</span></div>
+                <div className="mt-1.5 h-2 rounded bg-white/5 overflow-hidden"><div className="h-full bg-blue-500" style={{ width: `${Math.max(2, row.share)}%` }} /></div>
+                <div className="mt-1 text-[11px] text-slate-500">{row.sessions} sessions{row.pages ? ` · ${row.pages} pages · ${row.mpp.toFixed(1)} min/page` : ''}{row.avgFocus ? ` · focus ${row.avgFocus.toFixed(1)}` : ''}</div>
+              </div>;
+            }) : <div className="text-sm text-slate-400">No study sessions in this period.</div>}
+          </div>
+        </div>
+
+        <div className="card p-4">
+          <h3 className="text-lg font-medium">Courses needing attention</h3>
+          <p className="text-xs text-slate-400 mt-1">Open work with the least logged study time in the last 14 days.</p>
+          <div className="mt-4 space-y-3">
+            {neglected.length ? neglected.map(item => <Link key={item.course.id} href={`/courses/${item.course.id}`} className="block rounded border border-white/10 p-3 hover:bg-white/5">
+              <div className="flex justify-between gap-3"><span className="text-sm font-medium">{item.course.title}</span><span className="text-xs text-slate-400">{fmtMin(item.minutes)}</span></div>
+              <div className="mt-1 text-xs text-slate-500">{item.open} open task{item.open === 1 ? '' : 's'}</div>
+            </Link>) : <div className="text-sm text-slate-400">No active course currently stands out as neglected.</div>}
+          </div>
+        </div>
+      </section>
+
+      <section className="grid xl:grid-cols-2 gap-4">
+        <div className="card p-4">
+          <h3 className="text-lg font-medium">Eight-week trend</h3>
+          <div className="mt-5 flex items-end gap-2 h-44">
+            {weekly.map(item => <div key={item.key} className="flex-1 min-w-0 flex flex-col justify-end items-center gap-1 h-full">
+              <div className="text-[10px] text-slate-500">{item.minutes ? fmtMin(item.minutes) : ''}</div>
+              <div className="w-full max-w-12 rounded-t bg-blue-500/80" style={{ height: `${Math.max(item.minutes ? 8 : 2, item.minutes / weeklyMax * 120)}px` }} />
+              <div className="text-[9px] text-slate-500 truncate w-full text-center">{item.key.slice(5)}</div>
+            </div>)}
+          </div>
+        </div>
+        <div className="card p-4">
+          <h3 className="text-lg font-medium">Strongest focus windows</h3>
+          <div className="mt-4 space-y-2">
+            {focusByHour.length ? focusByHour.slice(0, 6).map(row => <div key={row.hour} className="flex items-center justify-between rounded border border-white/10 px-3 py-2 text-sm">
+              <span>{new Date(2000,0,1,row.hour).toLocaleTimeString([], { hour: 'numeric' })}</span><span className="text-slate-300">{row.focus.toFixed(1)}/10 · {row.count} session{row.count === 1 ? '' : 's'}</span>
+            </div>) : <div className="text-sm text-slate-400">Log focus scores to build this view.</div>}
+          </div>
+        </div>
+      </section>
+
+      {(risks.length > 0 || estimateAccuracy.rows.length > 0) && <section className="grid xl:grid-cols-2 gap-4">
+        <div className="card p-4">
+          <h3 className="text-lg font-medium">At-risk work</h3>
+          <div className="mt-3 divide-y divide-white/10">
+            {risks.map(task => <Link key={task.id} href={`/tasks?taskId=${encodeURIComponent(String(task.id))}`} className="block py-3">
+              <div className="flex justify-between gap-3"><span className="text-sm font-medium">{task.title}</span><span className="text-xs text-slate-400">{new Date(task.dueDate).toLocaleDateString()}</span></div>
+              <div className="mt-1 text-xs text-amber-300">{task.atRiskReason || 'At risk'}</div>
+            </Link>)}
+          </div>
+        </div>
+        <div className="card p-4">
+          <h3 className="text-lg font-medium">Largest estimate misses</h3>
+          <div className="mt-3 divide-y divide-white/10">
+            {estimateAccuracy.rows.map(row => <Link key={row.task.id} href={`/tasks?taskId=${encodeURIComponent(String(row.task.id))}`} className="flex items-center justify-between gap-3 py-3 text-sm">
+              <span className="min-w-0 truncate">{row.task.title}</span><span className="shrink-0 text-xs text-slate-400">est {fmtMin(row.estimated)} · actual {fmtMin(row.actual)}</span>
+            </Link>)}
+          </div>
+        </div>
+      </section>}
     </main>
   );
+}
+
+function Metric({ label, value }: { label: string; value: string }) {
+  return <div className="card p-4"><div className="text-[10px] uppercase tracking-wide text-slate-400">{label}</div><div className="mt-2 text-xl font-medium">{value}</div></div>;
 }
