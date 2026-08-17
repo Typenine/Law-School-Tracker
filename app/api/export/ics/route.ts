@@ -1,4 +1,5 @@
-import { ensureSchema, listTasks } from '@/lib/storage';
+import { ensureSchema } from '@/lib/storage';
+import { ensureTaskV2Schema, listVisibleTasks } from '@/lib/taskV2';
 import { createHmac } from 'crypto';
 
 export const dynamic = 'force-dynamic';
@@ -12,7 +13,6 @@ function formatStampUTC(d: Date) {
   return `${d.getUTCFullYear()}${pad(d.getUTCMonth() + 1)}${pad(d.getUTCDate())}T${pad(d.getUTCHours())}${pad(d.getUTCMinutes())}${pad(d.getUTCSeconds())}Z`;
 }
 function formatLocalDT(d: Date) {
-  // floating local time (no TZID). Many clients treat as local clock time
   return `${d.getFullYear()}${pad(d.getMonth() + 1)}${pad(d.getDate())}T${pad(d.getHours())}${pad(d.getMinutes())}${pad(d.getSeconds())}`;
 }
 function icsEscape(s: string) {
@@ -21,13 +21,12 @@ function icsEscape(s: string) {
 
 export async function GET(req: Request) {
   await ensureSchema();
+  await ensureTaskV2Schema();
   const url = new URL(req.url);
   const requiredToken = process.env.ICS_PRIVATE_TOKEN;
   if (requiredToken) {
     const token = url.searchParams.get('token') || '';
-    if (token !== requiredToken) {
-      return new Response('Unauthorized', { status: 401 });
-    }
+    if (token !== requiredToken) return new Response('Unauthorized', { status: 401 });
   }
   const course = (url.searchParams.get('course') || '').trim().toLowerCase();
   const status = (url.searchParams.get('status') || '').trim().toLowerCase();
@@ -35,19 +34,13 @@ export async function GET(req: Request) {
   const timed = url.searchParams.get('timed') === '1';
   const toggleSecret = process.env.ICS_TOGGLE_SECRET || process.env.ICS_PRIVATE_TOKEN || '';
 
-  let tasks = await listTasks();
+  let tasks = await listVisibleTasks({ includeBlocked: true });
   if (course) tasks = tasks.filter(t => (t.course || '').toLowerCase().includes(course));
   if (status === 'todo' || status === 'done') tasks = tasks.filter(t => t.status === status);
 
   const now = new Date();
   const dtstamp = formatStampUTC(now);
-
-  const lines: string[] = [];
-  lines.push('BEGIN:VCALENDAR');
-  lines.push('VERSION:2.0');
-  lines.push('PRODID:-//LawSchoolTracker//EN');
-  lines.push('CALSCALE:GREGORIAN');
-  lines.push('METHOD:PUBLISH');
+  const lines: string[] = ['BEGIN:VCALENDAR', 'VERSION:2.0', 'PRODID:-//LawSchoolTracker//EN', 'CALSCALE:GREGORIAN', 'METHOD:PUBLISH'];
 
   for (const t of tasks) {
     const due = new Date(t.dueDate);
@@ -55,73 +48,30 @@ export async function GET(req: Request) {
     const summary = icsEscape(t.title);
     const details = `${t.course ? `[${t.course}] ` : ''}${t.title}${t.estimatedMinutes ? ` (est ${t.estimatedMinutes}m)` : ''}`;
     const desc = icsEscape(details);
-    const exp = Math.floor(Date.now() / 1000) + 60 * 60 * 24 * 30; // 30 days
+    const exp = Math.floor(Date.now() / 1000) + 60 * 60 * 24 * 30;
     const payload = `${t.id}:${exp}`;
     const sig = toggleSecret ? createHmac('sha256', toggleSecret).update(payload).digest('hex') : '';
     const toggleUrl = sig ? `${origin}/api/tasks/${t.id}/toggle?exp=${exp}&sig=${sig}` : origin;
     if (timed) {
-      const baseStart = new Date(due);
-      baseStart.setHours(9, 0, 0, 0); // 09:00
-      const total = (typeof t.estimatedMinutes === 'number' && t.estimatedMinutes > 0) ? t.estimatedMinutes : 60;
-      const CHUNK = 90; // minutes
-      const chunks = Math.min(2, Math.max(1, Math.ceil(total / CHUNK)));
+      const baseStart = new Date(due); baseStart.setHours(9, 0, 0, 0);
+      const total = typeof t.estimatedMinutes === 'number' && t.estimatedMinutes > 0 ? t.estimatedMinutes : 60;
+      const chunkSize = 90;
+      const chunks = Math.min(2, Math.max(1, Math.ceil(total / chunkSize)));
       let remaining = total;
       let cursor = new Date(baseStart);
       for (let i = 0; i < chunks; i++) {
-        const dur = Math.min(remaining, CHUNK);
+        const dur = Math.min(remaining, chunkSize);
         const start = new Date(cursor);
         const end = new Date(start.getTime() + dur * 60000);
-        const uid = `${t.id}-${i}@law-school-tracker`;
-        lines.push('BEGIN:VEVENT');
-        lines.push(`UID:${uid}`);
-        lines.push(`DTSTAMP:${dtstamp}`);
-        lines.push(`DTSTART:${formatLocalDT(start)}`);
-        lines.push(`DTEND:${formatLocalDT(end)}`);
-        lines.push(`SUMMARY:${summary}`);
-        lines.push(`DESCRIPTION:${desc}`);
-        lines.push(`URL:${origin}`);
-        lines.push(`X-ALT-DESC;FMTTYPE=text/html:${icsEscape(`<a href="${toggleUrl}">Toggle Done</a>`)}`);
-        lines.push(`X-LST-Toggle:${toggleUrl}`);
-        // 24-hour prior reminder
-        lines.push('BEGIN:VALARM');
-        lines.push('ACTION:DISPLAY');
-        lines.push('DESCRIPTION:Task due soon');
-        lines.push('TRIGGER:-PT24H');
-        lines.push('END:VALARM');
-        lines.push('END:VEVENT');
+        lines.push('BEGIN:VEVENT', `UID:${t.id}-${i}@law-school-tracker`, `DTSTAMP:${dtstamp}`, `DTSTART:${formatLocalDT(start)}`, `DTEND:${formatLocalDT(end)}`, `SUMMARY:${summary}`, `DESCRIPTION:${desc}`, `URL:${origin}`, `X-ALT-DESC;FMTTYPE=text/html:${icsEscape(`<a href="${toggleUrl}">Toggle Done</a>`)}`, `X-LST-Toggle:${toggleUrl}`, 'BEGIN:VALARM', 'ACTION:DISPLAY', 'DESCRIPTION:Task due soon', 'TRIGGER:-PT24H', 'END:VALARM', 'END:VEVENT');
         remaining -= dur;
-        cursor = end; // contiguous blocks
+        cursor = end;
         if (remaining <= 0) break;
       }
     } else {
-      const uid = `${t.id}@law-school-tracker`;
-      lines.push('BEGIN:VEVENT');
-      lines.push(`UID:${uid}`);
-      lines.push(`DTSTAMP:${dtstamp}`);
-      lines.push(`DTSTART;VALUE=DATE:${dateStr}`);
-      lines.push(`SUMMARY:${summary}`);
-      lines.push(`DESCRIPTION:${desc}`);
-      lines.push(`URL:${origin}`);
-      lines.push(`X-ALT-DESC;FMTTYPE=text/html:${icsEscape(`<a href="${toggleUrl}">Toggle Done</a>`)}`);
-      lines.push(`X-LST-Toggle:${toggleUrl}`);
-      // 24-hour prior reminder
-      lines.push('BEGIN:VALARM');
-      lines.push('ACTION:DISPLAY');
-      lines.push('DESCRIPTION:Task due soon');
-      lines.push('TRIGGER:-PT24H');
-      lines.push('END:VALARM');
-      lines.push('END:VEVENT');
+      lines.push('BEGIN:VEVENT', `UID:${t.id}@law-school-tracker`, `DTSTAMP:${dtstamp}`, `DTSTART;VALUE=DATE:${dateStr}`, `SUMMARY:${summary}`, `DESCRIPTION:${desc}`, `URL:${origin}`, `X-ALT-DESC;FMTTYPE=text/html:${icsEscape(`<a href="${toggleUrl}">Toggle Done</a>`)}`, `X-LST-Toggle:${toggleUrl}`, 'BEGIN:VALARM', 'ACTION:DISPLAY', 'DESCRIPTION:Task due soon', 'TRIGGER:-PT24H', 'END:VALARM', 'END:VEVENT');
     }
   }
-
   lines.push('END:VCALENDAR');
-  const body = lines.join('\r\n');
-
-  return new Response(body, {
-    status: 200,
-    headers: {
-      'Content-Type': 'text/calendar; charset=utf-8',
-      'Content-Disposition': 'attachment; filename="law-school-tasks.ics"',
-    },
-  });
+  return new Response(lines.join('\r\n'), { status: 200, headers: { 'Content-Type': 'text/calendar; charset=utf-8', 'Content-Disposition': 'attachment; filename="law-school-tasks.ics"' } });
 }
