@@ -1,5 +1,6 @@
 import json
 import os
+import re
 import time
 import urllib.request
 from playwright.sync_api import sync_playwright, expect
@@ -74,6 +75,7 @@ with sync_playwright() as p:
     expect(duration).to_be_visible()
     duration.fill("20")
     page.get_by_role("button", name="Log Progress", exact=True).click()
+    dialog.get_by_role("button", name="Overview", exact=True).click()
     expect(dialog.get_by_text("20m", exact=True)).to_be_visible(timeout=10000)
 
     dialog.get_by_role("button", name="Details", exact=True).click()
@@ -81,7 +83,7 @@ with sync_playwright() as p:
     expect(dialog).not_to_be_visible(timeout=10000)
     expect(page.get_by_text(UPDATED, exact=True)).not_to_be_visible(timeout=10000)
 
-    trash_button = page.get_by_role("button", name=lambda name: name.startswith("Trash"))
+    trash_button = page.get_by_role("button", name=re.compile(r"^Trash"))
     trash_button.click()
     expect(page.get_by_text(UPDATED, exact=True)).to_be_visible(timeout=10000)
     page.get_by_role("button", name="Restore", exact=True).click()
