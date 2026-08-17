@@ -82,7 +82,7 @@ async function availableTables(): Promise<string[]> {
     WHERE table_schema='public' AND table_type='BASE TABLE'
     ORDER BY table_name
   `);
-  return result.rows.map(row => String(row.table_name)).filter(allowedTable);
+  return result.rows.map((row: any) => String(row.table_name)).filter(allowedTable);
 }
 
 export async function createWorkspaceBackup(options?: { label?: string | null; semesterId?: string | null }): Promise<WorkspaceBackup> {
@@ -185,14 +185,14 @@ async function primaryKeyColumns(table: string): Promise<string[]> {
     WHERE i.indrelid = $1::regclass AND i.indisprimary
     ORDER BY array_position(i.indkey, a.attnum)
   `, [table]);
-  return result.rows.map(row => String(row.column_name));
+  return result.rows.map((row: any) => String(row.column_name));
 }
 async function tableColumns(table: string): Promise<string[]> {
   const result = await db().query(`
     SELECT column_name FROM information_schema.columns
     WHERE table_schema='public' AND table_name=$1 ORDER BY ordinal_position
   `, [table]);
-  return result.rows.map(row => String(row.column_name));
+  return result.rows.map((row: any) => String(row.column_name));
 }
 
 export async function restoreWorkspaceBackup(value: unknown): Promise<{ restoredTables: Record<string, number>; skipped: string[] }> {
@@ -244,7 +244,7 @@ export async function createWorkspaceArchive(input: { semesterId?: string | null
 export async function listWorkspaceArchives(): Promise<Array<Omit<WorkspaceArchive, 'snapshot'> & { exportedAt: string }>> {
   await ensureWorkspaceArchiveSchema();
   const result = await db().query(`SELECT id, semester_id, name, created_at, snapshot->>'exportedAt' AS exported_at FROM workspace_archives ORDER BY created_at DESC`);
-  return result.rows.map(row => ({ id: String(row.id), semesterId: row.semester_id ?? null, name: String(row.name), createdAt: new Date(row.created_at).toISOString(), exportedAt: String(row.exported_at || row.created_at) }));
+  return result.rows.map((row: any) => ({ id: String(row.id), semesterId: row.semester_id ?? null, name: String(row.name), createdAt: new Date(row.created_at).toISOString(), exportedAt: String(row.exported_at || row.created_at) }));
 }
 
 export async function getWorkspaceArchive(id: string): Promise<WorkspaceArchive | null> {
