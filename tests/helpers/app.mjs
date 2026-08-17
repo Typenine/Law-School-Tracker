@@ -86,14 +86,35 @@ export async function startApp() {
 
   // The current core-schema migration adds tasks.course_id with a foreign key
   // before its own CREATE TABLE courses statement. Production already has the
-  // courses table, but a brand-new CI database does not. Seed the referenced
-  // table so connector tests exercise the real endpoints instead of failing on
-  // that unrelated migration-order issue.
+  // courses table, but a brand-new CI database does not. Seed the complete
+  // course shape that the tracker reads so connector tests can exercise the
+  // real assignment/session/overview endpoints instead of failing on that
+  // unrelated migration-order issue.
   await db.query(`
     CREATE TABLE IF NOT EXISTS courses (
       id uuid PRIMARY KEY,
+      code text,
       title text NOT NULL,
-      created_at timestamptz NOT NULL DEFAULT now()
+      instructor text,
+      instructor_email text,
+      room text,
+      location text,
+      color text,
+      meeting_days integer[],
+      meeting_start text,
+      meeting_end text,
+      meeting_blocks jsonb,
+      start_date date,
+      end_date date,
+      semester text,
+      year integer,
+      created_at timestamptz NOT NULL DEFAULT now(),
+      learned_mpp double precision,
+      learned_sample integer,
+      learned_updated_at timestamptz,
+      override_enabled boolean,
+      override_mpp double precision,
+      default_activity text
     )
   `);
 
