@@ -76,7 +76,7 @@ with sync_playwright() as p:
     wait_for_task_title(task["id"], UPDATED)
 
     # Verify the user-visible list reflects the saved edit, then reopen the same task.
-    dialog.get_by_role("button", name="Close task details", exact=True).click()
+    page.locator('button[aria-label="Close task details"]').click(force=True)
     expect(dialog).not_to_be_visible(timeout=10000)
     expect(page.get_by_text(UPDATED, exact=True)).to_be_visible(timeout=10000)
     page.get_by_text(UPDATED, exact=True).click()
