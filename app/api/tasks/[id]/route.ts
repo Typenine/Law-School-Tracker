@@ -1,6 +1,7 @@
 import { NextRequest } from 'next/server';
-import { deleteTask, ensureSchema, updateTask } from '@/lib/storage';
+import { ensureSchema, listTasks } from '@/lib/storage';
 import { UpdateTaskInput } from '@/lib/types';
+import { completeTaskWithoutSession, editTaskStructured, ensureTaskV2Schema, purgeTask, reopenTask, trashTask } from '@/lib/taskV2';
 import { z } from 'zod';
 
 export const dynamic = 'force-dynamic';
@@ -8,6 +9,7 @@ export const runtime = 'nodejs';
 
 export async function PATCH(req: NextRequest, { params }: { params: { id: string } }) {
   await ensureSchema();
+  await ensureTaskV2Schema();
   const schema = z.object({
     title: z.string().min(1).optional(),
     course: z.string().trim().min(1).nullable().optional(),
@@ -33,22 +35,45 @@ export async function PATCH(req: NextRequest, { params }: { params: { id: string
     remainingPageRanges: z.string().trim().max(500).nullable().optional(),
   });
   const parsed = schema.safeParse(await req.json());
-  if (!parsed.success) return new Response('Invalid patch body', { status: 400 });
+  if (!parsed.success) return Response.json({ error: 'Invalid patch body' }, { status: 400 });
   const body = parsed.data as UpdateTaskInput;
-  
-  // Auto-set completedAt when marking as done
-  if (body.status === 'done' && !body.completedAt) {
-    body.completedAt = new Date().toISOString();
+  try {
+    if (body.status === 'done') {
+      const task = await completeTaskWithoutSession(params.id);
+      const { status: _status, ...rest } = body as any;
+      const updated = Object.keys(rest).length ? await editTaskStructured(params.id, rest as UpdateTaskInput) : task;
+      return Response.json({ task: updated });
+    }
+    if (body.status === 'todo') {
+      const current = (await listTasks()).find(task => String(task.id) === String(params.id));
+      if (!current) return Response.json({ error: 'Not found' }, { status: 404 });
+      if (current.status === 'done') await reopenTask(params.id);
+      const { status: _status, ...rest } = body as any;
+      if (!Object.keys(rest).length) {
+        const task = (await listTasks()).find(item => String(item.id) === String(params.id));
+        return Response.json({ task });
+      }
+      const task = await editTaskStructured(params.id, rest as UpdateTaskInput);
+      return Response.json({ task });
+    }
+    const task = await editTaskStructured(params.id, body);
+    return Response.json({ task });
+  } catch (error: any) {
+    const status = Number(error?.status) || 500;
+    if (status >= 500) console.error('[task patch]', error);
+    return Response.json({ error: error?.message || 'Unable to update task.' }, { status });
   }
-  
-  const t = await updateTask(params.id, body);
-  if (!t) return new Response('Not found', { status: 404 });
-  return Response.json({ task: t });
 }
 
-export async function DELETE(_req: NextRequest, { params }: { params: { id: string } }) {
+export async function DELETE(req: NextRequest, { params }: { params: { id: string } }) {
   await ensureSchema();
-  const ok = await deleteTask(params.id);
-  if (!ok) return new Response('Not found', { status: 404 });
-  return new Response(null, { status: 204 });
+  await ensureTaskV2Schema();
+  try {
+    if (req.nextUrl.searchParams.get('purge') === 'true') await purgeTask(params.id);
+    else await trashTask(params.id);
+    return new Response(null, { status: 204 });
+  } catch (error: any) {
+    const status = Number(error?.status) || 500;
+    return Response.json({ error: error?.message || 'Unable to delete task.' }, { status });
+  }
 }

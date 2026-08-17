@@ -1,9 +1,9 @@
-
 import { NextRequest } from 'next/server';
-import { ensureSchema, getGptPool, listCourses, listSessions, listTasks } from '@/lib/storage';
+import { ensureSchema, getGptPool, listCourses, listSessions } from '@/lib/storage';
 import { countNotesByTask, hybridSearchAiNotes, listNotebooks } from '@/lib/aiNotes';
 import { notesGptDb } from '@/lib/notes/db';
 import { readingMetrics } from '@/lib/reading';
+import { ensureTaskV2Schema, listVisibleTasks } from '@/lib/taskV2';
 import { noStoreJson, requireGptToken } from '@/lib/actionAuth';
 
 export const dynamic = 'force-dynamic';
@@ -17,20 +17,32 @@ export async function GET(req: NextRequest) {
   const denied = requireGptToken(req); if (denied) return denied;
   try {
     await ensureSchema();
+    await ensureTaskV2Schema();
     const days = boundedInteger(req.nextUrl.searchParams.get('days'), 14, 1, 60);
     const recentLimit = boundedInteger(req.nextUrl.searchParams.get('recentNotes'), 8, 1, 20);
     const now = new Date(); const horizon = new Date(now.getTime() + days * 864e5); const sevenDaysAgo = new Date(now.getTime() - 7 * 864e5);
     const gptPool = getGptPool(); const notePool = notesGptDb();
     const [courses, tasks, sessions, notebooks, noteCounts, recentNotes] = await Promise.all([
-      listCourses(gptPool), listTasks(gptPool), listSessions(gptPool), listNotebooks(false, notePool), countNotesByTask(notePool).catch(() => ({} as Record<string, number>)), hybridSearchAiNotes('', { sort: 'recent', limit: recentLimit }, notePool),
+      listCourses(gptPool),
+      listVisibleTasks({ includeBlocked: true, overridePool: gptPool }),
+      listSessions(gptPool),
+      listNotebooks(false, notePool),
+      countNotesByTask(notePool).catch(() => ({} as Record<string, number>)),
+      hybridSearchAiNotes('', { sort: 'recent', limit: recentLimit }, notePool),
     ]);
     const taskById = new Map(tasks.map(task => [String(task.id), task]));
-    const summarizeTask = (task: any) => ({
-      id: task.id, title: task.title, course: task.course ?? null, courseId: task.courseId ?? null, dueDate: task.dueDate, status: task.status,
-      estimatedMinutes: task.estimatedMinutes ?? null, estimateOrigin: task.estimateOrigin ?? null, priority: task.priority ?? null, activity: task.activity ?? null,
-      pagesRead: task.pagesRead ?? null, tags: task.tags ?? [], noteCount: noteCounts[String(task.id)] || 0,
-      ...(task.activity === 'reading' || task.originalPageRanges || task.remainingPageRanges ? readingMetrics(task, sessions, courses) : {}),
-    });
+    const summarizeTask = (task: any) => {
+      const blockers = (task.dependsOn || []).map(String).filter((id: string) => taskById.get(id)?.status !== 'done').map((id: string) => ({ id, title: taskById.get(id)?.title || 'Missing prerequisite' }));
+      const hasSessions = sessions.some(session => String(session.taskId || '') === String(task.id));
+      return {
+        id: task.id, title: task.title, course: task.course ?? null, courseId: task.courseId ?? null, dueDate: task.dueDate, status: task.status,
+        workflowState: task.status === 'done' ? 'done' : hasSessions ? 'in-progress' : 'not-started',
+        blocked: blockers.length > 0 && task.status !== 'done', blockedBy: blockers, dependsOn: task.dependsOn ?? [],
+        estimatedMinutes: task.estimatedMinutes ?? null, estimateOrigin: task.estimateOrigin ?? null, priority: task.priority ?? null, activity: task.activity ?? null,
+        pagesRead: task.pagesRead ?? null, tags: task.tags ?? [], noteCount: noteCounts[String(task.id)] || 0,
+        ...(task.activity === 'reading' || task.originalPageRanges || task.remainingPageRanges ? readingMetrics(task, sessions, courses) : {}),
+      };
+    };
     const openTasks = tasks.filter(task => task.status !== 'done');
     const upcomingAssignments = openTasks.filter(task => { const due = new Date(task.dueDate); return !Number.isNaN(due.getTime()) && due >= now && due <= horizon; }).sort((a,b)=>+new Date(a.dueDate)-+new Date(b.dueDate)).map(summarizeTask);
     const overdueAssignments = openTasks.filter(task => { const due = new Date(task.dueDate); return !Number.isNaN(due.getTime()) && due < now; }).sort((a,b)=>+new Date(a.dueDate)-+new Date(b.dueDate)).map(summarizeTask);
