@@ -195,12 +195,12 @@ async function tableColumns(table: string): Promise<string[]> {
   return result.rows.map(row => String(row.column_name));
 }
 
-export async function restoreWorkspaceBackup(value: unknown): Promise<{ restored: Record<string, number>; skipped: string[] }> {
+export async function restoreWorkspaceBackup(value: unknown): Promise<{ restoredTables: Record<string, number>; skipped: string[] }> {
   if (!validBackup(value)) throw new Error('This is not a valid Law School Tracker backup.');
   const current = new Set(await availableTables());
   const supplied = Object.keys(value.tables).filter(allowedTable);
   const ordered = [...RESTORE_ORDER.filter(name => supplied.includes(name)), ...supplied.filter(name => !RESTORE_ORDER.includes(name)).sort()];
-  const restored: Record<string, number> = {};
+  const restoredTables: Record<string, number> = {};
   const skipped: string[] = [];
   const client = await db().connect();
   try {
@@ -218,10 +218,10 @@ export async function restoreWorkspaceBackup(value: unknown): Promise<{ restored
         : 'NOTHING'}`;
       const sql = `INSERT INTO ${quoteIdent(table)} SELECT * FROM json_populate_recordset(NULL::${quoteIdent(table)}, $1::json) ${conflict}`;
       const result = await client.query(sql, [JSON.stringify(data)]);
-      restored[table] = result.rowCount || data.length;
+      restoredTables[table] = result.rowCount || data.length;
     }
     await client.query('COMMIT');
-    return { restored, skipped };
+    return { restoredTables, skipped };
   } catch (error) {
     await client.query('ROLLBACK');
     throw error;
