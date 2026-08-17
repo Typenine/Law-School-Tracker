@@ -1,13 +1,16 @@
 import type { StatsPayload } from './types';
+import { activeSemesterId } from './collections';
 import { listSessions } from './storage';
 import { ensureTaskV2Schema, listVisibleTasks } from './taskV2';
 
 export async function statsNowV2(): Promise<StatsPayload> {
   await ensureTaskV2Schema();
-  const [tasks, sessions] = await Promise.all([
+  const [allTasks, sessions, activeTerm] = await Promise.all([
     listVisibleTasks({ includeBlocked: true }),
     listSessions(),
+    activeSemesterId(),
   ]);
+  const tasks = activeTerm ? allTasks.filter(task => !task.term || task.term === activeTerm) : allTasks;
   const now = new Date();
   const in7 = new Date(now.getTime() + 7 * 864e5);
   const upcoming7d = tasks.filter(task => {
@@ -83,7 +86,7 @@ export async function statsNowV2(): Promise<StatsPayload> {
   const avgFocus7d = past7Focus.length ? Math.round((past7Focus.reduce((a, b) => a + b, 0) / past7Focus.length) * 10) / 10 : null;
 
   const subjectMap = new Map<string, { totalMinutes: number; totalFocus: number; focusCount: number; count: number }>();
-  for (const task of tasks.filter(item => item.status === 'done' && Number(item.actualMinutes) > 0)) {
+  for (const task of allTasks.filter(item => item.status === 'done' && Number(item.actualMinutes) > 0)) {
     const subject = task.course || 'Unassigned';
     const current = subjectMap.get(subject) || { totalMinutes: 0, totalFocus: 0, focusCount: 0, count: 0 };
     current.totalMinutes += Number(task.actualMinutes) || 0;
