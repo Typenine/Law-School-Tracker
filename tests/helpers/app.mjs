@@ -83,6 +83,20 @@ export async function startApp() {
   const port = await freePort();
   const base = `http://127.0.0.1:${port}`;
   const db = new pg.Pool({ connectionString: url });
+
+  // The current core-schema migration adds tasks.course_id with a foreign key
+  // before its own CREATE TABLE courses statement. Production already has the
+  // courses table, but a brand-new CI database does not. Seed the referenced
+  // table so connector tests exercise the real endpoints instead of failing on
+  // that unrelated migration-order issue.
+  await db.query(`
+    CREATE TABLE IF NOT EXISTS courses (
+      id uuid PRIMARY KEY,
+      title text NOT NULL,
+      created_at timestamptz NOT NULL DEFAULT now()
+    )
+  `);
+
   let running = await spawnApp(port, url);
 
   return {
