@@ -3,17 +3,36 @@ import assert from 'node:assert/strict';
 import { startApp } from './helpers/app.mjs';
 
 let app;
+
+async function resetSiteState() {
+  await app.reset();
+  // The archive table is created by the API in before(), so this truncate is
+  // deterministic instead of being silently skipped when the first relation
+  // does not exist. Courses are included because full-workspace backups must
+  // not inherit fixtures from an earlier suite.
+  await app.db.query('TRUNCATE TABLE workspace_archives, task_v2_meta, schedule_blocks, sessions, tasks, courses CASCADE');
+  // Semesters live in the settings-backed collection rather than their own SQL
+  // table. Clear them through the public API so this suite cannot leave an
+  // active-term filter behind for the subsequent Chromium audits.
+  const cleared = await app.api('PUT', '/api/semesters', { semesters: [] });
+  assert.equal(cleared.status, 200);
+}
+
 before(async () => {
   app = await startApp();
   await app.api('GET', '/api/tasks/workspace');
   await app.api('GET', '/api/notes/notebooks');
+  await app.api('GET', '/api/workspace/archives');
 });
-after(async () => { await app?.stop(); });
+
+after(async () => {
+  if (!app) return;
+  await resetSiteState();
+  await app.stop();
+});
+
 beforeEach(async () => {
-  await app.reset();
-  await app.db.query('TRUNCATE TABLE workspace_archives, task_v2_meta, schedule_blocks, sessions, tasks CASCADE').catch(error => {
-    if (error?.code !== '42P01') throw error;
-  });
+  await resetSiteState();
 });
 
 async function course(title, year = 2026) {
