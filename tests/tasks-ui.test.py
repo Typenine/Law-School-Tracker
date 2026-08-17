@@ -25,6 +25,19 @@ def request_json(method: str, path: str, payload=None):
         return json.loads(raw) if raw else None
 
 
+def wait_for_task_title(task_id: str, expected: str, timeout_seconds: float = 10.0):
+    deadline = time.time() + timeout_seconds
+    last_title = None
+    while time.time() < deadline:
+        workspace = request_json("GET", "/api/tasks/workspace")
+        task = next((item for item in workspace["tasks"] if item["id"] == task_id), None)
+        last_title = task.get("title") if task else None
+        if last_title == expected:
+            return workspace
+        time.sleep(0.2)
+    raise AssertionError(f"Task title never persisted as {expected!r}; last value was {last_title!r}")
+
+
 course = request_json("POST", "/api/courses", {
     "title": COURSE,
     "semester": "Fall",
@@ -60,7 +73,15 @@ with sync_playwright() as p:
     expect(title_input).to_have_value(TITLE)
     title_input.fill(UPDATED)
     dialog.get_by_role("button", name="Save changes", exact=True).click()
-    expect(dialog.get_by_text(UPDATED, exact=True)).to_be_visible(timeout=10000)
+    wait_for_task_title(task["id"], UPDATED)
+
+    # Verify the user-visible list reflects the saved edit, then reopen the same task.
+    dialog.get_by_role("button", name="Close task details", exact=True).click()
+    expect(dialog).not_to_be_visible(timeout=10000)
+    expect(page.get_by_text(UPDATED, exact=True)).to_be_visible(timeout=10000)
+    page.get_by_text(UPDATED, exact=True).click()
+    dialog = page.get_by_role("dialog")
+    expect(dialog).to_be_visible()
 
     dialog.get_by_role("button", name="progress", exact=True).click()
     step_input = dialog.get_by_placeholder("Add a step…")
