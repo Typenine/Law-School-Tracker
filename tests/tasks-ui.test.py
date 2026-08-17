@@ -56,7 +56,7 @@ with sync_playwright() as p:
         expect(dialog.get_by_role("button", name=tab, exact=True)).to_be_visible()
 
     dialog.get_by_role("button", name="details", exact=True).click()
-    title_input = dialog.locator('input[type="text"]').first
+    title_input = dialog.locator('input').first
     expect(title_input).to_have_value(TITLE)
     title_input.fill(UPDATED)
     dialog.get_by_role("button", name="Save changes", exact=True).click()
