@@ -23,11 +23,11 @@ export async function GET(req: NextRequest) {
     openapi: '3.1.0',
     info: {
       title: 'Law School Tracker Study Connector',
-      version: '2.0.0',
+      version: '2.1.0',
       description: [
         'A study-oriented connector to the user’s law-school workspace. It can read courses, assignments, study history, notebooks, class notes, reading notes, case briefs, outlines, and professor materials.',
         'The real hierarchy is semester metadata > course/notebook > nested sections > pages. A notebook is normally a course such as Evidence; sections beneath it may be Class Notes, Case Briefs, Week 3, or any other structure the user creates.',
-        'For study planning, begin with getWorkspaceOverview, then inspect upcoming assignments and relevant notes. For a question about a named branch, use listNotebooks to get the exact section id and searchNotes with includeDescendants=true. Search is hybrid semantic + keyword when embeddings are configured, with automatic lexical fallback.',
+        'For study planning, begin with getWorkspaceOverview, then inspect upcoming assignments, openReadings, exact remaining page ranges, pace, and relevant notes. For a question about a named branch, use listNotebooks to get the exact section id and searchNotes with includeDescendants=true. Search is hybrid semantic + keyword when embeddings are configured, with automatic lexical fallback.',
         'For quizzes, practice questions, outlines, or synthesis, search broadly enough to find the relevant pages, then call getNotes for the best few full notes before answering. Treat the user’s notes and case briefs as the primary source. Identify the note titles and location paths behind substantive claims, and say plainly when the workspace does not contain the answer.',
         'Write operations are deliberately narrow. Never create, append to, or relink a note unless the user explicitly asks to save or change something in the tracker. There is no GPT delete action.',
       ].join(' '),
@@ -71,6 +71,7 @@ export async function GET(req: NextRequest) {
           parameters: [
             { name: 'status', in: 'query', schema: { type: 'string', enum: ['todo', 'done', 'all'], default: 'all' } },
             { name: 'course', in: 'query', description: 'Case-insensitive partial course-title match.', schema: { type: 'string' } },
+            { name: 'activity', in: 'query', description: 'Restrict assignments to an activity such as reading, review, outline, or practice.', schema: { type: 'string' } },
             { name: 'from', in: 'query', description: 'Inclusive ISO date or datetime.', schema: { type: 'string' } },
             { name: 'to', in: 'query', description: 'Inclusive ISO date or datetime.', schema: { type: 'string' } },
             { name: 'limit', in: 'query', schema: { type: 'integer', minimum: 1, maximum: 100, default: 50 } },
@@ -253,10 +254,13 @@ export async function GET(req: NextRequest) {
         },
         Assignment: {
           type: 'object', required: ['id', 'title', 'dueDate', 'status', 'tags'], properties: {
-            id: { type: 'string' }, title: { type: 'string' }, course: { type: ['string', 'null'] }, dueDate: { type: 'string' },
-            status: { type: 'string', enum: ['todo', 'done'] }, estimatedMinutes: { type: ['integer', 'null'] }, priority: { type: ['integer', 'null'] },
+            id: { type: 'string' }, title: { type: 'string' }, course: { type: ['string', 'null'] }, courseId: { type: ['string', 'null'] }, dueDate: { type: 'string' },
+            status: { type: 'string', enum: ['todo', 'done'] }, estimatedMinutes: { type: ['integer', 'null'] }, estimateOrigin: { type: ['string', 'null'] }, priority: { type: ['integer', 'null'] },
             notes: { type: ['string', 'null'] }, tags: { type: 'array', items: { type: 'string' } }, activity: { type: ['string', 'null'] },
             pagesRead: { type: ['integer', 'null'] }, term: { type: ['string', 'null'] }, noteCount: { type: 'integer' },
+            originalPageRanges: { type: ['string', 'null'] }, remainingPageRanges: { type: ['string', 'null'] },
+            assignedPages: { type: 'integer' }, completedPages: { type: 'integer' }, remainingPages: { type: 'integer' }, percentComplete: { type: 'integer' },
+            loggedMinutes: { type: 'integer' }, estimatedMinutesRemaining: { type: 'integer' }, paceMinutesPerPage: { type: 'number' }, paceSource: { type: 'string', enum: ['override', 'learned', 'default'] },
           },
         },
         AssignmentListResponse: {
@@ -358,6 +362,7 @@ export async function GET(req: NextRequest) {
             courses: { type: 'array', items: { $ref: '#/components/schemas/Course' } },
             upcomingAssignments: { type: 'array', items: { $ref: '#/components/schemas/Assignment' } },
             overdueAssignments: { type: 'array', items: { $ref: '#/components/schemas/Assignment' } },
+            openReadings: { type: 'array', items: { $ref: '#/components/schemas/Assignment' } },
             notebooks: { type: 'array', items: { type: 'object', properties: {
               id: { type: 'string' }, name: { type: 'string' }, course: { type: ['string', 'null'] }, semester: { type: ['string', 'null'] }, pageCount: { type: 'integer' },
             } } },

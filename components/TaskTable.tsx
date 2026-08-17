@@ -376,54 +376,26 @@ export default function TaskTable() {
   async function handleLogSubmit(data: LogSubmitData) {
     if (!logModalTask) return;
     const t = logModalTask;
-    
-    // Log the session - use completion date if provided, otherwise now
-    const sessionWhen = data.completionDate 
-      ? new Date(data.completionDate + 'T12:00:00').toISOString()
-      : new Date().toISOString();
-    // Pages read were collected by the modal but never sent, so per-course
-    // reading pace never learned anything from sessions logged here.
-    let pagesRead: number | null = null;
-    if (data.pagesCompleted) {
-      try { pagesRead = countPages(parsePageRanges(data.pagesCompleted)) || null; } catch {}
-    }
     try {
-      await apiFetch('/api/sessions', { method: 'POST', body: {
-        taskId: t.id,
+      await apiFetch(`/api/tasks/${t.id}/progress`, { method: 'POST', body: {
+        mode: data.isPartial ? 'partial' : 'finish',
         minutes: data.minutes,
         focus: data.focus,
         notes: data.notes || null,
-        when: sessionWhen,
-        pagesRead,
-        activity: t.activity || null,
+        pagesCompleted: data.pagesCompleted || null,
+        moveToDay: data.moveToDay || null,
+        completionDate: data.completionDate || null,
       }});
-      try { notifySessionsChanged(); } catch {}
-      try { notifyToast({ kind: 'success', message: 'Session logged.' }); } catch {}
-    } catch {}
-
-    // Update task based on mode
-    if (data.isPartial) {
-      // Partial: reduce estimated time, keep as todo
-      const newEst = Math.max(0, (t.estimatedMinutes || 0) - data.minutes);
-      try { await apiFetch(`/api/tasks/${t.id}`, { method: 'PATCH', body: { estimatedMinutes: newEst } }); try { notifyToast({ kind: 'success', message: 'Task updated.' }); } catch {} } catch {}
-    } else {
-      // Finish: mark as done
-      try {
-        await apiFetch(`/api/tasks/${t.id}`, { method: 'PATCH', body: {
-          status: 'done',
-          actualMinutes: data.minutes,
-          focus: Math.round(data.focus),
-        } });
-        try { notifyToast({ kind: 'success', message: 'Task completed.' }); } catch {}
-      } catch {}
+      try { notifyTasksChanged(); notifySessionsChanged(); } catch {}
+      try { notifyToast({ kind: 'success', message: data.isPartial ? 'Progress logged.' : 'Task completed.' }); } catch {}
       clearTimerFor(t.id);
+      setLogModalOpen(false);
+      setLogModalTask(null);
+      await refresh();
+      await refreshSessions();
+    } catch (error: any) {
+      try { notifyToast({ kind: 'error', message: error?.message || 'Unable to record progress.' }); } catch {}
     }
-
-    setLogModalOpen(false);
-    setLogModalTask(null);
-    refresh();
-    refreshSessions();
-    try { notifyTasksChanged(); } catch {}
   }
 
   async function toggleDone(t: Task) {

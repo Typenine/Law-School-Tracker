@@ -455,7 +455,7 @@ function zscoreTrim(values: number[]): number[] {
   return values.filter(v => Math.abs(v - mean) <= 2 * sd);
 }
 
-async function recomputeLearnedMppForCourse(courseTitle: string): Promise<void> {
+export async function recomputeLearnedMppForCourse(courseTitle: string): Promise<void> {
   if (!courseTitle) return;
   const alpha = 0.3;
   if (DB_URL) {
@@ -563,9 +563,6 @@ async function applySchema(): Promise<void> {
     // always read these, but there was nowhere to store them.
     `ALTER TABLE tasks ADD COLUMN IF NOT EXISTS original_page_ranges text`,
     `ALTER TABLE tasks ADD COLUMN IF NOT EXISTS remaining_page_ranges text`,
-    // Real reference to courses(id), so renaming a course doesn't orphan its
-    // tasks the way matching on the free-text `course` label used to.
-    `ALTER TABLE tasks ADD COLUMN IF NOT EXISTS course_id uuid REFERENCES courses(id) ON DELETE SET NULL`,
     `CREATE TABLE IF NOT EXISTS courses (
        id uuid PRIMARY KEY,
        code text,
@@ -585,6 +582,9 @@ async function applySchema(): Promise<void> {
        year integer,
        created_at timestamptz NOT NULL DEFAULT now()
      )`,
+    // Real reference to courses(id), after courses exists, so fresh databases
+    // get the FK in the same schema pass instead of waiting for another boot.
+    `ALTER TABLE tasks ADD COLUMN IF NOT EXISTS course_id uuid REFERENCES courses(id) ON DELETE SET NULL`,
     `ALTER TABLE courses ADD COLUMN IF NOT EXISTS meeting_blocks jsonb`,
     `ALTER TABLE courses ADD COLUMN IF NOT EXISTS color text`,
     `ALTER TABLE courses ADD COLUMN IF NOT EXISTS learned_mpp double precision`,

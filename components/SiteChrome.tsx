@@ -30,6 +30,7 @@ const PLAN: NavItem[] = [
   { href: '/', icon: '●', label: 'Today' },
   { href: '/week-plan', icon: '▦', label: 'This week' },
   { href: '/tasks', icon: '✓', label: 'Tasks', count: 'tasks' },
+  { href: '/reading', icon: '▥', label: 'Reading' },
 ];
 const SEMESTER: NavItem[] = [
   { href: '/courses', icon: '▤', label: 'Courses', count: 'courses' },
@@ -45,6 +46,7 @@ const PAGES: Record<string, [string, string]> = {
   '/': ['Today', 'What is next, what remains, and how the day is shaping up.'],
   '/week-plan': ['This week', 'Balance the week before the week balances you.'],
   '/tasks': ['Tasks', 'Assignments grouped around what needs attention.'],
+  '/reading': ['Reading', 'Assigned pages, progress, pace, linked notes, and the time still required.'],
   '/courses': ['Courses', 'Your semester, course by course.'],
   '/notes': ['Notes', 'Notebooks, sections and pages, searchable by your assistant.'],
   '/calendar': ['Calendar', 'Classes, deadlines, exams, and study commitments.'],

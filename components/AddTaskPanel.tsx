@@ -190,12 +190,15 @@ export default function AddTaskPanel({ onCreated }: Props) {
       const payload: NewTaskInput = {
         title: title || (activity==='reading' ? 'Read' : 'Task'),
         course: course || null,
+        courseId: courseId || null,
         dueDate: new Date(due).toISOString(),
         status: 'todo',
         estimatedMinutes: est || null,
         estimateOrigin: estimateOrigin || null,
         pagesRead: activity==='reading' ? (pages||null) : null,
         activity: activity || null,
+        originalPageRanges: activity==='reading' && parsed.valid && parsed.normLabel ? parsed.normLabel : null,
+        remainingPageRanges: activity==='reading' && parsed.valid && parsed.normLabel ? parsed.normLabel : null,
       } as any;
       const created = await apiFetch<{ task: Task }>("/api/tasks", { method: 'POST', body: payload });
       try { notifyToast({ kind: 'success', message: 'Task added.' }); } catch {}
