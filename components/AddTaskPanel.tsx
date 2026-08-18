@@ -1,6 +1,6 @@
 "use client";
 import { useEffect, useMemo, useRef, useState } from "react";
-import type { Course, NewTaskInput, Task } from "@/lib/types";
+import type { Course, NewTaskInput, SemesterInfo, Task } from "@/lib/types";
 import { notifyTasksChanged } from '@/lib/taskBus';
 import { apiFetch } from '@/lib/apiClient';
 import { notifyToast } from '@/lib/toastBus';
@@ -49,8 +49,19 @@ function parseRanges(input: string): { pages: number; normLabel: string; valid: 
   return { pages, normLabel: labels.join(', '), valid: true, tooMany };
 }
 
+function courseMatchesSemester(course: Course, semester: SemesterInfo): boolean {
+  if (course.semester || course.year) {
+    return course.semester === semester.season && Number(course.year) === semester.year;
+  }
+  const start = course.startDate?.slice(0, 10) || '';
+  const end = course.endDate?.slice(0, 10) || start;
+  return Boolean(start && end && start <= semester.endDate && end >= semester.startDate);
+}
+
 export default function AddTaskPanel({ onCreated }: Props) {
   const [courses, setCourses] = useState<Course[]>([]);
+  const [semesters, setSemesters] = useState<SemesterInfo[]>([]);
+  const [semesterId, setSemesterId] = useState<string>('');
   const [tasks, setTasks] = useState<Task[]>([]);
   const [course, setCourse] = useState<string>('');
   const [courseId, setCourseId] = useState<string>('');
@@ -68,23 +79,56 @@ export default function AddTaskPanel({ onCreated }: Props) {
   useEffect(() => {
     (async () => {
       try {
-        const [cj, tj] = await Promise.all([
+        const [cj, tj, sj] = await Promise.all([
           apiFetch<{ courses: Course[] }>("/api/courses"),
           apiFetch<{ tasks: Task[] }>("/api/tasks"),
+          apiFetch<{ semesters: SemesterInfo[] }>("/api/semesters"),
         ]);
-        setCourses(Array.isArray((cj as any)?.courses) ? (cj as any).courses : []);
-        setTasks(Array.isArray((tj as any)?.tasks) ? (tj as any).tasks : []);
+        const courseList = Array.isArray(cj?.courses) ? cj.courses : [];
+        const taskList = Array.isArray(tj?.tasks) ? tj.tasks : [];
+        const semesterList = Array.isArray(sj?.semesters) ? sj.semesters : [];
+        setCourses(courseList);
+        setTasks(taskList);
+        setSemesters(semesterList);
+        const activeSemester = semesterList.find(s => s.isActive) || semesterList[0] || null;
+        setSemesterId(activeSemester?.id || '');
       } catch {}
-      try { const last = window.localStorage.getItem('lastTaskCourse') || ''; if (last) setCourse(last); } catch {}
     })();
   }, []);
 
+  const selectedSemester = useMemo(
+    () => semesters.find(semester => semester.id === semesterId) || null,
+    [semesters, semesterId],
+  );
+
+  const filteredCourses = useMemo(
+    () => selectedSemester ? courses.filter(item => courseMatchesSemester(item, selectedSemester)) : [],
+    [courses, selectedSemester],
+  );
+
   useEffect(() => {
-    const found = courses.find(c => (c.title || '') === course || (c.code || '') === course);
+    if (!semesterId) {
+      setCourse('');
+      setCourseId('');
+      return;
+    }
+    const currentExists = filteredCourses.some(c => (c.title || '') === course || (c.code || '') === course);
+    if (course && currentExists) return;
+    try {
+      const last = window.localStorage.getItem(`lastTaskCourse:${semesterId}`) || '';
+      const lastExists = filteredCourses.some(c => (c.title || '') === last || (c.code || '') === last);
+      setCourse(lastExists ? last : '');
+    } catch {
+      setCourse('');
+    }
+  }, [semesterId, filteredCourses, course]);
+
+  useEffect(() => {
+    const found = filteredCourses.find(c => (c.title || '') === course || (c.code || '') === course);
     setCourseId(found?.id || '');
     const def = (found as any)?.defaultActivity as string | null | undefined;
     if (def) setActivity(def);
-  }, [course, courses]);
+  }, [course, filteredCourses]);
 
   const pages = useMemo(() => {
     if (activity !== 'reading') return 0;
@@ -150,7 +194,7 @@ export default function AddTaskPanel({ onCreated }: Props) {
     setDue(d.toISOString().slice(0,16));
   }
   function quickPickNextClass() {
-    const c = courses.find(x => x.id === courseId);
+    const c = filteredCourses.find(x => x.id === courseId);
     if (!c || !(c.meetingDays && c.meetingDays.length)) return;
     const now = new Date();
     for (let i = 0; i < 14; i++) {
@@ -185,7 +229,7 @@ export default function AddTaskPanel({ onCreated }: Props) {
     } catch {}
     setSaving(true);
     try {
-      try { window.localStorage.setItem('lastTaskCourse', course); } catch {}
+      try { if (semesterId) window.localStorage.setItem(`lastTaskCourse:${semesterId}`, course); } catch {}
       if (setDefaultForCourse) await saveDefaultActivity();
       const payload: NewTaskInput = {
         title: title || (activity==='reading' ? 'Read' : 'Task'),
@@ -195,6 +239,7 @@ export default function AddTaskPanel({ onCreated }: Props) {
         status: 'todo',
         estimatedMinutes: est || null,
         estimateOrigin: estimateOrigin || null,
+        term: semesterId || null,
         pagesRead: activity==='reading' ? (pages||null) : null,
         activity: activity || null,
         originalPageRanges: activity==='reading' && parsed.valid && parsed.normLabel ? parsed.normLabel : null,
@@ -256,10 +301,24 @@ export default function AddTaskPanel({ onCreated }: Props) {
     }}>
       <div className="flex flex-wrap gap-2 items-end">
         <div>
+          <div className="text-xs text-slate-300/70 mb-1">Semester</div>
+          <select
+            value={semesterId}
+            onChange={e => { setSemesterId(e.target.value); setCourse(''); setCourseId(''); }}
+            className="bg-[#0b1020] border border-[#1b2344] rounded px-3 py-2 min-w-[180px]"
+          >
+            {!semesters.length && <option value="">No semesters</option>}
+            {semesters.map(semester => (
+              <option key={semester.id} value={semester.id}>{semester.name}{semester.isActive ? ' (Current)' : ''}</option>
+            ))}
+          </select>
+        </div>
+        <div>
           <div className="text-xs text-slate-300/70 mb-1">Course</div>
-          <select value={course} onChange={e=>setCourse(e.target.value)} className="bg-[#0b1020] border border-[#1b2344] rounded px-3 py-2 min-w-[220px]">
+          <select value={course} onChange={e=>setCourse(e.target.value)} disabled={!semesterId} className="bg-[#0b1020] border border-[#1b2344] rounded px-3 py-2 min-w-[220px] disabled:opacity-50">
             <option value="">Select…</option>
-            {courses.map(c => (<option key={c.id} value={c.title || c.code || ''}>{c.title || c.code}</option>))}
+            {semesterId && filteredCourses.length === 0 && <option value="" disabled>No courses in this semester</option>}
+            {filteredCourses.map(c => (<option key={c.id} value={c.title || c.code || ''}>{c.title || c.code}</option>))}
           </select>
         </div>
         <div>
