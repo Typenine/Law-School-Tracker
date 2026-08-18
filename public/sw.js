@@ -1,202 +1,156 @@
-// Service worker for Law School Tracker - Offline Support
-// Version: 4.0 - Notes GETs are network-first with a cache fallback (only
-// used when the network is actually unreachable), instead of either
-// stale-while-revalidate or the static-asset cache-first fallback. Both of
-// those can hand back a pre-mutation snapshot synchronously, which is what
-// made a deleted/created note flash and then get overwritten by stale data.
+// Law School Tracker service worker
+// Version 5.0: durable application data is server-authoritative. The service
+// worker may cache successful GETs as an offline fallback, but it never fakes a
+// successful write. If a mutation cannot reach the server, the request fails
+// visibly so the UI cannot tell the user an edit was saved when it was not.
 
-const DISABLE_SW = false; // Enable caching for offline support
-
-const CACHE_NAME = 'lst-v3';
-const STATIC_CACHE = 'lst-static-v3';
-const API_CACHE = 'lst-api-v3';
-const NOTES_CACHE = 'lst-notes-v1';
+const CACHE_VERSION = 'v5';
+const SHELL_CACHE = `lst-shell-${CACHE_VERSION}`;
+const STATIC_CACHE = `lst-static-${CACHE_VERSION}`;
+const API_CACHE = `lst-api-${CACHE_VERSION}`;
+const NOTES_CACHE = `lst-notes-${CACHE_VERSION}`;
+const CURRENT_CACHES = new Set([SHELL_CACHE, STATIC_CACHE, API_CACHE, NOTES_CACHE]);
 
 const APP_SHELL = [
   '/',
   '/tasks',
+  '/reading',
   '/week-plan',
   '/courses',
   '/calendar',
-  '/settings',
-  '/log',
   '/review',
+  '/settings',
+  '/archive',
+  '/log',
   '/help',
   '/manifest.json',
 ];
 
-// API endpoints to cache for offline
 const CACHEABLE_APIS = [
   '/api/tasks',
   '/api/courses',
   '/api/sessions',
   '/api/schedule',
   '/api/settings',
+  '/api/events',
+  '/api/semesters',
+  '/api/reading',
 ];
 
-// Queue for offline mutations
-const MUTATION_QUEUE_KEY = 'lst-mutation-queue';
-
-self.addEventListener('install', (event) => {
-  self.skipWaiting();
-  if (DISABLE_SW) return; // skip any caching
-  event.waitUntil((async () => {
-    try {
-      const cache = await caches.open(CACHE_NAME);
-      await cache.addAll(APP_SHELL);
-    } catch (e) {
-      // ignore
-    }
-  })());
-});
-
-self.addEventListener('activate', (event) => {
-  event.waitUntil((async () => {
-    const keys = await caches.keys();
-    await Promise.all(keys.map(k => caches.delete(k)));
-    await self.clients.claim();
-    if (DISABLE_SW) {
-      try { await self.registration.unregister(); } catch {}
-    }
-  })());
-});
-
-// Check if URL is a cacheable API endpoint
 function isCacheableApi(url) {
-  return CACHEABLE_APIS.some(api => url.pathname.startsWith(api));
+  return CACHEABLE_APIS.some(prefix => url.pathname.startsWith(prefix));
 }
 
-// Network-first for navigations, stale-while-revalidate for APIs
-self.addEventListener('fetch', (event) => {
+function offlineJson(message = 'Offline. This request could not reach the server.') {
+  return new Response(JSON.stringify({ error: message, offline: true }), {
+    status: 503,
+    headers: { 'Content-Type': 'application/json', 'Cache-Control': 'no-store' },
+  });
+}
+
+self.addEventListener('install', event => {
+  self.skipWaiting();
+  event.waitUntil((async () => {
+    try {
+      const cache = await caches.open(SHELL_CACHE);
+      await cache.addAll(APP_SHELL);
+    } catch {
+      // A shell pre-cache failure should not prevent the new worker installing.
+    }
+  })());
+});
+
+self.addEventListener('activate', event => {
+  event.waitUntil((async () => {
+    const keys = await caches.keys();
+    await Promise.all(keys.filter(key => !CURRENT_CACHES.has(key)).map(key => caches.delete(key)));
+    await self.clients.claim();
+  })());
+});
+
+self.addEventListener('fetch', event => {
   const req = event.request;
   const url = new URL(req.url);
-
-  // Only handle same-origin
   if (url.origin !== self.location.origin) return;
 
-  if (DISABLE_SW) {
-    return; // let the network handle it
-  }
-
-  // For navigation requests (HTML), use network-first with cache fallback
-  if (req.mode === 'navigate') {
-    event.respondWith((async () => {
-      try {
-        const res = await fetch(req);
-        const cache = await caches.open(CACHE_NAME);
-        cache.put(req, res.clone());
-        return res;
-      } catch {
-        const cacheMatch = await caches.match(req);
-        if (cacheMatch) return cacheMatch;
-        const index = await caches.match('/');
-        return index || new Response(`
-          <!DOCTYPE html>
-          <html>
-          <head><title>Offline</title><style>body{font-family:system-ui;padding:40px;background:#0b1020;color:#e6e9f5;}</style></head>
-          <body><h1>📴 You're Offline</h1><p>The app needs an internet connection. Please check your connection and try again.</p>
-          <button onclick="location.reload()" style="padding:12px 24px;background:#2563eb;color:white;border:none;border-radius:8px;cursor:pointer;margin-top:20px;">Retry</button>
-          </body></html>
-        `, { headers: { 'Content-Type': 'text/html' } });
-      }
-    })());
-    return;
-  }
-
-  // For API GET requests, use stale-while-revalidate
-  if (req.method === 'GET' && isCacheableApi(url)) {
-    event.respondWith((async () => {
-      const cache = await caches.open(API_CACHE);
-      const cached = await cache.match(req);
-      
-      // Fetch in background and update cache
-      const fetchPromise = fetch(req).then(res => {
-        if (res.ok) {
-          cache.put(req, res.clone());
-        }
-        return res;
-      }).catch(() => null);
-      
-      // Return cached immediately if available, otherwise wait for fetch
-      if (cached) {
-        // Trigger background revalidation
-        fetchPromise;
-        return cached;
-      }
-      
-      const res = await fetchPromise;
-      if (res) return res;
-      
-      // Final fallback
-      return new Response(JSON.stringify({ error: 'Offline', offline: true }), {
-        status: 503,
-        headers: { 'Content-Type': 'application/json' }
-      });
-    })());
-    return;
-  }
-
-  // For POST/PATCH/PUT/DELETE to APIs when offline, queue them
-  if (['POST', 'PATCH', 'PUT', 'DELETE'].includes(req.method) && isCacheableApi(url)) {
+  // Never queue or synthesize success for writes. The database is authoritative
+  // and the calling UI must know whether the mutation really reached it.
+  if (['POST', 'PATCH', 'PUT', 'DELETE'].includes(req.method)) {
+    if (!url.pathname.startsWith('/api/')) return;
     event.respondWith((async () => {
       try {
         return await fetch(req);
       } catch {
-        // Queue for later sync (simplified - just return success)
-        // In production, you'd want IndexedDB-based queuing
-        return new Response(JSON.stringify({ queued: true, offline: true }), {
-          status: 202,
-          headers: { 'Content-Type': 'application/json' }
-        });
+        return offlineJson('Offline. Changes were not saved. Reconnect and try again.');
       }
     })());
     return;
   }
 
-  // Notes: network-first, cache only as a fallback for when the network is
-  // genuinely unreachable (e.g. no wifi during an exam). Unlike
-  // stale-while-revalidate above, this never hands back a cached body while
-  // the network is actually available, so a page that was just deleted or
-  // created cannot be overwritten by a pre-mutation snapshot - the bug that
-  // used to make Notes flicker back to a stale state after every edit.
+  // Navigations are network-first so a deploy or mutation is visible
+  // immediately; the shell is only a true offline fallback.
+  if (req.mode === 'navigate') {
+    event.respondWith((async () => {
+      try {
+        const res = await fetch(req);
+        if (res.ok) {
+          const cache = await caches.open(SHELL_CACHE);
+          await cache.put(req, res.clone());
+        }
+        return res;
+      } catch {
+        return (await caches.match(req))
+          || (await caches.match('/'))
+          || new Response('<!doctype html><title>Offline</title><meta name="viewport" content="width=device-width"><body style="font-family:system-ui;background:#07111f;color:#eaf0f7;padding:32px"><h1>Offline</h1><p>The tracker cannot reach the server. Your existing cached pages may still be readable, but changes will not be saved until you reconnect.</p><button onclick="location.reload()">Retry</button></body>', { headers: { 'Content-Type': 'text/html; charset=utf-8' } });
+      }
+    })());
+    return;
+  }
+
+  // Notes are especially mutation-sensitive, so always prefer the live server.
   if (req.method === 'GET' && url.pathname.startsWith('/api/notes')) {
     event.respondWith((async () => {
       const cache = await caches.open(NOTES_CACHE);
       try {
         const res = await fetch(req);
-        if (res.ok) cache.put(req, res.clone());
+        if (res.ok) await cache.put(req, res.clone());
         return res;
       } catch {
-        const cached = await cache.match(req);
-        if (cached) return cached;
-        return new Response(JSON.stringify({ error: 'Offline', offline: true }), {
-          status: 503,
-          headers: { 'Content-Type': 'application/json' },
-        });
+        return (await cache.match(req)) || offlineJson();
       }
     })());
     return;
   }
 
-  // Everything else under /api/ that isn't explicitly whitelisted above
-  // (GPT Actions, etc.) must never be served from the cache: those endpoints
-  // already send their own no-store headers because their data changes on
-  // every request, and falling into the static-asset branch below used to
-  // cache the first response and replay it forever regardless of method.
-  if (url.pathname.startsWith('/api/')) {
-    return; // let the network handle it, uncached
+  // Other application GETs use the same network-first rule. Cached data is a
+  // fallback only and never outranks a live server response.
+  if (req.method === 'GET' && isCacheableApi(url)) {
+    event.respondWith((async () => {
+      const cache = await caches.open(API_CACHE);
+      try {
+        const res = await fetch(req);
+        if (res.ok) await cache.put(req, res.clone());
+        return res;
+      } catch {
+        return (await cache.match(req)) || offlineJson();
+      }
+    })());
+    return;
   }
 
-  // For static assets, cache-first
+  // GPT Actions, backups, archives, and other uncategorized APIs must remain
+  // live-only; caching them can replay stale or sensitive responses.
+  if (url.pathname.startsWith('/api/')) return;
+
   if (req.method === 'GET') {
     event.respondWith((async () => {
       const cached = await caches.match(req);
       if (cached) return cached;
       try {
         const res = await fetch(req);
-        if (res && res.status === 200) {
+        if (res.ok) {
           const cache = await caches.open(STATIC_CACHE);
-          cache.put(req, res.clone());
+          await cache.put(req, res.clone());
         }
         return res;
       } catch {
