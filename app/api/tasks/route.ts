@@ -13,7 +13,10 @@ export async function GET(req: NextRequest) {
   await ensureSchema();
   await ensureTaskV2Schema();
   const includeCanceled = req.nextUrl.searchParams.get('includeCanceled') === 'true';
-  const includeBlocked = req.nextUrl.searchParams.get('includeBlocked') === 'true';
+  // Blocked work is still active work. Older surfaces now receive it by default
+  // so Today, Calendar, Courses, Search and Week Plan can display the same Task
+  // v2.1 state instead of silently hiding prerequisites.
+  const includeBlocked = req.nextUrl.searchParams.get('includeBlocked') !== 'false';
   const showAllTerms = req.nextUrl.searchParams.get('allTerms') === 'true';
   const [allTasks, activeTerm] = await Promise.all([
     listVisibleTasks({ includeCanceled, includeBlocked }),
