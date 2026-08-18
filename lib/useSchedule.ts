@@ -24,6 +24,23 @@ const LS_AVAIL = 'availabilityTemplateV1';
 export const LS_SCHEDULE_DIRTY = 'weekScheduleDirtyV1';
 const DEFAULT_AVAIL: AvailabilityTemplate = { 0:120,1:240,2:240,3:240,4:240,5:240,6:120 };
 
+function normalizeAvailability(value: unknown): AvailabilityTemplate {
+  if (!value || typeof value !== 'object') return { ...DEFAULT_AVAIL };
+  const raw = value as Record<string | number, unknown>;
+  const next: AvailabilityTemplate = { ...DEFAULT_AVAIL };
+  let hasPositiveCapacity = false;
+  for (let day = 0; day < 7; day++) {
+    const parsed = Number(raw[day] ?? raw[String(day)]);
+    if (!Number.isFinite(parsed) || parsed < 0) continue;
+    next[day] = parsed;
+    if (parsed > 0) hasPositiveCapacity = true;
+  }
+  // A historical all-zero template means availability was never configured in
+  // the old planner. Do not let it override the usable defaults forever. Once
+  // any day has a positive capacity, explicit zero-capacity days are respected.
+  return hasPositiveCapacity ? next : { ...DEFAULT_AVAIL };
+}
+
 // localStorage is now a read-through cache only. Postgres/server settings are
 // authoritative. These helpers remain exported so older pages can keep their
 // cache fallback without being able to make the cache outrank the server.
@@ -117,7 +134,8 @@ export function useAvailability() {
   const availabilityRef = useRef<AvailabilityTemplate>(DEFAULT_AVAIL);
   const saveSeq = useRef(0);
 
-  const apply = useCallback((next: AvailabilityTemplate) => {
+  const apply = useCallback((value: unknown) => {
+    const next = normalizeAvailability(value);
     availabilityRef.current = next;
     setAvailabilityState(next);
     try { if (typeof window !== 'undefined') window.localStorage.setItem(LS_AVAIL, JSON.stringify(next)); } catch {}
@@ -127,13 +145,11 @@ export function useAvailability() {
     setLoading(true);
     try {
       const data = await apiFetch<{ settings: Record<string, unknown> }>('/api/settings?keys=availabilityTemplateV1');
-      const value = data?.settings?.availabilityTemplateV1;
-      const next = value && typeof value === 'object' ? value as AvailabilityTemplate : DEFAULT_AVAIL;
-      apply(next);
+      apply(data?.settings?.availabilityTemplateV1);
     } catch {
       try {
         const raw = typeof window !== 'undefined' ? window.localStorage.getItem(LS_AVAIL) : null;
-        apply(raw ? JSON.parse(raw) as AvailabilityTemplate : DEFAULT_AVAIL);
+        apply(raw ? JSON.parse(raw) : DEFAULT_AVAIL);
       } catch { apply(DEFAULT_AVAIL); }
     } finally { setLoading(false); }
   }, [apply]);
@@ -145,9 +161,10 @@ export function useAvailability() {
   }, [refresh]);
 
   const save = useCallback((updater: AvailabilityTemplate | ((prev: AvailabilityTemplate) => AvailabilityTemplate)) => {
-    const next = typeof updater === 'function'
+    const rawNext = typeof updater === 'function'
       ? (updater as (prev: AvailabilityTemplate) => AvailabilityTemplate)(availabilityRef.current)
       : updater;
+    const next = normalizeAvailability(rawNext);
     if (JSON.stringify(next) === JSON.stringify(availabilityRef.current)) return;
     const previous = availabilityRef.current;
     apply(next);
