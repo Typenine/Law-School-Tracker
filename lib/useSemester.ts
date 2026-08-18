@@ -1,34 +1,37 @@
 "use client";
 
 import { useEffect, useState, useCallback } from 'react';
-import { onSemesterChanged, notifySemesterChanged } from '@/lib/semesterBus';
+import { notifySemesterChanged } from '@/lib/semesterBus';
+import { useTerm } from '@/lib/useTerm';
 
+/**
+ * Compatibility wrapper for older calendar/task surfaces.
+ *
+ * The canonical term now comes from /api/semesters/current via useTerm().
+ * localStorage is only a fallback while that request is loading.
+ */
 export function useSemester() {
-  const [currentTerm, setCurrentTerm] = useState<string>('');
+  const { term } = useTerm();
+  const [fallbackTerm, setFallbackTerm] = useState<string>('');
   const [showAllTerms, setShowAllTerms] = useState<boolean>(false);
 
   useEffect(() => {
     if (typeof window === 'undefined') return;
-    try {
-      const t = window.localStorage.getItem('currentTerm') || '';
-      setCurrentTerm(t);
-    } catch {}
-    try {
-      const s = window.localStorage.getItem('tasksShowAllTerms');
-      setShowAllTerms(s === 'true');
-    } catch {}
+    try { setFallbackTerm(window.localStorage.getItem('currentTerm') || ''); } catch {}
+    try { setShowAllTerms(window.localStorage.getItem('tasksShowAllTerms') === 'true'); } catch {}
   }, []);
 
   useEffect(() => {
-    const off = onSemesterChanged(() => {
-      try { const t = window.localStorage.getItem('currentTerm') || ''; setCurrentTerm(t); } catch {}
-    });
-    return off;
-  }, []);
+    if (!term?.id || typeof window === 'undefined') return;
+    try { window.localStorage.setItem('currentTerm', term.id); } catch {}
+    setFallbackTerm(term.id);
+  }, [term?.id]);
 
   const updateCurrentTerm = useCallback((termId: string) => {
+    // Kept for older callers. A manual value is a temporary fallback only;
+    // the date-resolved term wins as soon as it is available.
     try { if (typeof window !== 'undefined') window.localStorage.setItem('currentTerm', termId || ''); } catch {}
-    setCurrentTerm(termId || '');
+    setFallbackTerm(termId || '');
     try { notifySemesterChanged(); } catch {}
   }, []);
 
@@ -40,5 +43,11 @@ export function useSemester() {
     });
   }, []);
 
-  return { currentTerm, setCurrentTerm: updateCurrentTerm, showAllTerms, setShowAllTerms, toggleShowAll };
+  return {
+    currentTerm: term?.id || fallbackTerm,
+    setCurrentTerm: updateCurrentTerm,
+    showAllTerms,
+    setShowAllTerms,
+    toggleShowAll,
+  };
 }

@@ -1,5 +1,6 @@
 import { ensureSchema, getSettings, mutateSetting } from '@/lib/storage';
 import type { CalendarEvent, SemesterInfo } from '@/lib/types';
+import { resolveTerm, type ResolvedTerm } from '@/lib/semester';
 
 /**
  * Calendar events and semesters live in the settings store rather than in
@@ -55,11 +56,39 @@ export async function mutateSemesters<T>(
   });
 }
 
-export async function activeSemesterId(): Promise<string | null> {
+/**
+ * Canonical current-semester resolver used by every server surface.
+ *
+ * The date resolver is authoritative. `isActive` remains as a compatibility
+ * field for older UI, but it is synchronized to the resolved term instead of
+ * being allowed to decide what the current term is.
+ */
+export async function resolveCurrentSemesterState(): Promise<{ term: ResolvedTerm; semesters: SemesterInfo[] }> {
+  const semesters = await readSemesters();
+  const term = resolveTerm(semesters);
+  const activeId = term.derived ? null : term.id;
+  const stale = semesters.some(semester => Boolean(semester.isActive) !== (semester.id === activeId));
+
+  if (!stale) return { term, semesters };
+
+  const updated = semesters.map(semester => ({
+    ...semester,
+    isActive: activeId ? semester.id === activeId : false,
+  }));
+  await mutateSemesters(() => ({ semesters: updated, result: null }));
+  return { term, semesters: updated };
+}
+
+export async function currentSemesterId(): Promise<string | null> {
   try {
-    const semesters = await readSemesters();
-    return semesters.find(s => s.isActive)?.id || null;
+    const { term } = await resolveCurrentSemesterState();
+    return term.id || null;
   } catch {
     return null;
   }
+}
+
+/** @deprecated Use currentSemesterId(). Kept so older imports do not break. */
+export async function activeSemesterId(): Promise<string | null> {
+  return currentSemesterId();
 }
