@@ -1,5 +1,5 @@
 import { NextRequest } from 'next/server';
-import { ensureSchema, listCourses } from '@/lib/storage';
+import { ensureSchema, getSettings, listCourses } from '@/lib/storage';
 import { resolveCurrentSemesterState } from '@/lib/collections';
 import {
   attachSemesterIds,
@@ -10,14 +10,22 @@ import { ensureTaskV2Schema, getTaskWorkspace } from '@/lib/taskV2';
 export const dynamic = 'force-dynamic';
 export const runtime = 'nodejs';
 
+function availabilityTemplateIsUnconfigured(value: unknown): boolean {
+  if (!value || typeof value !== 'object') return true;
+  const record = value as Record<string | number, unknown>;
+  const values = Array.from({ length: 7 }, (_, day) => Number(record[day] ?? record[String(day)]));
+  return values.every(minutes => !Number.isFinite(minutes) || minutes <= 0);
+}
+
 export async function GET(req: NextRequest) {
   try {
     await ensureSchema();
     await ensureTaskV2Schema();
-    const [workspace, rawCourses, semesterState] = await Promise.all([
+    const [workspace, rawCourses, semesterState, settings] = await Promise.all([
       getTaskWorkspace(),
       listCourses(),
       resolveCurrentSemesterState(),
+      getSettings(['availabilityTemplateV1']),
     ]);
     const showAllTerms = req.nextUrl.searchParams.get('allTerms') === 'true';
     const activeTerm = semesterState.term.id || null;
@@ -25,6 +33,7 @@ export async function GET(req: NextRequest) {
     const visibleCourses = showAllTerms || !activeTerm
       ? courses
       : courses.filter(course => course.semesterId === activeTerm);
+    const availabilityUnconfigured = availabilityTemplateIsUnconfigured(settings?.availabilityTemplateV1);
 
     const withEffectiveTerm = <T extends { term?: string | null; courseId?: string | null; course?: string | null }>(item: T): T => {
       const term = effectiveTaskSemesterId(item, rawCourses, semesterState.semesters);
@@ -36,7 +45,20 @@ export async function GET(req: NextRequest) {
     };
 
     const workspaceVersion = new Date().toISOString();
-    const tasks = workspace.tasks.filter(inTerm).map(task => ({ ...withEffectiveTerm(task), updatedAt: workspaceVersion }));
+    const tasks = workspace.tasks
+      .filter(inTerm)
+      .map(task => ({ ...withEffectiveTerm(task), updatedAt: workspaceVersion }))
+      .map(task => {
+        // Older planner settings can leave an all-zero availability template
+        // behind after the newer availability-window UI takes over. Treat that
+        // state as "not configured" rather than "the student has zero minutes
+        // available forever." Preserve real overdue and blocked risk signals.
+        const falseCapacityRisk = availabilityUnconfigured
+          && task.atRisk
+          && !task.blocked
+          && /Needs \d+ min; about 0 min is available before the deadline/i.test(task.atRiskReason || '');
+        return falseCapacityRisk ? { ...task, atRisk: false, atRiskReason: null } : task;
+      });
     const trash = workspace.trash.filter(inTerm).map(withEffectiveTerm);
     const summary = {
       open: tasks.filter(task => !['done', 'canceled'].includes(task.workflowState)).length,
