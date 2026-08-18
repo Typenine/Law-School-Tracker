@@ -290,12 +290,6 @@ export default function TodayPage() {
       .sort((a, b) => (a.priority || 9) - (b.priority || 9) || new Date(a.dueDate).getTime() - new Date(b.dueDate).getTime());
     for (const task of dueToday) add(task, task.estimatedMinutes);
 
-    if (!output.length) {
-      for (const task of tasks
-        .filter(item => item.status === "todo")
-        .sort((a, b) => new Date(a.dueDate).getTime() - new Date(b.dueDate).getTime())
-        .slice(0, 4)) add(task, task.estimatedMinutes);
-    }
     return output;
   }, [schedule, tasks, today, todayPlan]);
 
