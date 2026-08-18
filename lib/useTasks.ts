@@ -4,16 +4,28 @@ import { useCallback, useEffect, useState } from "react";
 import type { Task } from "@/lib/types";
 import { onTasksChanged } from "@/lib/taskBus";
 
+export type SurfaceTask = Task & {
+  workflowState?: 'not-started' | 'in-progress' | 'done' | 'canceled';
+  displayState?: 'not-started' | 'in-progress' | 'done' | 'canceled' | 'blocked';
+  blocked?: boolean;
+  blockedBy?: Array<{ id: string; title: string }>;
+  atRisk?: boolean;
+  atRiskReason?: string | null;
+  loggedMinutes?: number;
+  remainingMinutes?: number;
+  percentComplete?: number;
+  checklistPercent?: number;
+  scheduledMinutes?: number;
+};
+
 /**
- * Shared task reads now come from the Task v2.1 workspace so Calendar,
- * Courses, Week Plan and other older consumers receive the same enriched task
- * objects (risk/progress/workflow metadata) as the Task Workspace. Blocked and
- * canceled work stays out of the legacy arrays because those surfaces are not
- * allowed to schedule or complete prerequisites accidentally; the global shell
- * and task drawer still expose those states explicitly.
+ * Shared task reads come from Task v2.1 so Today, Calendar, Courses, Week Plan,
+ * Search and Review all receive workflow, risk, progress and prerequisite state.
+ * Canceled tasks remain out of active planning surfaces, but blocked work stays
+ * visible so older screens can explain why an assignment cannot proceed.
  */
 export function useTasks() {
-  const [tasks, setTasks] = useState<Task[]>([]);
+  const [tasks, setTasks] = useState<SurfaceTask[]>([]);
   const [loading, setLoading] = useState<boolean>(true);
   const [error, setError] = useState<string | null>(null);
 
@@ -24,7 +36,7 @@ export function useTasks() {
       if (!res.ok) throw new Error("Failed to load tasks");
       const data = await res.json();
       const next = Array.isArray(data?.tasks)
-        ? data.tasks.filter((task: any) => task?.workflowState !== 'canceled' && !task?.blocked) as Task[]
+        ? data.tasks.filter((task: SurfaceTask) => task?.workflowState !== 'canceled') as SurfaceTask[]
         : [];
       setTasks(next);
       setError(null);
