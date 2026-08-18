@@ -11,7 +11,6 @@ import { openCommandPalette } from '@/components/CommandPalette';
 import { useTerm } from '@/lib/useTerm';
 import { courseInTerm } from '@/lib/semester';
 import ConnectivityStatus from '@/components/ConnectivityStatus';
-import CourseCommandCenter from '@/components/CourseCommandCenter';
 import TaskDeepLinkDrawer from '@/components/TaskDeepLinkDrawer';
 import TaskContextStrip from '@/components/TaskContextStrip';
 import WeeklyReviewSummary from '@/components/WeeklyReviewSummary';
@@ -196,7 +195,6 @@ export default function SiteChrome({ children, brandMark }: { children: React.Re
       </header>
       <main className="lst-content">
         {taskContextMode ? <TaskContextStrip mode={taskContextMode} /> : null}
-        {courseDetail ? <CourseCommandCenter courseId={decodeURIComponent(courseDetail[1])} /> : null}
         {pathname === '/review' ? <WeeklyReviewSummary /> : null}
         {children}
       </main>
