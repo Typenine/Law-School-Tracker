@@ -8,7 +8,7 @@ export const runtime = 'nodejs';
 
 export async function POST(
   req: NextRequest,
-  { params }: { params: { id: string } },
+  context: { params: Promise<{ id: string }> },
 ) {
   const denied = requireNotesToken(req);
   if (denied) return denied;
@@ -16,7 +16,7 @@ export async function POST(
   try {
     const body = await req.json().catch(() => ({})) as Record<string, unknown>;
     const taskId = body.taskId == null || String(body.taskId).trim() === '' ? null : String(body.taskId).trim();
-    const current = await getAiNote(params.id);
+    const current = await getAiNote((await context.params).id);
     if (!current || current.deletedAt || current.archived) {
       return noStoreJson({ error: 'Note not found.' }, { status: 404 });
     }
@@ -29,7 +29,7 @@ export async function POST(
       }
     }
 
-    const note = await updateAiNote(params.id, {
+    const note = await updateAiNote((await context.params).id, {
       taskId,
       expectedUpdatedAt: current.updatedAt,
     });

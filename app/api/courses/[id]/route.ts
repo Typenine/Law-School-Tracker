@@ -6,7 +6,7 @@ import { z } from 'zod';
 export const dynamic = 'force-dynamic';
 export const runtime = 'nodejs';
 
-export async function PATCH(req: NextRequest, { params }: { params: { id: string } }) {
+export async function PATCH(req: NextRequest, context: { params: Promise<{ id: string }> }) {
   await ensureSchema();
   const schema = z.object({
     code: z.string().trim().nullable().optional().transform(v => v === '' ? null : v),
@@ -31,16 +31,16 @@ export async function PATCH(req: NextRequest, { params }: { params: { id: string
   const parsed = schema.safeParse(await req.json());
   if (!parsed.success) return new Response('Invalid course patch', { status: 400 });
   const body = parsed.data as UpdateCourseInput;
-  const updated = await updateCourse(params.id, body);
+  const updated = await updateCourse((await context.params).id, body);
   if (!updated) return new Response('Not found', { status: 404 });
   const res = Response.json({ course: updated });
   res.headers.set('Cache-Control', 'no-store, no-cache, must-revalidate, max-age=0');
   return res;
 }
 
-export async function DELETE(_req: NextRequest, { params }: { params: { id: string } }) {
+export async function DELETE(_req: NextRequest, context: { params: Promise<{ id: string }> }) {
   await ensureSchema();
-  const ok = await deleteCourse(params.id);
+  const ok = await deleteCourse((await context.params).id);
   const res = new Response(ok ? 'ok' : 'not found', { status: ok ? 200 : 404 });
   res.headers.set('Cache-Control', 'no-store, no-cache, must-revalidate, max-age=0');
   return res;

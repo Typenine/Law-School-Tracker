@@ -16,10 +16,10 @@ const updateSchema = z.object({
 
 export async function GET(
   _req: NextRequest,
-  { params }: { params: { id: string } },
+  context: { params: Promise<{ id: string }> },
 ) {
   try {
-    const notebook = await getNotebook(params.id);
+    const notebook = await getNotebook((await context.params).id);
     if (!notebook) return noStoreJson({ error: 'Notebook not found.' }, { status: 404 });
     return noStoreJson({ notebook });
   } catch (error) {
@@ -32,7 +32,7 @@ export async function GET(
 
 export async function PATCH(
   req: NextRequest,
-  { params }: { params: { id: string } },
+  context: { params: Promise<{ id: string }> },
 ) {
   try {
     const parsed = updateSchema.safeParse(await req.json());
@@ -42,7 +42,7 @@ export async function PATCH(
         { status: 400 },
       );
     }
-    const notebook = await updateNotebook(params.id, parsed.data);
+    const notebook = await updateNotebook((await context.params).id, parsed.data);
     if (!notebook) return noStoreJson({ error: 'Notebook not found.' }, { status: 404 });
     return noStoreJson({ notebook });
   } catch (error) {
@@ -55,10 +55,10 @@ export async function PATCH(
 
 export async function DELETE(
   _req: NextRequest,
-  { params }: { params: { id: string } },
+  context: { params: Promise<{ id: string }> },
 ) {
   try {
-    const deleted = await deleteNotebook(params.id);
+    const deleted = await deleteNotebook((await context.params).id);
     if (!deleted) return noStoreJson({ error: 'Notebook not found.' }, { status: 404 });
     return noStoreJson({ deleted: true });
   } catch (error) {

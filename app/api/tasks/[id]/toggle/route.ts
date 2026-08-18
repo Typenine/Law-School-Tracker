@@ -15,11 +15,11 @@ function verify(id: string, exp: number, sig: string): boolean {
   return expect === sig;
 }
 
-export async function GET(req: NextRequest, { params }: { params: { id: string } }) {
+export async function GET(req: NextRequest, context: { params: Promise<{ id: string }> }) {
   await ensureSchema();
   await ensureTaskV2Schema();
   const u = new URL(req.url);
-  const id = params.id;
+  const id = (await context.params).id;
   const exp = parseInt(u.searchParams.get('exp') || '0', 10);
   const sig = u.searchParams.get('sig') || '';
   const origin = u.origin;

@@ -8,9 +8,10 @@ import { captureCompletionSnapshot, ensureTaskV2Schema, markWorkflowAfterProgres
 export const dynamic = 'force-dynamic';
 export const runtime = 'nodejs';
 
-export async function POST(req: NextRequest, { params }: { params: { id: string } }) {
+export async function POST(req: NextRequest, context: { params: Promise<{ id: string }> }) {
   await ensureSchema();
   await ensureTaskV2Schema();
+  const { id } = await context.params;
   const schema = z.object({
     mode: z.enum(['partial', 'finish']),
     minutes: z.number().int().min(1).max(1440),
@@ -24,13 +25,13 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
   if (!parsed.success) return Response.json({ error: 'Invalid progress entry.' }, { status: 400 });
   try {
     const beforeBlocks = await listScheduleBlocks().catch(() => []);
-    const hadPlan = beforeBlocks.some(block => String(block.taskId) === String(params.id));
-    if (parsed.data.mode === 'finish') await captureCompletionSnapshot(params.id);
-    const result = await recordTaskProgress(params.id, parsed.data);
+    const hadPlan = beforeBlocks.some(block => String(block.taskId) === String(id));
+    if (parsed.data.mode === 'finish') await captureCompletionSnapshot(id);
+    const result = await recordTaskProgress(id, parsed.data);
     const done = result.task.status === 'done';
-    await markWorkflowAfterProgress(params.id, done);
-    if (done) await clearStoredTaskTimer(params.id);
-    if (!done && !parsed.data.moveToDay && hadPlan) await reconcileTaskSchedule(params.id, { onlyIfScheduled: true });
+    await markWorkflowAfterProgress(id, done);
+    if (done) await clearStoredTaskTimer(id);
+    if (!done && !parsed.data.moveToDay && hadPlan) await reconcileTaskSchedule(id, { onlyIfScheduled: true });
     return Response.json({ ...result, scheduleReconciled: !done && !parsed.data.moveToDay && hadPlan });
   } catch (error: any) {
     const status = Number(error?.status) || 500;

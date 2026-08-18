@@ -4,9 +4,9 @@ import { deleteWorkspaceArchive, getWorkspaceArchive, restoreWorkspaceBackup } f
 export const dynamic = 'force-dynamic';
 export const runtime = 'nodejs';
 
-export async function GET(_req: NextRequest, { params }: { params: { id: string } }) {
+export async function GET(_req: NextRequest, context: { params: Promise<{ id: string }> }) {
   try {
-    const archive = await getWorkspaceArchive(params.id);
+    const archive = await getWorkspaceArchive((await context.params).id);
     if (!archive) return Response.json({ error: 'Archive not found.' }, { status: 404 });
     return new Response(JSON.stringify(archive.snapshot, null, 2), {
       status: 200,
@@ -21,9 +21,9 @@ export async function GET(_req: NextRequest, { params }: { params: { id: string 
   }
 }
 
-export async function POST(_req: NextRequest, { params }: { params: { id: string } }) {
+export async function POST(_req: NextRequest, context: { params: Promise<{ id: string }> }) {
   try {
-    const archive = await getWorkspaceArchive(params.id);
+    const archive = await getWorkspaceArchive((await context.params).id);
     if (!archive) return Response.json({ error: 'Archive not found.' }, { status: 404 });
     const result = await restoreWorkspaceBackup(archive.snapshot);
     return Response.json({ restored: true, ...result });
@@ -32,9 +32,9 @@ export async function POST(_req: NextRequest, { params }: { params: { id: string
   }
 }
 
-export async function DELETE(_req: NextRequest, { params }: { params: { id: string } }) {
+export async function DELETE(_req: NextRequest, context: { params: Promise<{ id: string }> }) {
   try {
-    const deleted = await deleteWorkspaceArchive(params.id);
+    const deleted = await deleteWorkspaceArchive((await context.params).id);
     return deleted ? new Response(null, { status: 204 }) : Response.json({ error: 'Archive not found.' }, { status: 404 });
   } catch (error) {
     return Response.json({ error: error instanceof Error ? error.message : 'Unable to delete archive.' }, { status: 500 });
