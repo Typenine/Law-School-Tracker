@@ -1,17 +1,20 @@
 import { NextRequest, NextResponse } from 'next/server';
 import type { SemesterInfo, NewSemesterInput } from '@/lib/types';
-import { mutateSemesters, readSemesters, uid } from '@/lib/collections';
+import { mutateSemesters, readSemesters, resolveCurrentSemesterState, uid } from '@/lib/collections';
 
 export const dynamic = 'force-dynamic';
 export const runtime = 'nodejs';
 
 export async function GET(req: NextRequest) {
-  const url = new URL(req.url);
-  const active = url.searchParams.get('active');
-
+  const active = new URL(req.url).searchParams.get('active');
   try {
-    let semesters = await readSemesters();
-    if (active === 'true') semesters = semesters.filter(s => s.isActive);
+    let semesters: SemesterInfo[];
+    if (active === 'true') {
+      const state = await resolveCurrentSemesterState();
+      semesters = state.semesters.filter(semester => semester.id === state.term.id);
+    } else {
+      semesters = await readSemesters();
+    }
     semesters.sort((a, b) => b.startDate.localeCompare(a.startDate));
     return NextResponse.json({ semesters });
   } catch (e) {
@@ -51,7 +54,6 @@ export async function POST(req: NextRequest) {
 
   try {
     await mutateSemesters(semesters => {
-      // Only one semester can be active at a time.
       const next = semester.isActive
         ? semesters.map(s => ({ ...s, isActive: false }))
         : semesters.slice();
@@ -88,7 +90,6 @@ export async function DELETE(req: NextRequest) {
 }
 
 export async function PUT(req: NextRequest) {
-  // Bulk replace all semesters
   let body: any;
   try {
     body = await req.json();

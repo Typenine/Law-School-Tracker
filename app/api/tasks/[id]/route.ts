@@ -1,5 +1,7 @@
 import { NextRequest } from 'next/server';
-import { ensureSchema, listTasks } from '@/lib/storage';
+import { ensureSchema, listCourses, listTasks } from '@/lib/storage';
+import { readSemesters } from '@/lib/collections';
+import { normalizeAcademicTaskPatch, resolveCourseReference } from '@/lib/academic';
 import { UpdateTaskInput } from '@/lib/types';
 import { canonicalPageRanges } from '@/lib/reading';
 import { clearStoredTaskTimer } from '@/lib/taskTimersV2';
@@ -39,8 +41,17 @@ export async function PATCH(req: NextRequest, context: { params: Promise<{ id: s
   });
   const parsed = schema.safeParse(await req.json());
   if (!parsed.success) return Response.json({ error: 'Invalid patch body' }, { status: 400 });
-  const body = parsed.data as UpdateTaskInput;
+
+  let body = parsed.data as UpdateTaskInput;
   try {
+    if (body.courseId !== undefined || body.course !== undefined) {
+      const [courses, semesters] = await Promise.all([listCourses(), readSemesters()]);
+      if (body.courseId && !resolveCourseReference(body.courseId, body.course, courses)) {
+        return Response.json({ error: 'Course not found.' }, { status: 400 });
+      }
+      body = normalizeAcademicTaskPatch(body, courses, semesters);
+    }
+
     if (body.originalPageRanges !== undefined && body.title === undefined) {
       const current = (await listTasks()).find(task => String(task.id) === String(id));
       const normalized = canonicalPageRanges(body.originalPageRanges);

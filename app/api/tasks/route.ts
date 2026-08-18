@@ -1,8 +1,13 @@
 import { NextRequest } from 'next/server';
 import { createTask, ensureSchema, listCourses } from '@/lib/storage';
-import { activeSemesterId } from '@/lib/collections';
+import { resolveCurrentSemesterState } from '@/lib/collections';
 import { NewTaskInput } from '@/lib/types';
 import { normalizeReadingTaskInput } from '@/lib/reading';
+import {
+  effectiveTaskSemesterId,
+  normalizeAcademicTaskInput,
+  resolveCourseReference,
+} from '@/lib/academic';
 import { ensureTaskV2Schema, listVisibleTasks } from '@/lib/taskV2';
 import { z } from 'zod';
 
@@ -13,18 +18,20 @@ export async function GET(req: NextRequest) {
   await ensureSchema();
   await ensureTaskV2Schema();
   const includeCanceled = req.nextUrl.searchParams.get('includeCanceled') === 'true';
-  // Blocked work is still active work. Older surfaces now receive it by default
-  // so Today, Calendar, Courses, Search and Week Plan can display the same Task
-  // v2.1 state instead of silently hiding prerequisites.
   const includeBlocked = req.nextUrl.searchParams.get('includeBlocked') !== 'false';
   const showAllTerms = req.nextUrl.searchParams.get('allTerms') === 'true';
-  const [allTasks, activeTerm] = await Promise.all([
+  const [allTasks, courses, semesterState] = await Promise.all([
     listVisibleTasks({ includeCanceled, includeBlocked }),
-    activeSemesterId(),
+    listCourses(),
+    resolveCurrentSemesterState(),
   ]);
-  const tasks = showAllTerms || !activeTerm
-    ? allTasks
-    : allTasks.filter(task => !task.term || task.term === activeTerm);
+  const activeTerm = semesterState.term.id || null;
+  const tasks = allTasks
+    .map(task => {
+      const term = effectiveTaskSemesterId(task, courses, semesterState.semesters);
+      return term && !task.term ? { ...task, term } : task;
+    })
+    .filter(task => showAllTerms || !activeTerm || !task.term || task.term === activeTerm);
   return Response.json({ tasks, activeTerm });
 }
 
@@ -54,8 +61,22 @@ export async function POST(req: NextRequest) {
   });
   const parsed = schema.safeParse(await req.json());
   if (!parsed.success) return new Response('Invalid task body', { status: 400 });
-  const normalized = normalizeReadingTaskInput(parsed.data as NewTaskInput, await listCourses());
-  const defaultTerm = normalized.term ?? await activeSemesterId();
-  const task = await createTask({ ...normalized, term: defaultTerm ?? null });
+
+  const [courses, semesterState] = await Promise.all([
+    listCourses(),
+    resolveCurrentSemesterState(),
+  ]);
+  if (parsed.data.courseId && !resolveCourseReference(parsed.data.courseId, parsed.data.course, courses)) {
+    return Response.json({ error: 'Course not found.' }, { status: 400 });
+  }
+
+  const readingNormalized = normalizeReadingTaskInput(parsed.data as NewTaskInput, courses);
+  const normalized = normalizeAcademicTaskInput(
+    readingNormalized,
+    courses,
+    semesterState.semesters,
+    semesterState.term.id || null,
+  );
+  const task = await createTask(normalized);
   return Response.json({ task }, { status: 201 });
 }
