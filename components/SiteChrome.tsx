@@ -13,6 +13,7 @@ import { courseInTerm } from '@/lib/semester';
 import ConnectivityStatus from '@/components/ConnectivityStatus';
 import CourseCommandCenter from '@/components/CourseCommandCenter';
 import TaskDeepLinkDrawer from '@/components/TaskDeepLinkDrawer';
+import TaskContextStrip from '@/components/TaskContextStrip';
 import WeeklyReviewSummary from '@/components/WeeklyReviewSummary';
 
 type NavItem = { href: string; icon: string; label: string; count?: 'tasks' | 'courses' };
@@ -174,6 +175,8 @@ export default function SiteChrome({ children, brandMark }: { children: React.Re
     })}</div>
   </div>;
 
+  const taskContextMode = pathname === '/' ? 'today' : pathname === '/calendar' ? 'calendar' : pathname === '/week-plan' ? 'week' : null;
+
   return <div className={`lst-shell${sideOpen ? ' side-open' : ''}`}>
     <aside className="lst-sidebar">
       <div className="lst-brand"><div className="lst-wordmark">Law School Tracker</div>{termLabel ? <div className="lst-term">{termLabel}</div> : null}</div>
@@ -192,6 +195,7 @@ export default function SiteChrome({ children, brandMark }: { children: React.Re
         <div className="lst-actions"><button className="lst-search" type="button" onClick={openCommandPalette}><span>Search or jump to…</span><kbd>⌘K</kbd></button><Link href={addHref} className="lst-add">{addLabel}</Link></div>
       </header>
       <main className="lst-content">
+        {taskContextMode ? <TaskContextStrip mode={taskContextMode} /> : null}
         {courseDetail ? <CourseCommandCenter courseId={decodeURIComponent(courseDetail[1])} /> : null}
         {pathname === '/review' ? <WeeklyReviewSummary /> : null}
         {children}
