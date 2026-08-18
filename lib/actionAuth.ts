@@ -1,10 +1,12 @@
 import { timingSafeEqual } from 'crypto';
 import type { NextRequest } from 'next/server';
 
+const textEncoder = new TextEncoder();
+
 function safeEqual(a: string, b: string): boolean {
-  const left = Buffer.from(a);
-  const right = Buffer.from(b);
-  if (left.length !== right.length) return false;
+  const left = textEncoder.encode(a);
+  const right = textEncoder.encode(b);
+  if (left.byteLength !== right.byteLength) return false;
   return timingSafeEqual(left, right);
 }
 

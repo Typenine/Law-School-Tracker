@@ -12,13 +12,13 @@ const ALLOWED_EXTENSIONS = new Set([
 ]);
 const ALLOWED_CATEGORIES = new Set(['syllabus', 'slides', 'reading', 'other']);
 
-export async function GET(_req: NextRequest, { params }: { params: { id: string } }) {
+export async function GET(_req: NextRequest, context: { params: Promise<{ id: string }> }) {
   await ensureSchema();
-  const documents = await listCourseDocuments(params.id);
+  const documents = await listCourseDocuments((await context.params).id);
   return Response.json({ documents });
 }
 
-export async function POST(req: NextRequest, { params }: { params: { id: string } }) {
+export async function POST(req: NextRequest, context: { params: Promise<{ id: string }> }) {
   await ensureSchema();
   try {
     const form = await req.formData();
@@ -41,7 +41,7 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
     const { url } = await saveUploadedFile(buffer, entry.name, mimeType);
 
     const doc = await createCourseDocument({
-      courseId: params.id,
+      courseId: (await context.params).id,
       title,
       filename: entry.name,
       mimeType,

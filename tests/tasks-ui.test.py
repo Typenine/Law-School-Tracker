@@ -62,7 +62,7 @@ with sync_playwright() as p:
     expect(page.get_by_text("Task workspace", exact=True)).to_be_visible()
     expect(page.get_by_text(TITLE, exact=True)).to_be_visible()
 
-    page.get_by_text(TITLE, exact=True).click()
+    page.get_by_role("button", name=TITLE, exact=True).click()
     dialog = page.get_by_role("dialog")
     expect(dialog).to_be_visible()
     for tab in ["overview", "progress", "sessions", "notes", "schedule", "details"]:
@@ -75,13 +75,14 @@ with sync_playwright() as p:
     dialog.get_by_role("button", name="Save changes", exact=True).click()
     wait_for_task_title(task["id"], UPDATED)
 
-    # The server is authoritative. Reload from that persisted state before the
-    # rest of the audit so we test the same recovery path a fresh tab/device
-    # uses rather than depending on transient drawer timing after Save.
-    page.reload(wait_until="networkidle")
-    expect(page.get_by_text("Task workspace", exact=True)).to_be_visible()
+    # The server-authoritative write is verified above. Wait for the refreshed
+    # client state, close the drawer, and reopen the same persisted task to
+    # exercise the normal task-list interaction without relying on reload timing.
+    expect(dialog.get_by_text(UPDATED, exact=True)).to_be_visible(timeout=10000)
+    dialog.locator("aside").get_by_role("button", name="Close task details", exact=True).click()
+    expect(dialog).not_to_be_visible(timeout=10000)
     expect(page.get_by_text(UPDATED, exact=True)).to_be_visible(timeout=10000)
-    page.get_by_text(UPDATED, exact=True).click()
+    page.get_by_role("button", name=UPDATED, exact=True).click()
     dialog = page.get_by_role("dialog")
     expect(dialog).to_be_visible()
 

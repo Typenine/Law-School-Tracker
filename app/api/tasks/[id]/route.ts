@@ -9,9 +9,10 @@ import { z } from 'zod';
 export const dynamic = 'force-dynamic';
 export const runtime = 'nodejs';
 
-export async function PATCH(req: NextRequest, { params }: { params: { id: string } }) {
+export async function PATCH(req: NextRequest, context: { params: Promise<{ id: string }> }) {
   await ensureSchema();
   await ensureTaskV2Schema();
+  const { id } = await context.params;
   const schema = z.object({
     title: z.string().min(1).optional(),
     course: z.string().trim().min(1).nullable().optional(),
@@ -41,7 +42,7 @@ export async function PATCH(req: NextRequest, { params }: { params: { id: string
   const body = parsed.data as UpdateTaskInput;
   try {
     if (body.originalPageRanges !== undefined && body.title === undefined) {
-      const current = (await listTasks()).find(task => String(task.id) === String(params.id));
+      const current = (await listTasks()).find(task => String(task.id) === String(id));
       const normalized = canonicalPageRanges(body.originalPageRanges);
       if (current && /\b(?:pp?|pages?)\.?\s*[0-9,\s–—-]+/i.test(current.title)) {
         body.title = normalized
@@ -51,25 +52,25 @@ export async function PATCH(req: NextRequest, { params }: { params: { id: string
     }
 
     if (body.status === 'done') {
-      const task = await completeTaskWithoutSession(params.id);
-      await clearStoredTaskTimer(params.id);
+      const task = await completeTaskWithoutSession(id);
+      await clearStoredTaskTimer(id);
       const { status: _status, ...rest } = body as any;
-      const updated = Object.keys(rest).length ? await editTaskStructured(params.id, rest as UpdateTaskInput) : task;
+      const updated = Object.keys(rest).length ? await editTaskStructured(id, rest as UpdateTaskInput) : task;
       return Response.json({ task: updated });
     }
     if (body.status === 'todo') {
-      const current = (await listTasks()).find(task => String(task.id) === String(params.id));
+      const current = (await listTasks()).find(task => String(task.id) === String(id));
       if (!current) return Response.json({ error: 'Not found' }, { status: 404 });
-      if (current.status === 'done') await reopenTask(params.id);
+      if (current.status === 'done') await reopenTask(id);
       const { status: _status, ...rest } = body as any;
       if (!Object.keys(rest).length) {
-        const task = (await listTasks()).find(item => String(item.id) === String(params.id));
+        const task = (await listTasks()).find(item => String(item.id) === String(id));
         return Response.json({ task });
       }
-      const task = await editTaskStructured(params.id, rest as UpdateTaskInput);
+      const task = await editTaskStructured(id, rest as UpdateTaskInput);
       return Response.json({ task });
     }
-    const task = await editTaskStructured(params.id, body);
+    const task = await editTaskStructured(id, body);
     return Response.json({ task });
   } catch (error: any) {
     const status = Number(error?.status) || 500;
@@ -78,14 +79,15 @@ export async function PATCH(req: NextRequest, { params }: { params: { id: string
   }
 }
 
-export async function DELETE(req: NextRequest, { params }: { params: { id: string } }) {
+export async function DELETE(req: NextRequest, context: { params: Promise<{ id: string }> }) {
   await ensureSchema();
   await ensureTaskV2Schema();
+  const { id } = await context.params;
   try {
-    if (req.nextUrl.searchParams.get('purge') === 'true') await purgeTask(params.id);
-    else await trashTask(params.id);
-    await clearStoredTaskTimer(params.id);
-    await reconcileDependents(params.id);
+    if (req.nextUrl.searchParams.get('purge') === 'true') await purgeTask(id);
+    else await trashTask(id);
+    await clearStoredTaskTimer(id);
+    await reconcileDependents(id);
     return new Response(null, { status: 204 });
   } catch (error: any) {
     const status = Number(error?.status) || 500;

@@ -8,14 +8,14 @@ export const runtime = 'nodejs';
 
 export async function GET(
   req: NextRequest,
-  { params }: { params: { id: string } },
+  context: { params: Promise<{ id: string }> },
 ) {
   const denied = requireNotesToken(req);
   if (denied) return denied;
 
   try {
     const gptDb = notesGptDb();
-    const note = await getAiNote(params.id, gptDb);
+    const note = await getAiNote((await context.params).id, gptDb);
     if (!note || note.deletedAt || note.archived) {
       return noStoreJson({ error: 'Note not found.' }, { status: 404 });
     }

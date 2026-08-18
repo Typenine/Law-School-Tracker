@@ -14,13 +14,13 @@ const updateSchema = z.object({
   parentId: z.string().trim().max(200).nullable().optional(),
 });
 
-export async function PATCH(req: NextRequest, { params }: { params: { id: string } }) {
+export async function PATCH(req: NextRequest, context: { params: Promise<{ id: string }> }) {
   try {
     const parsed = updateSchema.safeParse(await req.json());
     if (!parsed.success) {
       return noStoreJson({ error: 'Invalid section details.', issues: parsed.error.issues }, { status: 400 });
     }
-    const section = await updateSection(params.id, parsed.data);
+    const section = await updateSection((await context.params).id, parsed.data);
     if (!section) return noStoreJson({ error: 'Section not found.' }, { status: 404 });
     return noStoreJson({ section });
   } catch (error) {
@@ -35,10 +35,10 @@ export async function PATCH(req: NextRequest, { params }: { params: { id: string
   }
 }
 
-export async function DELETE(req: NextRequest, { params }: { params: { id: string } }) {
+export async function DELETE(req: NextRequest, context: { params: Promise<{ id: string }> }) {
   try {
     const deletePages = req.nextUrl.searchParams.get('deletePages') === 'true';
-    const result = await deleteSection(params.id, { deletePages });
+    const result = await deleteSection((await context.params).id, { deletePages });
     if (!result.deleted) return noStoreJson({ error: 'Section not found.' }, { status: 404 });
     return noStoreJson(result);
   } catch (error) {

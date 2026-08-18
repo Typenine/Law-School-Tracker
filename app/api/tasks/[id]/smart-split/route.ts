@@ -6,13 +6,13 @@ import { ensureTaskV2Schema, taskIsBlocked } from '@/lib/taskV2';
 export const dynamic = 'force-dynamic';
 export const runtime = 'nodejs';
 
-export async function POST(_req: NextRequest, { params }: { params: { id: string } }) {
+export async function POST(_req: NextRequest, context: { params: Promise<{ id: string }> }) {
   try {
     await ensureSchema();
     await ensureTaskV2Schema();
-    const state = await taskIsBlocked(params.id);
+    const state = await taskIsBlocked((await context.params).id);
     if (state.blocked) return Response.json({ error: `Complete ${state.blockers.map(item => item.title).join(', ')} first.` }, { status: 409 });
-    return Response.json(await smartSplitTaskSchedule(params.id));
+    return Response.json(await smartSplitTaskSchedule((await context.params).id));
   } catch (error: any) {
     const status = Number(error?.status) || 500;
     if (status >= 500) console.error('[smart split]', error);

@@ -5,13 +5,13 @@ import { ensureTaskV2Schema, reconcileDependents, restoreTask } from '@/lib/task
 export const dynamic = 'force-dynamic';
 export const runtime = 'nodejs';
 
-export async function POST(_req: NextRequest, { params }: { params: { id: string } }) {
+export async function POST(_req: NextRequest, context: { params: Promise<{ id: string }> }) {
   try {
     await ensureSchema();
     await ensureTaskV2Schema();
-    await restoreTask(params.id);
-    await reconcileDependents(params.id);
-    return Response.json({ restored: true, id: params.id });
+    await restoreTask((await context.params).id);
+    await reconcileDependents((await context.params).id);
+    return Response.json({ restored: true, id: (await context.params).id });
   } catch (error: any) {
     return Response.json({ error: error?.message || 'Unable to restore task.' }, { status: Number(error?.status) || 500 });
   }

@@ -102,6 +102,22 @@ function stateClass(state: WorkspaceTask['displayState']): string {
   return 'border-white/10 text-slate-300 bg-white/[0.03]';
 }
 
+function editStateFor(task: WorkspaceTask): EditState {
+  return {
+    title: task.title || '',
+    courseId: task.courseId || '',
+    activity: task.activity || 'other',
+    originalPageRanges: task.reading?.originalPageRanges || task.originalPageRanges || '',
+    due: localInput(task.dueDate),
+    estimate: task.estimatedMinutes == null ? '' : String(task.estimatedMinutes),
+    estimateTouched: false,
+    priority: task.priority == null ? '' : String(task.priority),
+    tags: (task.tags || []).join(', '),
+    notes: task.notes || '',
+    dependsOn: new Set((task.dependsOn || []).map(String)),
+  };
+}
+
 export default function TaskWorkspaceV2() {
   const [data, setData] = useState<WorkspaceResponse | null>(null);
   const [sessions, setSessions] = useState<StudySession[]>([]);
@@ -151,19 +167,7 @@ export default function TaskWorkspaceV2() {
 
   useEffect(() => {
     if (!activeTask) { setEdit(null); return; }
-    setEdit({
-      title: activeTask.title || '',
-      courseId: activeTask.courseId || '',
-      activity: activeTask.activity || 'other',
-      originalPageRanges: activeTask.reading?.originalPageRanges || activeTask.originalPageRanges || '',
-      due: localInput(activeTask.dueDate),
-      estimate: activeTask.estimatedMinutes == null ? '' : String(activeTask.estimatedMinutes),
-      estimateTouched: false,
-      priority: activeTask.priority == null ? '' : String(activeTask.priority),
-      tags: (activeTask.tags || []).join(', '),
-      notes: activeTask.notes || '',
-      dependsOn: new Set((activeTask.dependsOn || []).map(String)),
-    });
+    setEdit(editStateFor(activeTask));
     setNewChecklist('');
   }, [activeId, activeTask?.updatedAt]);
 
@@ -188,6 +192,12 @@ export default function TaskWorkspaceV2() {
     } catch (e: any) {
       notifyToast({ kind: 'error', message: e?.message || 'Unable to update task.' });
     }
+  }
+
+  function openTask(task: WorkspaceTask) {
+    setActiveId(task.id);
+    setDrawerTab('overview');
+    setNewChecklist('');
   }
 
   function openLog(task: WorkspaceTask, mode: 'partial'|'finish') {
@@ -261,7 +271,18 @@ export default function TaskWorkspaceV2() {
     };
     if (edit.activity === 'reading') body.originalPageRanges = edit.originalPageRanges.trim() || null;
     if (edit.estimateTouched || !rangeChanged || activeTask.estimateOrigin === 'manual') body.estimatedMinutes = edit.estimate ? Math.max(0, Number(edit.estimate)) : null;
-    await mutate('Task updated.', () => apiFetch(`/api/tasks/${activeTask.id}`, { method: 'PATCH', body }));
+    let updatedTask: Task | null = null;
+    await mutate('Task updated.', async () => {
+      const response = await apiFetch<{ task: Task }>(`/api/tasks/${activeTask.id}`, { method: 'PATCH', body });
+      updatedTask = response.task || null;
+      return response;
+    });
+    if (updatedTask) {
+      setData(prev => prev ? {
+        ...prev,
+        tasks: prev.tasks.map(task => task.id === updatedTask!.id ? { ...task, ...updatedTask, loggedMinutes: task.loggedMinutes, percentComplete: task.percentComplete } : task),
+      } : prev);
+    }
   }
 
   async function bulkTrash() {
@@ -382,11 +403,11 @@ export default function TaskWorkspaceV2() {
         {loading && !data ? <div className="p-6 text-sm text-slate-400">Loading tasks…</div> : filtered.length === 0 ? <div className="p-6 text-sm text-slate-400">No tasks match this view.</div> : (
           <div className="space-y-2">
             {filtered.map(task => (
-              <div key={task.id} onClick={() => { setActiveId(task.id); setDrawerTab('overview'); }} className="rounded-lg border border-white/10 bg-white/[0.015] p-3 hover:bg-white/[0.035] cursor-pointer">
+              <div key={task.id} onClick={() => openTask(task)} onKeyDown={e => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); openTask(task); } }} role="button" tabIndex={0} aria-label={`Open ${task.title}`} className="rounded-lg border border-white/10 bg-white/[0.015] p-3 hover:bg-white/[0.035] cursor-pointer focus:outline-none focus:ring-2 focus:ring-blue-500/60">
                 <div className="grid grid-cols-[auto_minmax(0,1fr)] lg:grid-cols-[auto_minmax(0,1fr)_190px_135px_250px] gap-3 items-center">
                   <input type="checkbox" checked={selected.has(task.id)} onChange={e => { e.stopPropagation(); setSelected(prev => { const next = new Set(prev); next.has(task.id) ? next.delete(task.id) : next.add(task.id); return next; }); }} onClick={e => e.stopPropagation()} aria-label={`Select ${task.title}`} />
                   <div className="min-w-0">
-                    <div className="flex flex-wrap items-center gap-2"><span className="font-medium truncate">{task.title}</span><span className={`text-[10px] px-2 py-0.5 rounded-full border ${stateClass(task.displayState)}`}>{stateLabel(task.displayState)}</span>{task.atRisk && <span className="text-[10px] px-2 py-0.5 rounded-full border border-rose-700/60 text-rose-300 bg-rose-950/30">At risk</span>}</div>
+                    <div className="flex flex-wrap items-center gap-2"><button type="button" className="font-medium truncate text-left hover:underline focus:outline-none focus:underline" onClick={e => { e.stopPropagation(); openTask(task); }}>{task.title}</button><span className={`text-[10px] px-2 py-0.5 rounded-full border ${stateClass(task.displayState)}`}>{stateLabel(task.displayState)}</span>{task.atRisk && <span className="text-[10px] px-2 py-0.5 rounded-full border border-rose-700/60 text-rose-300 bg-rose-950/30">At risk</span>}</div>
                     <div className="text-xs text-slate-500 mt-1">{task.course || 'Unassigned'}{task.activity ? ` · ${task.activity}` : ''}{task.blockedBy.length ? ` · waiting on ${task.blockedBy.map(item => item.title).join(', ')}` : ''}</div>
                     <div className="mt-2 h-1.5 rounded bg-white/10 overflow-hidden"><div className="h-full bg-blue-500" style={{ width: `${Math.max(0, Math.min(100, task.percentComplete))}%` }} /></div>
                   </div>
@@ -406,12 +427,12 @@ export default function TaskWorkspaceV2() {
         )}
       </section>
 
-      {activeTask && edit && (
+      {activeTask && (
         <div className="fixed inset-0 z-[80] flex justify-end" role="dialog" aria-modal="true">
           <button className="absolute inset-0 bg-black/60" onClick={() => setActiveId(null)} aria-label="Close task details" />
           <aside className="relative z-10 h-full w-full max-w-2xl bg-[#07111f] border-l border-white/10 shadow-2xl overflow-y-auto">
             <div className="sticky top-0 z-20 bg-[#07111f]/95 backdrop-blur border-b border-white/10 px-5 py-4">
-              <div className="flex items-start justify-between gap-4"><div className="min-w-0"><div className="flex flex-wrap gap-2 items-center"><h2 className="text-xl font-medium truncate">{activeTask.title}</h2><span className={`text-[10px] px-2 py-0.5 rounded-full border ${stateClass(activeTask.displayState)}`}>{stateLabel(activeTask.displayState)}</span></div><div className="text-xs text-slate-500 mt-1">{activeTask.course || 'Unassigned'} · due {dueLabel(activeTask.dueDate)}</div></div><button onClick={() => setActiveId(null)} className="text-xl text-slate-400">×</button></div>
+              <div className="flex items-start justify-between gap-4"><div className="min-w-0"><div className="flex flex-wrap gap-2 items-center"><h2 className="text-xl font-medium truncate">{activeTask.title}</h2><span className={`text-[10px] px-2 py-0.5 rounded-full border ${stateClass(activeTask.displayState)}`}>{stateLabel(activeTask.displayState)}</span></div><div className="text-xs text-slate-500 mt-1">{activeTask.course || 'Unassigned'} · due {dueLabel(activeTask.dueDate)}</div></div><button onClick={() => setActiveId(null)} aria-label="Close task details" className="text-xl text-slate-400">×</button></div>
               <div className="flex gap-1 mt-4 overflow-x-auto">{(['overview','progress','sessions','notes','schedule','details'] as const).map(tab => <button key={tab} onClick={() => setDrawerTab(tab)} className={`px-3 py-1.5 rounded text-xs capitalize ${drawerTab === tab ? 'bg-white/10 text-white' : 'text-slate-400 hover:bg-white/5'}`}>{tab}</button>)}</div>
             </div>
 
@@ -437,7 +458,7 @@ export default function TaskWorkspaceV2() {
 
               {drawerTab === 'schedule' && <div className="space-y-3"><div className="flex flex-wrap gap-2">{activeTask.reading && <button disabled={activeTask.blocked || ['done','canceled'].includes(activeTask.workflowState)} onClick={() => smartSplit(activeTask)} className="px-3 py-2 rounded border border-white/10 disabled:opacity-40">Smart split reading</button>}<button onClick={() => reconcile(activeTask)} className="px-3 py-2 rounded border border-white/10">Reconcile schedule</button><Link href="/week-plan" className="px-3 py-2 rounded border border-white/10">Open week plan</Link></div>{!activeTask.scheduleBlocks.length ? <p className="text-sm text-slate-400">This task is not currently scheduled.</p> : activeTask.scheduleBlocks.slice().sort((a,b)=>a.day.localeCompare(b.day)).map(block => <div key={block.id} className="rounded border border-white/10 p-3 flex justify-between gap-3"><div><div className="font-medium">{new Date(`${block.day}T12:00:00`).toLocaleDateString(undefined,{weekday:'short',month:'short',day:'numeric'})}</div><div className="text-xs text-slate-500">{block.pages ? `${block.pages} pages · ` : ''}{block.title}</div></div><b>{fmtMinutes(block.plannedMinutes)}</b></div>)}</div>}
 
-              {drawerTab === 'details' && <div className="space-y-4">
+              {drawerTab === 'details' && edit && <div className="space-y-4">
                 <div><label className="block text-xs text-slate-500 mb-1">Title</label><input value={edit.title} onChange={e => setEdit({ ...edit, title: e.target.value })} className="w-full px-3 py-2" /></div>
                 <div className="grid grid-cols-2 gap-3"><div><label className="block text-xs text-slate-500 mb-1">Course</label><select value={edit.courseId} onChange={e => setEdit({ ...edit, courseId: e.target.value })} className="w-full px-3 py-2"><option value="">Unassigned</option>{(data?.courses || []).map(course => <option key={course.id} value={course.id}>{course.title}</option>)}</select></div><div><label className="block text-xs text-slate-500 mb-1">Activity</label><select value={edit.activity} onChange={e => setEdit({ ...edit, activity: e.target.value })} className="w-full px-3 py-2"><option value="reading">Reading</option><option value="assignment">Assignment</option><option value="review">Review</option><option value="outline">Outline</option><option value="practice">Practice</option><option value="other">Other</option></select></div></div>
                 {edit.activity === 'reading' && <div><label className="block text-xs text-slate-500 mb-1">Assigned page ranges</label><input value={edit.originalPageRanges} onChange={e => setEdit({ ...edit, originalPageRanges: e.target.value })} placeholder="100-150, 160-175" className="w-full px-3 py-2" /><div className="text-xs text-slate-500 mt-1">Already-completed pages are preserved when the assigned range changes.</div></div>}

@@ -8,7 +8,7 @@ export const runtime = 'nodejs';
 
 export async function POST(
   req: NextRequest,
-  { params }: { params: { id: string } },
+  context: { params: Promise<{ id: string }> },
 ) {
   const denied = requireNotesToken(req);
   if (denied) return denied;
@@ -19,14 +19,14 @@ export async function POST(
     const heading = String(body.heading || '').replace(/\u0000/g, '').trim().slice(0, 240);
     if (!content) return noStoreJson({ error: 'Content is required.' }, { status: 400 });
 
-    const current = await getAiNote(params.id);
+    const current = await getAiNote((await context.params).id);
     if (!current || current.deletedAt || current.archived) {
       return noStoreJson({ error: 'Note not found.' }, { status: 404 });
     }
     const separator = current.contentHtml.trim() ? '<hr>' : '';
     const headingHtml = heading ? `<h2>${escapeHtml(heading)}</h2>` : '';
     const appendedHtml = `${current.contentHtml}${separator}${headingHtml}${plainTextToHtml(content)}`;
-    const note = await updateAiNote(params.id, {
+    const note = await updateAiNote((await context.params).id, {
       contentHtml: appendedHtml,
       expectedUpdatedAt: current.updatedAt,
     });

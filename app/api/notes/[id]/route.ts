@@ -43,10 +43,10 @@ const updateSchema = z.object({
 
 export async function GET(
   _req: NextRequest,
-  { params }: { params: { id: string } },
+  context: { params: Promise<{ id: string }> },
 ) {
   try {
-    const note = await getAiNote(params.id);
+    const note = await getAiNote((await context.params).id);
     // Trash has its own endpoint. A stale page selection must not be able to
     // reopen a page that has already been moved there.
     if (!note || note.deletedAt) return noStoreJson({ error: 'Note not found.' }, { status: 404 });
@@ -61,10 +61,10 @@ export async function GET(
 
 export async function PATCH(
   req: NextRequest,
-  { params }: { params: { id: string } },
+  context: { params: Promise<{ id: string }> },
 ) {
   try {
-    const existing = await getAiNote(params.id);
+    const existing = await getAiNote((await context.params).id);
     if (!existing || existing.deletedAt) {
       return noStoreJson({ error: 'Note not found.' }, { status: 404 });
     }
@@ -76,7 +76,7 @@ export async function PATCH(
         { status: 400 },
       );
     }
-    const note = await updateAiNote(params.id, {
+    const note = await updateAiNote((await context.params).id, {
       ...parsed.data,
       sourceType: parsed.data.sourceType as NoteSourceType | undefined,
     });
@@ -101,19 +101,19 @@ export async function PATCH(
  */
 export async function POST(
   req: NextRequest,
-  context: { params: { id: string } },
+  context: { params: Promise<{ id: string }> },
 ) {
   return PATCH(req, context);
 }
 
 export async function DELETE(
   req: NextRequest,
-  { params }: { params: { id: string } },
+  context: { params: Promise<{ id: string }> },
 ) {
   try {
     // ?purge=true is the only path that destroys a page for good.
     const purge = req.nextUrl.searchParams.get('purge') === 'true';
-    const deleted = purge ? await purgeAiNote(params.id) : await deleteAiNote(params.id);
+    const deleted = purge ? await purgeAiNote((await context.params).id) : await deleteAiNote((await context.params).id);
     if (!deleted) return noStoreJson({ error: 'Note not found.' }, { status: 404 });
     return noStoreJson({ deleted: true, purged: purge });
   } catch (error) {

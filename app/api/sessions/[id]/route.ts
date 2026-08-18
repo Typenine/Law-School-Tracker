@@ -4,9 +4,9 @@ import { ensureSchema, updateSession, deleteSession } from '@/lib/storage';
 export const dynamic = 'force-dynamic';
 export const runtime = 'nodejs';
 
-export async function PATCH(req: NextRequest, { params }: { params: { id: string } }) {
+export async function PATCH(req: NextRequest, context: { params: Promise<{ id: string }> }) {
   await ensureSchema();
-  const id = params.id;
+  const id = (await context.params).id;
   const body = await req.json().catch(() => null);
   if (!id || !body || typeof body !== 'object') return new Response('Invalid body', { status: 400 });
   const updated = await updateSession(id, body as any);
@@ -14,9 +14,9 @@ export async function PATCH(req: NextRequest, { params }: { params: { id: string
   return Response.json({ session: updated });
 }
 
-export async function DELETE(_req: NextRequest, { params }: { params: { id: string } }) {
+export async function DELETE(_req: NextRequest, context: { params: Promise<{ id: string }> }) {
   await ensureSchema();
-  const id = params.id;
+  const id = (await context.params).id;
   if (!id) return new Response('Invalid id', { status: 400 });
   const ok = await deleteSession(id);
   return new Response(null, { status: ok ? 204 : 404 });

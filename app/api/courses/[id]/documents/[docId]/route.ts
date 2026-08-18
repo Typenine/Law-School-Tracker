@@ -5,10 +5,10 @@ import { deleteUploadedFile } from '@/lib/uploads';
 export const dynamic = 'force-dynamic';
 export const runtime = 'nodejs';
 
-export async function DELETE(_req: NextRequest, { params }: { params: { id: string; docId: string } }) {
+export async function DELETE(_req: NextRequest, context: { params: Promise<{ id: string; docId: string }> }) {
   await ensureSchema();
-  const doc = await getCourseDocument(params.docId);
-  const ok = await deleteCourseDocument(params.docId);
+  const doc = await getCourseDocument((await context.params).docId);
+  const ok = await deleteCourseDocument((await context.params).docId);
   if (!ok) return new Response('Not found', { status: 404 });
   if (doc) await deleteUploadedFile(doc.url);
   return new Response(null, { status: 204 });

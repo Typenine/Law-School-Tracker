@@ -26,10 +26,10 @@ const MIME_BY_EXT: Record<string, string> = {
  * (i.e. local development). In production with Blob bound, uploads get a
  * blob.vercel-storage.com URL directly and never hit this route.
  */
-export async function GET(_req: NextRequest, { params }: { params: { name: string } }) {
-  const buffer = await readLocalUpload(params.name);
+export async function GET(_req: NextRequest, context: { params: Promise<{ name: string }> }) {
+  const buffer = await readLocalUpload((await context.params).name);
   if (!buffer) return new Response('Not found', { status: 404 });
-  const ext = (params.name.split('.').pop() || '').toLowerCase();
+  const ext = ((await context.params).name.split('.').pop() || '').toLowerCase();
   const contentType = MIME_BY_EXT[ext] || 'application/octet-stream';
   return new Response(new Uint8Array(buffer), {
     headers: {

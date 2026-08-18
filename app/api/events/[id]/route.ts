@@ -5,10 +5,11 @@ import { mutateEvents, readEvents } from '@/lib/collections';
 export const dynamic = 'force-dynamic';
 export const runtime = 'nodejs';
 
-export async function GET(_req: NextRequest, { params }: { params: { id: string } }) {
+export async function GET(_req: NextRequest, context: { params: Promise<{ id: string }> }) {
   try {
+    const { id } = await context.params;
     const events = await readEvents();
-    const event = events.find(e => e.id === params.id);
+    const event = events.find(e => e.id === id);
     if (!event) return NextResponse.json({ error: 'Event not found' }, { status: 404 });
     return NextResponse.json({ event });
   } catch (e) {
@@ -19,7 +20,7 @@ export async function GET(_req: NextRequest, { params }: { params: { id: string 
   }
 }
 
-export async function PATCH(req: NextRequest, { params }: { params: { id: string } }) {
+export async function PATCH(req: NextRequest, context: { params: Promise<{ id: string }> }) {
   let body: UpdateEventInput;
   try {
     body = await req.json();
@@ -28,8 +29,9 @@ export async function PATCH(req: NextRequest, { params }: { params: { id: string
   }
 
   try {
+    const { id } = await context.params;
     const updated = await mutateEvents(events => {
-      const idx = events.findIndex(e => e.id === params.id);
+      const idx = events.findIndex(e => e.id === id);
       if (idx === -1) return { events, result: null as CalendarEvent | null };
       const next: CalendarEvent = {
         ...events[idx],
@@ -61,10 +63,11 @@ export async function PATCH(req: NextRequest, { params }: { params: { id: string
   }
 }
 
-export async function DELETE(_req: NextRequest, { params }: { params: { id: string } }) {
+export async function DELETE(_req: NextRequest, context: { params: Promise<{ id: string }> }) {
   try {
+    const { id } = await context.params;
     const removed = await mutateEvents(events => {
-      const next = events.filter(e => e.id !== params.id);
+      const next = events.filter(e => e.id !== id);
       return { events: next, result: next.length < events.length };
     });
     if (!removed) return NextResponse.json({ error: 'Event not found' }, { status: 404 });

@@ -55,10 +55,19 @@ export default function TaskDeepLinkDrawer() {
     return query ? `${pathname}?${query}` : pathname;
   }, [params, pathname]);
 
+  useEffect(() => {
+    if (!taskId) return;
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') router.push(closeHref);
+    };
+    window.addEventListener('keydown', onKeyDown);
+    return () => window.removeEventListener('keydown', onKeyDown);
+  }, [taskId, closeHref, router]);
+
   if (!taskId) return null;
   return <div className="fixed inset-0 z-[1600] bg-black/55" onClick={() => router.push(closeHref)}>
-    <aside role="dialog" aria-modal="true" aria-label="Task details" className="absolute right-0 top-0 h-full w-full max-w-xl overflow-y-auto border-l border-white/10 bg-[#0b1727] p-5 shadow-2xl" onClick={e => e.stopPropagation()}>
-      <div className="flex items-start justify-between gap-4">
+    <aside role="dialog" aria-modal="true" aria-label="Task details" className="absolute right-0 top-0 h-full w-full max-w-2xl overflow-y-auto border-l border-white/10 bg-[#07111f] shadow-2xl" onClick={e => e.stopPropagation()}>
+      <div className="sticky top-0 z-20 flex items-start justify-between gap-4 border-b border-white/10 bg-[#07111f]/95 px-5 py-4 backdrop-blur">
         <div className="min-w-0">
           <div className="text-[10px] uppercase tracking-[.12em] text-slate-500">Task</div>
           <h2 className="mt-1 text-xl font-medium">{loading ? 'Loading…' : task?.title || 'Task not found'}</h2>
@@ -67,7 +76,7 @@ export default function TaskDeepLinkDrawer() {
         <button aria-label="Close task details" onClick={() => router.push(closeHref)} className="px-2 py-1 rounded border border-white/10">×</button>
       </div>
 
-      {task ? <div className="mt-5 space-y-4">
+      {task ? <div className="space-y-4 p-5">
         <div className="grid grid-cols-2 gap-2">
           <Card label="State" value={task.displayState || task.workflowState || 'not started'} />
           <Card label="Due" value={new Date(task.dueDate).toLocaleString()} />
@@ -90,7 +99,7 @@ export default function TaskDeepLinkDrawer() {
         {task.scheduleBlocks?.length ? <div className="rounded border border-white/10 p-3"><h3 className="text-sm font-medium">Scheduled work</h3><div className="mt-2 space-y-2">{task.scheduleBlocks.map(block => <div key={block.id} className="flex justify-between text-xs text-slate-400"><span>{new Date(`${block.day}T12:00:00`).toLocaleDateString()}</span><span>{fmtMinutes(block.plannedMinutes)}</span></div>)}</div></div> : null}
 
         <div className="flex flex-wrap gap-2 text-xs">
-          <Link href={`/tasks?taskId=${encodeURIComponent(task.id)}`} className="px-3 py-2 rounded border border-white/10">Open in Tasks</Link>
+          <Link href={`/tasks?taskId=${encodeURIComponent(task.id)}`} className="px-3 py-2 rounded border border-white/10">Edit in Tasks</Link>
           {task.courseId ? <Link href={`/courses/${encodeURIComponent(task.courseId)}`} className="px-3 py-2 rounded border border-white/10">Open course</Link> : null}
           {task.course ? <Link href={`/reading?course=${encodeURIComponent(task.course)}`} className="px-3 py-2 rounded border border-white/10">Course reading</Link> : null}
         </div>
