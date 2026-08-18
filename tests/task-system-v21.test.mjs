@@ -124,14 +124,15 @@ describe('task system v2.1', () => {
     assert.equal(found.percentComplete, 50);
   });
 
-  it('blocks dependent work, prevents planner exposure, rejects cycles, and restores its plan when unblocked', async () => {
+  it('keeps blocked work visible to shared task surfaces, prevents scheduling, rejects cycles, and restores its plan when unblocked', async () => {
     const first = await makeAssignment('Finish reading', 30);
     const second = await makeAssignment('Draft outline', 60);
     await app.api('PUT', '/api/schedule', { blocks: [{ id: 'dep-block', taskId: second.task.id, day: new Date().toISOString().slice(0, 10), plannedMinutes: 60, title: second.task.title, course: second.task.course }] });
     assert.equal((await app.api('PATCH', `/api/tasks/${second.task.id}`, { dependsOn: [first.task.id] })).status, 200);
     let workspace = (await app.api('GET', '/api/tasks/workspace')).body;
     assert.equal(workspace.tasks.find(t => t.id === second.task.id).displayState, 'blocked');
-    assert.equal((await app.api('GET', '/api/tasks')).body.tasks.some(t => t.id === second.task.id), false);
+    assert.equal((await app.api('GET', '/api/tasks')).body.tasks.some(t => t.id === second.task.id), true);
+    assert.equal((await app.api('GET', '/api/tasks?includeBlocked=false')).body.tasks.some(t => t.id === second.task.id), false);
     assert.equal((await app.api('GET', '/api/schedule')).body.blocks.some(b => b.taskId === second.task.id), false);
 
     const cycle = await app.api('PATCH', `/api/tasks/${first.task.id}`, { dependsOn: [second.task.id] });
