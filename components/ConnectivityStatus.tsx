@@ -32,16 +32,35 @@ export default function ConnectivityStatus() {
     };
   }, []);
 
-  if (state === 'checking' || state === 'online') return null;
-  const offline = state === 'offline';
-  const syncing = state === 'syncing';
-  const title = offline ? 'Offline' : syncing ? 'Saving…' : 'Unsynced change';
-  const copy = offline
+  if (state === 'checking') return null;
+
+  const title = state === 'online'
+    ? 'Online'
+    : state === 'offline'
+      ? 'Offline'
+      : state === 'syncing'
+        ? 'Syncing'
+        : 'Unsynced changes';
+
+  const copy = state === 'offline'
     ? 'Cached pages may still open, but changes are not saved until the server is reachable.'
-    : syncing
+    : state === 'syncing'
       ? 'Sending the latest change to the server.'
-      : message || 'A change was not saved. Reconnect or retry the action.';
-  return <div role="status" aria-live="polite" className={`fixed bottom-4 right-4 z-[1900] max-w-sm rounded-lg border px-3 py-2 text-xs shadow-xl ${syncing ? 'border-blue-500/30 bg-[#0b1727] text-blue-100' : 'border-amber-500/40 bg-[#17130a] text-amber-100'}`}>
-    <div className="font-medium">{title}</div><div className="mt-0.5 opacity-75">{copy}</div>
+      : state === 'unsynced'
+        ? (message || 'A change was not saved. Reconnect or retry the action.')
+        : '';
+
+  const tone = state === 'online'
+    ? 'border-emerald-500/20 bg-[#0b1727]/90 text-emerald-200'
+    : state === 'syncing'
+      ? 'border-blue-500/30 bg-[#0b1727] text-blue-100'
+      : 'border-amber-500/40 bg-[#17130a] text-amber-100';
+
+  return <div role="status" aria-live="polite" className={`fixed bottom-4 right-4 z-[1900] max-w-sm rounded-lg border px-3 py-2 text-xs shadow-xl ${tone}`}>
+    <div className="flex items-center gap-2">
+      <span aria-hidden="true" className={`h-1.5 w-1.5 rounded-full ${state === 'online' ? 'bg-emerald-400' : state === 'syncing' ? 'bg-blue-400 animate-pulse' : 'bg-amber-400'}`} />
+      <span className="font-medium">{title}</span>
+    </div>
+    {copy ? <div className="mt-0.5 opacity-75">{copy}</div> : null}
   </div>;
 }
