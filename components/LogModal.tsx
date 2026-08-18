@@ -1,6 +1,6 @@
 "use client";
 import { useState, useEffect, useMemo } from 'react';
-import { parsePageRanges, formatPageRanges, countPages, subtractPages } from '@/lib/pageRanges';
+import { parsePageRanges, countPages } from '@/lib/pageRanges';
 
 // Parse flexible time input (e.g., "90", "1h30m", "1:30")
 function parseMinutesFlexible(input: string): number | null {
@@ -99,11 +99,13 @@ export default function LogModal({ isOpen, onClose, onSubmit, task, mode, defaul
     return countPages(ranges);
   }, [pageRanges, hasPages]);
 
-  // Reset form when task changes
+  // Reset form when task changes. Finishing a task should record actual time,
+  // not silently copy the estimate; timer time is prefilled when available.
   useEffect(() => {
     if (isOpen && task) {
-      const defaultMins = defaultMinutes || Math.round((task.estimatedMinutes || 30) * (mode === 'partial' ? 0.5 : 1));
-      setMinutes(minutesToHM(Math.max(1, defaultMins)));
+      const fallback = mode === 'partial' ? Math.round((task.estimatedMinutes || 30) * 0.5) : null;
+      const suggested = defaultMinutes ?? fallback;
+      setMinutes(suggested && suggested > 0 ? minutesToHM(suggested) : '');
       setFocus(typeof window !== 'undefined' ? (localStorage.getItem('defaultFocus') || '5') : '5');
       setNotes('');
       setPagesCompleted('');
@@ -172,16 +174,18 @@ export default function LogModal({ isOpen, onClose, onSubmit, task, mode, defaul
         <div className="px-5 py-4 space-y-4">
           {/* Duration */}
           <div>
-            <label className="block text-xs text-slate-400 mb-1">Duration</label>
+            <label className="block text-xs text-slate-400 mb-1">{mode === 'finish' ? 'Actual time spent' : 'Duration'}</label>
             <input
               type="text"
               value={minutes}
               onChange={e => setMinutes(e.target.value)}
-              placeholder="e.g., 45, 1h30m, 1:30"
+              placeholder="e.g., 22, 45m, 1:10"
               className="w-full bg-slate-800 border border-white/10 rounded px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
               autoFocus
             />
-            <div className="text-[11px] text-slate-500 mt-1">Formats: 90, 1h30m, 1:30</div>
+            <div className="text-[11px] text-slate-500 mt-1">
+              {mode === 'finish' ? 'Enter how long you actually spent. It can be less than the estimate.' : 'Formats: 90, 1h30m, 1:30'}
+            </div>
           </div>
 
           {/* Focus slider */}
@@ -274,7 +278,7 @@ export default function LogModal({ isOpen, onClose, onSubmit, task, mode, defaul
             onClick={handleSubmit}
             className="px-4 py-2 rounded text-sm bg-emerald-600 text-white hover:bg-emerald-500"
           >
-            {mode === 'finish' ? 'Complete' : 'Log Progress'}
+            {mode === 'finish' ? 'Complete task' : 'Log Progress'}
           </button>
         </div>
       </div>

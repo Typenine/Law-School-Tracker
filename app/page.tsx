@@ -4,7 +4,7 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import type { CalendarEvent, Course, StudySession, Task } from "@/lib/types";
 import { apiFetch } from "@/lib/apiClient";
 import LogModal, { type LogSubmitData } from "@/components/LogModal";
-import { countPages, formatPageRanges, parsePageRanges, subtractPages } from "@/lib/pageRanges";
+import { countPages, parsePageRanges } from "@/lib/pageRanges";
 import { notifyTasksChanged, onTasksChanged } from "@/lib/taskBus";
 import { notifySessionsChanged } from "@/lib/sessionsBus";
 import { notifyScheduleChanged, onScheduleChanged } from "@/lib/scheduleBus";
@@ -427,44 +427,19 @@ export default function TodayPage() {
 
   async function submitLog(data: LogSubmitData) {
     if (!logTask) return;
-    const pageCount = data.pagesCompleted ? safePageCount(data.pagesCompleted) : 0;
-    const when = data.completionDate ? new Date(`${data.completionDate}T12:00:00`).toISOString() : new Date().toISOString();
-    await apiFetch("/api/sessions", {
+    await apiFetch(`/api/tasks/${logTask.id}/progress`, {
       method: "POST",
       body: {
-        taskId: logTask.id,
-        when,
+        mode: data.isPartial ? "partial" : "finish",
         minutes: data.minutes,
         focus: data.focus,
         notes: data.notes || null,
-        pagesRead: pageCount || null,
-        activity: activityLabel(logTask),
+        pagesCompleted: data.pagesCompleted || null,
+        moveToDay: data.moveToDay || null,
+        completionDate: data.completionDate || null,
       },
     });
-    if (data.isPartial) {
-      const patch: Record<string, unknown> = {
-        estimatedMinutes: Math.max(0, (logTask.estimatedMinutes || 0) - data.minutes),
-      };
-      // Narrow the outstanding page range so the Up Next card counts down.
-      const assigned = logTask.originalPageRanges || titlePageRanges(logTask);
-      if (assigned && data.pagesCompleted) {
-        try {
-          const current = logTask.remainingPageRanges || assigned;
-          const remaining = subtractPages(parsePageRanges(current), data.pagesCompleted);
-          patch.originalPageRanges = logTask.originalPageRanges || assigned;
-          patch.remainingPageRanges = formatPageRanges(remaining) || null;
-        } catch {}
-      }
-      await apiFetch(`/api/tasks/${logTask.id}`, { method: "PATCH", body: patch });
-    } else {
-      await apiFetch(`/api/tasks/${logTask.id}`, {
-        method: "PATCH",
-        body: {
-          status: "done",
-          actualMinutes: (sessionMinutesByTask.get(logTask.id) || 0) + data.minutes,
-          focus: Math.round(data.focus),
-        },
-      });
+    if (!data.isPartial) {
       setTimers(current => {
         const next = { ...current };
         delete next[logTask.id];
@@ -474,6 +449,7 @@ export default function TodayPage() {
     setLogTask(null);
     notifySessionsChanged();
     notifyTasksChanged();
+    notifyScheduleChanged();
     await refresh();
   }
 
@@ -544,10 +520,10 @@ export default function TodayPage() {
   return (
     <main className="today-dashboard">
       <style jsx global>{`
-        .today-dashboard{max-width:1140px!important}.today-grid{display:grid;grid-template-columns:minmax(0,1.85fr) minmax(300px,.95fr);gap:34px}.today-main,.today-rail{min-width:0}.dash-card{border:1px solid #203451;border-radius:13px;background:#0e1c2f}.dash-eyebrow{color:#7695c3;font:500 10px/1.2 'IBM Plex Mono',monospace;letter-spacing:.13em;text-transform:uppercase}.up-card{position:relative;min-height:330px;padding:31px 30px 27px;background:#102342;overflow:hidden}.up-card:before{content:'';position:absolute;inset:0 auto 0 0;width:5px;background:#4e9ee8}.up-line{display:flex;align-items:center;gap:10px;color:#8db3e4;font-size:13px}.up-line strong{color:#ffcc00;font:500 10px/1 'IBM Plex Mono',monospace;letter-spacing:.13em}.up-title{margin:17px 0 24px;font:400 34px/1.15 'Newsreader',Georgia,serif;color:#fff}.up-facts{display:grid;grid-template-columns:1fr 1.25fr 1.1fr;margin-bottom:28px}.up-fact{padding-right:26px}.up-fact+.up-fact{padding-left:27px;border-left:1px solid #29405f}.up-fact label{display:block;margin-bottom:8px;color:#7593bd!important;font:500 10px/1.2 'IBM Plex Mono',monospace!important;letter-spacing:.13em;text-transform:uppercase}.up-fact div{color:#f2f6fb;font-size:17px}.up-actions{display:flex;align-items:center;gap:14px}.dash-primary,.dash-secondary,.row-start{border-radius:8px;font-weight:500;transition:.12s}.dash-primary{min-height:50px;padding:0 26px;border:1px solid #ffcc00;background:#ffcc00;color:#06152b}.dash-primary:hover{background:#ffdb4d}.dash-secondary{min-height:45px;padding:0 19px;border:1px solid #2c4a70;background:transparent;color:#dce8f6}.dash-secondary:hover,.row-start:hover{background:#162d4d}.timer-readout{min-width:146px;color:#fff;font:500 34px/1 'IBM Plex Mono',monospace}.up-progress{height:4px;margin-top:24px;border-radius:4px;background:#223856;overflow:hidden}.up-progress span{display:block;height:100%;background:#54a9ee}.up-progress-copy{margin-top:9px;color:#7697c4;font-size:12px}.section-heading{display:flex;align-items:center;justify-content:space-between;margin:25px 0 13px}.section-heading h2{margin:0;color:#fff;font:600 17px/1.2 'IBM Plex Sans',sans-serif!important}.section-heading span{color:#7797c2;font:400 12px/1 'IBM Plex Mono',monospace}.task-stack{overflow:hidden}.dash-task{display:grid;grid-template-columns:40px 4px minmax(0,1fr) 74px 64px;align-items:center;gap:14px;min-height:82px;padding:13px 20px;border-bottom:1px solid #203451}.dash-task:last-child{border-bottom:0}.dash-check{width:21px;height:21px;border:1px solid #315274;border-radius:50%;background:transparent}.dash-check:hover{border-color:#ffcc00}.course-stripe{width:4px;height:34px;border-radius:3px}.task-title{color:#f3f7fb;font-size:15px;font-weight:500;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}.task-meta{margin-top:4px;color:#78a4d8;font-size:12px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}.task-duration{color:#d9e5f3;font:400 13px/1 'IBM Plex Mono',monospace;text-align:right}.row-start{height:34px;border:1px solid #2c4a70;background:transparent;color:#cfe0f5}.summary-grid{display:grid;grid-template-columns:repeat(3,1fr);gap:17px;margin-top:26px}.summary-card{min-height:126px;padding:22px 20px}.summary-value{margin-top:11px;color:#f6f9fd;font:500 29px/1 'IBM Plex Mono',monospace}.summary-value.green{color:#55a77f}.summary-copy{margin-top:10px;color:#83a6d2;font-size:12px}.rail-card{padding:24px 20px}.rail-card+.rail-card{margin-top:24px}.class-row{display:grid;grid-template-columns:48px minmax(0,1fr);gap:0;padding:16px 0 0}.class-time{color:#c7dcf5;font:400 12px/1.4 'IBM Plex Mono',monospace}.class-name{color:#fff;font-size:15px;font-weight:500}.class-location{margin-top:3px;color:#769bd0;font-size:12px}.rail-head{display:flex;align-items:center;justify-content:space-between}.rail-link{color:#4fa3ef;font-size:12px;text-decoration:none}.due-row{display:grid;grid-template-columns:48px minmax(0,1fr);gap:10px;padding-top:17px}.due-day{color:#90b0d6;font:400 11px/1.4 'IBM Plex Mono',monospace}.due-title{color:#f4f7fb;font-size:14px;font-weight:500;line-height:1.35}.due-course{margin-top:4px;color:#7397c7;font-size:12px}.count-row{display:flex;align-items:center;justify-content:space-between;margin-top:17px;color:#dce8f7}.count-row strong{font:500 14px/1 'IBM Plex Mono',monospace}.count-row strong.gold{color:#ffdd00}.empty-dash{padding:35px 24px;color:#7e9aba;text-align:center}.loading-dash{display:grid;place-items:center;min-height:420px;color:#7e9aba}.today-dashboard .fixed.inset-0 label{letter-spacing:0!important;text-transform:none!important;font-size:12px!important}.today-dashboard .fixed.inset-0 h2{font-family:'IBM Plex Sans',sans-serif!important}
+        .today-dashboard{max-width:1140px!important}.today-grid{display:grid;grid-template-columns:minmax(0,1.85fr) minmax(300px,.95fr);gap:34px}.today-main,.today-rail{min-width:0}.dash-card{border:1px solid #203451;border-radius:13px;background:#0e1c2f}.dash-eyebrow{color:#7695c3;font:500 10px/1.2 'IBM Plex Mono',monospace;letter-spacing:.13em;text-transform:uppercase}.up-card{position:relative;min-height:330px;padding:31px 30px 27px;background:#102342;overflow:hidden}.up-card:before{content:'';position:absolute;inset:0 auto 0 0;width:5px;background:#4e9ee8}.up-line{display:flex;align-items:center;gap:10px;color:#8db3e4;font-size:13px}.up-line strong{color:#ffcc00;font:500 10px/1 'IBM Plex Mono',monospace;letter-spacing:.13em}.up-title{margin:17px 0 24px;font:400 34px/1.15 'Newsreader',Georgia,serif;color:#fff}.up-facts{display:grid;grid-template-columns:1fr 1.25fr 1.1fr;margin-bottom:28px}.up-fact{padding-right:26px}.up-fact+.up-fact{padding-left:27px;border-left:1px solid #29405f}.up-fact label{display:block;margin-bottom:8px;color:#7593bd!important;font:500 10px/1.2 'IBM Plex Mono',monospace!important;letter-spacing:.13em;text-transform:uppercase}.up-fact div{color:#f2f6fb;font-size:17px}.up-actions{display:flex;align-items:center;gap:14px}.dash-primary,.dash-secondary,.row-start,.row-finish{border-radius:8px;font-weight:500;transition:.12s}.dash-primary{min-height:50px;padding:0 26px;border:1px solid #ffcc00;background:#ffcc00;color:#06152b}.dash-primary:hover{background:#ffdb4d}.dash-secondary{min-height:45px;padding:0 19px;border:1px solid #2c4a70;background:transparent;color:#dce8f6}.dash-secondary:hover,.row-start:hover{background:#162d4d}.dash-finish{border-color:#2f6f58;color:#9be3bd;background:#0e2a20}.dash-finish:hover{background:#173b2d}.timer-readout{min-width:146px;color:#fff;font:500 34px/1 'IBM Plex Mono',monospace}.up-progress{height:4px;margin-top:24px;border-radius:4px;background:#223856;overflow:hidden}.up-progress span{display:block;height:100%;background:#54a9ee}.up-progress-copy{margin-top:9px;color:#7697c4;font-size:12px}.section-heading{display:flex;align-items:center;justify-content:space-between;margin:25px 0 13px}.section-heading h2{margin:0;color:#fff;font:600 17px/1.2 'IBM Plex Sans',sans-serif!important}.section-heading span{color:#7797c2;font:400 12px/1 'IBM Plex Mono',monospace}.task-stack{overflow:hidden}.dash-task{display:grid;grid-template-columns:60px 4px minmax(0,1fr) 74px 64px;align-items:center;gap:14px;min-height:82px;padding:13px 20px;border-bottom:1px solid #203451}.dash-task:last-child{border-bottom:0}.row-finish{height:34px;border:1px solid #2f6f58;background:#0e2a20;color:#9be3bd;font-size:12px}.row-finish:hover{background:#173b2d}.course-stripe{width:4px;height:34px;border-radius:3px}.task-title{color:#f3f7fb;font-size:15px;font-weight:500;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}.task-meta{margin-top:4px;color:#78a4d8;font-size:12px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}.task-duration{color:#d9e5f3;font:400 13px/1 'IBM Plex Mono',monospace;text-align:right}.row-start{height:34px;border:1px solid #2c4a70;background:transparent;color:#cfe0f5}.summary-grid{display:grid;grid-template-columns:repeat(3,1fr);gap:17px;margin-top:26px}.summary-card{min-height:126px;padding:22px 20px}.summary-value{margin-top:11px;color:#f6f9fd;font:500 29px/1 'IBM Plex Mono',monospace}.summary-value.green{color:#55a77f}.summary-copy{margin-top:10px;color:#83a6d2;font-size:12px}.rail-card{padding:24px 20px}.rail-card+.rail-card{margin-top:24px}.class-row{display:grid;grid-template-columns:48px minmax(0,1fr);gap:0;padding:16px 0 0}.class-time{color:#c7dcf5;font:400 12px/1.4 'IBM Plex Mono',monospace}.class-name{color:#fff;font-size:15px;font-weight:500}.class-location{margin-top:3px;color:#769bd0;font-size:12px}.rail-head{display:flex;align-items:center;justify-content:space-between}.rail-links{display:flex;gap:10px}.rail-link{color:#4fa3ef;font-size:12px;text-decoration:none}.due-row{display:grid;grid-template-columns:48px minmax(0,1fr);gap:10px;padding-top:17px}.due-day{color:#90b0d6;font:400 11px/1.4 'IBM Plex Mono',monospace}.due-title{color:#f4f7fb;font-size:14px;font-weight:500;line-height:1.35}.due-course{margin-top:4px;color:#7397c7;font-size:12px}.count-row{display:flex;align-items:center;justify-content:space-between;margin-top:17px;color:#dce8f7}.count-row strong{font:500 14px/1 'IBM Plex Mono',monospace}.count-row strong.gold{color:#ffdd00}.empty-dash{padding:35px 24px;color:#7e9aba;text-align:center}.loading-dash{display:grid;place-items:center;min-height:420px;color:#7e9aba}.today-dashboard .fixed.inset-0 label{letter-spacing:0!important;text-transform:none!important;font-size:12px!important}.today-dashboard .fixed.inset-0 h2{font-family:'IBM Plex Sans',sans-serif!important}
         @media(max-width:1180px){.today-grid{grid-template-columns:minmax(0,1fr) 300px;gap:22px}.up-title{font-size:30px}.up-actions{flex-wrap:wrap}.timer-readout{min-width:120px}.summary-card{padding-inline:16px}}
         @media(max-width:960px){.today-grid{grid-template-columns:1fr}.today-rail{display:grid;grid-template-columns:repeat(3,1fr);gap:14px}.rail-card+.rail-card{margin-top:0}.summary-grid{margin-bottom:4px}}
-        @media(max-width:760px){.today-rail{grid-template-columns:1fr}.up-card{padding:25px 21px}.up-title{font-size:27px}.up-facts{grid-template-columns:1fr;gap:16px}.up-fact+.up-fact{padding-left:0;border-left:0}.up-actions{align-items:stretch}.timer-readout{order:4;width:100%;padding-top:5px}.dash-task{grid-template-columns:28px 4px minmax(0,1fr) 56px}.row-start{display:none}.summary-grid{grid-template-columns:1fr}.task-duration{font-size:12px}}
+        @media(max-width:760px){.today-rail{grid-template-columns:1fr}.up-card{padding:25px 21px}.up-title{font-size:27px}.up-facts{grid-template-columns:1fr;gap:16px}.up-fact+.up-fact{padding-left:0;border-left:0}.up-actions{align-items:stretch}.timer-readout{order:5;width:100%;padding-top:5px}.dash-task{grid-template-columns:56px 4px minmax(0,1fr) 56px}.row-start{display:none}.summary-grid{grid-template-columns:1fr}.task-duration{font-size:12px}}
       `}</style>
 
       {loading ? <div className="loading-dash">Loading today’s plan…</div> : (
@@ -564,6 +540,7 @@ export default function TodayPage() {
                 </div>
                 <div className="up-actions">
                   <button className="dash-primary" onClick={() => toggleTimer(upTask.id)}>{timers[upTask.id]?.running ? "Pause" : activityLabel(upTask) === "reading" ? "Start reading" : "Start task"}</button>
+                  <button className="dash-secondary dash-finish" onClick={() => openLog(upTask, "finish")}>Finish task</button>
                   <div className="timer-readout">{clockLabel(elapsedMs(upTask.id))}</div>
                   <button className="dash-secondary" onClick={() => openLog(upTask, "partial")}>Log progress</button>
                   <button className="dash-secondary" onClick={() => void moveToTomorrow(upTask)}>Move to tomorrow</button>
@@ -580,7 +557,7 @@ export default function TodayPage() {
                 const color = course?.color || fallbackColor(task.course);
                 const due = chicagoYmd(task.dueDate) === today ? "due today" : `due ${dayLabel(chicagoYmd(task.dueDate), today).toLowerCase()}`;
                 return <div className="dash-task" key={task.id}>
-                  <button className="dash-check" aria-label={`Complete ${task.title}`} onClick={() => openLog(task, "finish")} />
+                  <button className="row-finish" aria-label={`Finish ${task.title}`} onClick={() => openLog(task, "finish")}>Finish</button>
                   <span className="course-stripe" style={{ background: color }} />
                   <div><div className="task-title">{task.title}</div><div className="task-meta">{task.course || "Unassigned"} · {activityLabel(task)} · {due}</div></div>
                   <div className="task-duration">{minutesLabel(minutes)}</div>
@@ -603,7 +580,7 @@ export default function TodayPage() {
             </article>
 
             <article className="dash-card rail-card">
-              <div className="rail-head"><div className="dash-eyebrow">Due soon</div><a className="rail-link" href="/week-plan">Week →</a></div>
+              <div className="rail-head"><div className="dash-eyebrow">Due soon</div><div className="rail-links"><a className="rail-link" href="/week-plan">Week →</a><a className="rail-link" href="/tasks/completed">Completed →</a></div></div>
               {dueSoon.length ? dueSoon.map(task => <div className="due-row" key={task.id}><div className="due-day">{dayLabel(chicagoYmd(task.dueDate), today)}</div><div><div className="due-title">{task.title}</div><div className="due-course">{task.course || "Unassigned"}</div></div></div>) : <div className="empty-dash">Nothing due soon.</div>}
             </article>
 
@@ -622,7 +599,7 @@ export default function TodayPage() {
         onSubmit={data => void submitLog(data)}
         task={logTask}
         mode={logMode}
-        defaultMinutes={logTask ? Math.max(1, Math.round(elapsedMs(logTask.id) / 60000)) || undefined : undefined}
+        defaultMinutes={logTask && elapsedMs(logTask.id) >= 60000 ? Math.max(1, Math.round(elapsedMs(logTask.id) / 60000)) : undefined}
         coursePph={logTask ? Math.round(60 / Math.max(0.5, courseMap.get(courseKey(logTask.course))?.learnedMpp || Number(settings.minutesPerPage) || 3)) : 18}
       />
     </main>
