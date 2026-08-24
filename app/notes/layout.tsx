@@ -4,7 +4,6 @@ import { ReactNode, useEffect, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { NotesActionsProvider, useNotesActions } from './NotesActionsContext';
 import PasteOptions from './PasteOptions';
-import NotesScrollAssist from './NotesScrollAssist';
 
 const NOTES_FOCUS_KEY = 'notesFocusMode';
 
@@ -154,28 +153,64 @@ export default function NotesLayout({ children }: { children: ReactNode }) {
         body.notes-focus-mode .nb-tabbar .nb-rail-toggle,
         body.notes-focus-mode .nb-tabbar > .nb-tab-settings:last-child { display:none!important; }
 
-        /* Notes is a nested editor, so make its one real document scrollbar
-           obvious and easy to grab instead of relying on the thin OS default. */
-        body[data-route='/notes'] .nb-canvas {
-          overflow-y:scroll!important;
-          overscroll-behavior-y:contain;
-          scrollbar-gutter:stable;
-          scrollbar-width:auto;
-          scrollbar-color:var(--hover) var(--s1);
-          touch-action:pan-y;
+        /* Desktop Notes behaves like a document, not a scrollable widget.
+           The original layout locked the whole notebook to one viewport and
+           made only .nb-canvas scroll. Let the note grow naturally instead so
+           the browser's normal page scrollbar owns vertical movement. */
+        @media(min-width:861px) {
+          body[data-route='/notes'] .nb-frame {
+            height:auto!important;
+            min-height:calc(100vh - 118px)!important;
+            overflow:visible!important;
+            align-items:start;
+          }
+          body[data-route='/notes'] .nb-body {
+            min-height:calc(100vh - 118px);
+            overflow:visible!important;
+          }
+          body[data-route='/notes'] .nb-workspace {
+            flex:none!important;
+            min-height:calc(100vh - 168px);
+            align-items:start;
+            overflow:visible!important;
+          }
+          body[data-route='/notes'] .nb-canvas-column {
+            min-height:calc(100vh - 168px);
+            overflow:visible!important;
+          }
+          body[data-route='/notes'] .nb-editor-wrap {
+            display:block!important;
+            flex:none!important;
+            min-height:0!important;
+            overflow:visible!important;
+          }
+          body[data-route='/notes'] .nb-canvas {
+            height:auto!important;
+            min-height:58vh!important;
+            overflow:visible!important;
+            overscroll-behavior:auto!important;
+            scrollbar-gutter:auto!important;
+            padding-bottom:220px!important;
+          }
+          body[data-route='/notes'] .nb-rail,
+          body[data-route='/notes'] .nb-pages {
+            position:sticky;
+            top:94px;
+            align-self:start;
+            height:calc(100vh - 118px);
+            max-height:calc(100vh - 118px);
+          }
+          body[data-route='/notes'] .nb-rail-scroll,
+          body[data-route='/notes'] .nb-pages-list {
+            overscroll-behavior:contain;
+          }
         }
-        body[data-route='/notes'] .nb-canvas::-webkit-scrollbar { width:16px; }
-        body[data-route='/notes'] .nb-canvas::-webkit-scrollbar-track { background:var(--s1); border-left:1px solid var(--line); }
-        body[data-route='/notes'] .nb-canvas::-webkit-scrollbar-thumb { background:var(--hover); border:4px solid var(--s1); border-radius:999px; min-height:52px; }
-        body[data-route='/notes'] .nb-canvas::-webkit-scrollbar-thumb:hover { background:var(--blue); }
-        body[data-route='/notes'] .nb-canvas::-webkit-scrollbar-corner { background:var(--s1); }
 
-        @media(max-width:760px){.notes-header-message{display:none}.notes-header-focus,.notes-header-delete{padding-inline:9px;font-size:12px}.notes-deleted-state{padding:18px}body[data-route='/notes'] .nb-canvas::-webkit-scrollbar{width:12px}}
+        @media(max-width:760px){.notes-header-message{display:none}.notes-header-focus,.notes-header-delete{padding-inline:9px;font-size:12px}.notes-deleted-state{padding:18px}}
         @media(max-width:520px){.notes-header-focus{width:34px;padding:0;font-size:0}.notes-header-focus::before{content:'⤢';font-size:17px}.notes-header-focus.is-on::before{content:'⤡'}.notes-header-delete{width:34px;padding:0;font-size:0}.notes-header-delete::before{content:'⌫';font-size:17px}}
       `}</style>
       <NotesHeaderActions />
       <DeletedPageState />
-      <NotesScrollAssist />
       <PasteOptions />
     </NotesActionsProvider>
   );
