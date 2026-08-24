@@ -268,7 +268,7 @@ export default function PasteOptions() {
       window.removeEventListener('pageshow', onPageShow, { capture: true });
       try {
         if (ownDescriptor) Object.defineProperty(navigator, 'sendBeacon', ownDescriptor);
-        else delete (navigator as Navigator & { sendBeacon?: typeof guarded }).sendBeacon;
+        else Reflect.deleteProperty(navigator, 'sendBeacon');
       } catch {}
     };
   }, []);
