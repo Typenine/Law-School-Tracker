@@ -169,13 +169,12 @@ export default function PasteOptions() {
   const [pending, setPending] = useState<PendingPaste | null>(null);
 
   const choose = useCallback((mode: PasteMode) => {
-    setPending(current => {
-      if (!current) return null;
-      if (mode === 'plain') insertTextAtRange(current.editor, current.range, current.text);
-      else insertHtmlAtRange(current.editor, current.range, cleanSourceHtml(current.html, mode === 'merge'));
-      return null;
-    });
-  }, []);
+    if (!pending) return;
+    const current = pending;
+    setPending(null);
+    if (mode === 'plain') insertTextAtRange(current.editor, current.range, current.text);
+    else insertHtmlAtRange(current.editor, current.range, cleanSourceHtml(current.html, mode === 'merge'));
+  }, [pending]);
 
   useEffect(() => {
     const onPaste = (event: ClipboardEvent) => {
