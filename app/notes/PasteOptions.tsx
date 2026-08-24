@@ -193,6 +193,86 @@ export default function PasteOptions() {
     else insertHtmlAtRange(current.editor, current.range, cleanSourceHtml(current.html, mode === 'merge'));
   }, [pending]);
 
+  // Rich lists should behave like an outline. The editor's built-in key handler
+  // already reserves Tab for table-cell navigation; everywhere else a Tab on a
+  // real <li> nests that item one level deeper, while Shift+Tab moves it back.
+  // Listening in capture phase keeps the browser from tabbing focus out of the
+  // contenteditable before the React editor handler gets a chance to respond.
+  useEffect(() => {
+    const onListTab = (event: KeyboardEvent) => {
+      if (event.key !== 'Tab' || event.defaultPrevented) return;
+      const target = event.target instanceof Element ? event.target : null;
+      const editor = target?.closest<HTMLElement>('.nb-canvas[contenteditable="true"]');
+      if (!editor) return;
+
+      const selection = window.getSelection();
+      const anchor = selection?.anchorNode;
+      if (!anchor || !editor.contains(anchor)) return;
+      const anchorElement = anchor instanceof Element ? anchor : anchor.parentElement;
+      const item = anchorElement?.closest('li');
+      if (!item || !editor.contains(item)) return;
+      // Inside a table, Tab remains spreadsheet-style cell navigation.
+      if (item.closest('td, th')) return;
+
+      event.preventDefault();
+      editor.focus();
+      try { document.execCommand(event.shiftKey ? 'outdent' : 'indent', false); } catch {}
+      editor.dispatchEvent(new Event('input', { bubbles: true }));
+    };
+
+    document.addEventListener('keydown', onListTab, true);
+    return () => document.removeEventListener('keydown', onListTab, true);
+  }, []);
+
+  // Notes used to treat a simple tab/window switch as if the page were closing:
+  // visibilitychange fired flushOnExit(), sendBeacon saved a new DB timestamp,
+  // and the still-open editor kept the old timestamp. The next autosave then
+  // accused that same tab of being a different editor. Suppress only that
+  // visibility-only Notes beacon; a real pagehide still gets the last-chance
+  // save, so closing or navigating away keeps the durability protection.
+  useEffect(() => {
+    if (typeof navigator.sendBeacon !== 'function') return;
+    const original = navigator.sendBeacon.bind(navigator);
+    let pageHiding = false;
+
+    const onPageHide = () => { pageHiding = true; };
+    const onPageShow = () => { pageHiding = false; };
+    const guarded = (url: string | URL, data?: BodyInit | null) => {
+      let pathname = '';
+      try { pathname = new URL(String(url), window.location.href).pathname; } catch {}
+      const noteSave = /^\/api\/notes\/[^/]+$/.test(pathname);
+      if (noteSave && document.visibilityState === 'hidden' && !pageHiding) {
+        // sendBeacon callers only need a boolean saying the request was queued.
+        // Returning true here prevents the self-conflicting write while keeping
+        // the editor dirty so normal autosave runs when the tab is active again.
+        return true;
+      }
+      return original(url, data);
+    };
+
+    const ownDescriptor = Object.getOwnPropertyDescriptor(navigator, 'sendBeacon');
+    try {
+      Object.defineProperty(navigator, 'sendBeacon', {
+        configurable: true,
+        writable: true,
+        value: guarded,
+      });
+    } catch {
+      return;
+    }
+
+    window.addEventListener('pagehide', onPageHide, { capture: true });
+    window.addEventListener('pageshow', onPageShow, { capture: true });
+    return () => {
+      window.removeEventListener('pagehide', onPageHide, { capture: true });
+      window.removeEventListener('pageshow', onPageShow, { capture: true });
+      try {
+        if (ownDescriptor) Object.defineProperty(navigator, 'sendBeacon', ownDescriptor);
+        else delete (navigator as Navigator & { sendBeacon?: typeof guarded }).sendBeacon;
+      } catch {}
+    };
+  }, []);
+
   useEffect(() => {
     const onPaste = (event: ClipboardEvent) => {
       const target = event.target instanceof Element ? event.target : null;
