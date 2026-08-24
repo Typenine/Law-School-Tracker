@@ -23,7 +23,8 @@ const SUPPORTED_TAGS = new Set([
 const SAFE_STYLE_PROPERTIES = new Set([
   'font-weight', 'font-style', 'font-family', 'font-size', 'line-height',
   'text-decoration', 'text-decoration-line', 'text-align', 'vertical-align',
-  'color', 'background-color', 'white-space', 'list-style-type',
+  'color', 'background-color', 'white-space', 'list-style', 'list-style-type',
+  'list-style-position',
   'margin-left', 'margin-right', 'margin-top', 'margin-bottom',
   'padding-left', 'padding-right',
   'border', 'border-top', 'border-right', 'border-bottom', 'border-left',
@@ -82,6 +83,8 @@ function cleanSourceHtml(rawHtml: string, merge: boolean): string {
       allowedAttributes.add('rowspan');
     }
     if (element.tagName === 'OL') allowedAttributes.add('start');
+    if (element.tagName === 'LI') allowedAttributes.add('value');
+    if (!merge && (element.tagName === 'UL' || element.tagName === 'OL')) allowedAttributes.add('type');
     if (!merge) allowedAttributes.add('style');
 
     for (const attribute of Array.from(element.attributes)) {
@@ -106,6 +109,20 @@ function cleanSourceHtml(rawHtml: string, merge: boolean): string {
         style.removeProperty(property);
       }
     }
+
+    // A lot of web/Word clipboard HTML uses `list-style: none` because the
+    // source page supplies its marker with external CSS or a pseudo-element.
+    // That CSS does not travel with a paste, leaving a real <ul>/<ol> whose
+    // marker is invisible. Drop only the marker-suppressing part so the Notes
+    // document stylesheet can provide a visible bullet/number fallback.
+    if (element.tagName === 'UL' || element.tagName === 'OL') {
+      if (style.getPropertyValue('list-style-type').trim().toLowerCase() === 'none') {
+        style.removeProperty('list-style-type');
+      }
+      const shorthand = style.getPropertyValue('list-style').trim().toLowerCase();
+      if (shorthand.split(/\s+/).includes('none')) style.removeProperty('list-style');
+    }
+
     if (!style.length) htmlElement.removeAttribute('style');
   }
 
