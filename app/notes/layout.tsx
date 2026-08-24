@@ -3,6 +3,7 @@
 import { ReactNode, useEffect, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { NotesActionsProvider, useNotesActions } from './NotesActionsContext';
+import PasteOptions from './PasteOptions';
 
 function NotesHeaderActions() {
   const [actionsHost, setActionsHost] = useState<HTMLElement | null>(null);
@@ -110,6 +111,7 @@ export default function NotesLayout({ children }: { children: ReactNode }) {
       `}</style>
       <NotesHeaderActions />
       <DeletedPageState />
+      <PasteOptions />
     </NotesActionsProvider>
   );
 }
