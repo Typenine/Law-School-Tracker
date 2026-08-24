@@ -4,6 +4,7 @@ import { ReactNode, useEffect, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { NotesActionsProvider, useNotesActions } from './NotesActionsContext';
 import PasteOptions from './PasteOptions';
+import NotesScrollAssist from './NotesScrollAssist';
 
 const NOTES_FOCUS_KEY = 'notesFocusMode';
 
@@ -153,11 +154,28 @@ export default function NotesLayout({ children }: { children: ReactNode }) {
         body.notes-focus-mode .nb-tabbar .nb-rail-toggle,
         body.notes-focus-mode .nb-tabbar > .nb-tab-settings:last-child { display:none!important; }
 
-        @media(max-width:760px){.notes-header-message{display:none}.notes-header-focus,.notes-header-delete{padding-inline:9px;font-size:12px}.notes-deleted-state{padding:18px}}
+        /* Notes is a nested editor, so make its one real document scrollbar
+           obvious and easy to grab instead of relying on the thin OS default. */
+        body[data-route='/notes'] .nb-canvas {
+          overflow-y:scroll!important;
+          overscroll-behavior-y:contain;
+          scrollbar-gutter:stable;
+          scrollbar-width:auto;
+          scrollbar-color:var(--hover) var(--s1);
+          touch-action:pan-y;
+        }
+        body[data-route='/notes'] .nb-canvas::-webkit-scrollbar { width:16px; }
+        body[data-route='/notes'] .nb-canvas::-webkit-scrollbar-track { background:var(--s1); border-left:1px solid var(--line); }
+        body[data-route='/notes'] .nb-canvas::-webkit-scrollbar-thumb { background:var(--hover); border:4px solid var(--s1); border-radius:999px; min-height:52px; }
+        body[data-route='/notes'] .nb-canvas::-webkit-scrollbar-thumb:hover { background:var(--blue); }
+        body[data-route='/notes'] .nb-canvas::-webkit-scrollbar-corner { background:var(--s1); }
+
+        @media(max-width:760px){.notes-header-message{display:none}.notes-header-focus,.notes-header-delete{padding-inline:9px;font-size:12px}.notes-deleted-state{padding:18px}body[data-route='/notes'] .nb-canvas::-webkit-scrollbar{width:12px}}
         @media(max-width:520px){.notes-header-focus{width:34px;padding:0;font-size:0}.notes-header-focus::before{content:'⤢';font-size:17px}.notes-header-focus.is-on::before{content:'⤡'}.notes-header-delete{width:34px;padding:0;font-size:0}.notes-header-delete::before{content:'⌫';font-size:17px}}
       `}</style>
       <NotesHeaderActions />
       <DeletedPageState />
+      <NotesScrollAssist />
       <PasteOptions />
     </NotesActionsProvider>
   );
