@@ -142,6 +142,31 @@ export default function NotesLayout({ children }: { children: ReactNode }) {
         body.notes-awaiting-page-selection .nb-page-item.is-active,
         body.notes-awaiting-page-selection .nb-node-page.is-active { background:transparent!important; box-shadow:none!important; }
 
+        /* Tailwind's reset deliberately removes native ul/ol markers. That is
+           fine for application chrome but wrong inside a rich-text document:
+           pasted semantic lists still existed in the DOM, while their bullets
+           and numbers were invisible. Restore document list behavior here. */
+        body[data-route='/notes'] .nb-canvas ul:not(.nb-todo-list) {
+          list-style-type:disc;
+          list-style-position:outside;
+          margin:.45em 0 .75em;
+          padding-left:1.8em;
+        }
+        body[data-route='/notes'] .nb-canvas ol {
+          list-style-type:decimal;
+          list-style-position:outside;
+          margin:.45em 0 .75em;
+          padding-left:1.9em;
+        }
+        body[data-route='/notes'] .nb-canvas li:not(.nb-todo) {
+          display:list-item;
+          margin:.16em 0;
+          padding-left:.12em;
+        }
+        body[data-route='/notes'] .nb-canvas ul:not(.nb-todo-list) ul { list-style-type:circle; }
+        body[data-route='/notes'] .nb-canvas ul:not(.nb-todo-list) ul ul { list-style-type:square; }
+        body[data-route='/notes'] .nb-canvas li::marker { color:currentColor; }
+
         /* One-click wide editor mode. The Notes page already has independent
            tree/page-list toggles; this deliberately sits above them and hides
            both side panels without changing their saved open/closed state. */
