@@ -22,6 +22,7 @@ export default function SettingsPage() {
   const [quietStart, setQuietStart] = useState("22:00");
   const [quietEnd, setQuietEnd] = useState("07:00");
   const [maxNudgesPerWeek, setMaxNudgesPerWeek] = useState("3");
+  const [autoRebalanceEnabled, setAutoRebalanceEnabled] = useState(true);
   const [preferencesSaving, setPreferencesSaving] = useState(false);
 
   const [courses, setCourses] = useState<any[]>([]);
@@ -63,6 +64,7 @@ export default function SettingsPage() {
         if (typeof s.nudgesQuietStart === 'string') setQuietStart(s.nudgesQuietStart);
         if (typeof s.nudgesQuietEnd === 'string') setQuietEnd(s.nudgesQuietEnd);
         if (s.nudgesMaxPerWeek != null) setMaxNudgesPerWeek(String(Math.max(0, Number(s.nudgesMaxPerWeek) || 0)));
+        if (typeof s.autoRebalanceEnabled === 'boolean') setAutoRebalanceEnabled(s.autoRebalanceEnabled);
         if (typeof s.internshipColor === 'string' && s.internshipColor) setInternshipColor(s.internshipColor);
         if (typeof s.sportsLawReviewColor === 'string' && s.sportsLawReviewColor) setSportsLawReviewColor(s.sportsLawReviewColor);
         if (s.availabilityWindowsV1) setWindowsByDow(s.availabilityWindowsV1);
@@ -116,6 +118,7 @@ export default function SettingsPage() {
         nudgesQuietStart: quietStart,
         nudgesQuietEnd: quietEnd,
         nudgesMaxPerWeek: Math.max(0, Math.round(Number(maxNudgesPerWeek) || 0)),
+        autoRebalanceEnabled,
       }});
       notifyToast({ kind: 'success', message: 'Preferences saved.' });
     } catch {} finally { setPreferencesSaving(false); }
@@ -233,6 +236,10 @@ export default function SettingsPage() {
         </SettingCard>
         <SettingCard title="Minutes per Page (fallback)"><label className="text-xs text-slate-300/70">Fallback<input type="number" min={1} value={minutesPerPage} onChange={e => setMinutesPerPage(e.target.value)} className="mt-1 block w-24 px-2 py-1" /></label></SettingCard>
         <SettingCard title="Focus Defaults"><label className="text-xs text-slate-300/70">Default focus (1–10)<input type="number" min={1} max={10} value={defaultFocus} onChange={e => setDefaultFocus(e.target.value)} className="mt-1 block w-24 px-2 py-1" /></label></SettingCard>
+        <SettingCard title="Automatic Rebalancing">
+          <label className="flex items-start gap-2 text-sm"><input type="checkbox" checked={autoRebalanceEnabled} onChange={e => setAutoRebalanceEnabled(e.target.checked)} className="mt-0.5" /><span>Carry unfinished scheduled work forward and shrink future blocks as real time is logged.</span></label>
+          <div className="text-xs text-slate-300/60">It only adjusts work already placed on the week plan. It will not auto-schedule brand-new assignments.</div>
+        </SettingCard>
         <SettingCard title="Calendar Token"><label className="text-xs text-slate-300/70">Private token<input value={icsToken} onChange={e => setIcsToken(e.target.value)} className="mt-1 block w-full px-2 py-1" placeholder="e.g., abc123" /></label></SettingCard>
         <SettingCard title="Nudges (Honor Code)" wide>
           <label className="flex items-center gap-2 text-sm"><input type="checkbox" checked={nudgesEnabled} onChange={e => setNudgesEnabled(e.target.checked)} />Enable gentle nudges</label>

@@ -31,6 +31,7 @@ const SEMESTER: NavItem[] = [
 const PROGRESS: NavItem[] = [
   { href: '/log', icon: '+', label: 'Log a session' },
   { href: '/review', icon: '◒', label: 'Review' },
+  { href: '/rules', icon: '§', label: 'Rule Bank' },
   { href: '/archive', icon: '↧', label: 'Archive & backup' },
 ];
 
@@ -44,6 +45,7 @@ const PAGES: Record<string, [string, string]> = {
   '/calendar': ['Calendar', 'Classes, deadlines, exams, and study commitments.'],
   '/log': ['Log a session', 'Record the work while the details are still fresh.'],
   '/review': ['Review', 'Actual work, plan accuracy, course balance, pace, focus, and risk.'],
+  '/rules': ['Rule Bank', 'Build legal rules once, then review them on a spaced schedule.'],
   '/archive': ['Archive & backup', 'Freeze semesters and keep a restorable copy of the workspace.'],
   '/settings': ['Settings', 'Set the assumptions the tracker uses to plan your work.'],
   '/help': ['Help', 'How the tracker plans, estimates, and records your work.'],

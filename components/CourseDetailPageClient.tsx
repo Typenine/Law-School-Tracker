@@ -5,6 +5,7 @@ import { useEffect, useMemo, useState } from 'react';
 import type { Course, CourseDocument, CourseDocumentCategory, Task } from '@/lib/types';
 import { resolveCourseColor } from '@/lib/colors';
 import EditCourseModal from '@/components/EditCourseModal';
+import { dueForReview, normalizeRuleBank, type RuleBankEntry } from '@/lib/ruleBank';
 
 export const dynamic = 'force-dynamic';
 
@@ -91,6 +92,29 @@ function taskDue(task: Task): number {
   const n = new Date(task.dueDate).getTime();
   return Number.isFinite(n) ? n : Number.MAX_SAFE_INTEGER;
 }
+function nextClassOccurrence(course: Course): Date | null {
+  const rawBlocks = Array.isArray(course.meetingBlocks) && course.meetingBlocks.length
+    ? course.meetingBlocks
+    : (Array.isArray(course.meetingDays) && course.meetingStart
+      ? [{ days: course.meetingDays, start: course.meetingStart, end: course.meetingEnd || '', location: course.location || course.room || null }]
+      : []);
+  if (!rawBlocks.length) return null;
+  const now = new Date();
+  const candidates: Date[] = [];
+  for (let offset = 0; offset < 9; offset++) {
+    const date = new Date(now);
+    date.setHours(0, 0, 0, 0);
+    date.setDate(date.getDate() + offset);
+    for (const block of rawBlocks) {
+      if (!Array.isArray(block.days) || !block.days.includes(date.getDay()) || !block.start) continue;
+      const [h, m] = String(block.start).split(':').map(Number);
+      const occurrence = new Date(date);
+      occurrence.setHours(Number.isFinite(h) ? h : 0, Number.isFinite(m) ? m : 0, 0, 0);
+      if (occurrence.getTime() > now.getTime()) candidates.push(occurrence);
+    }
+  }
+  return candidates.sort((a, b) => a.getTime() - b.getTime())[0] || null;
+}
 
 export default function CourseDetailPage({ params }: { params: { id: string } }) {
   const [course, setCourse] = useState<Course | null>(null);
@@ -99,6 +123,7 @@ export default function CourseDetailPage({ params }: { params: { id: string } })
   const [notebooks, setNotebooks] = useState<Notebook[]>([]);
   const [notes, setNotes] = useState<NoteSummary[]>([]);
   const [documents, setDocuments] = useState<CourseDocument[]>([]);
+  const [rules, setRules] = useState<RuleBankEntry[]>([]);
   const [loading, setLoading] = useState(true);
   const [notFound, setNotFound] = useState(false);
   const [showEdit, setShowEdit] = useState(false);
@@ -122,11 +147,12 @@ export default function CourseDetailPage({ params }: { params: { id: string } })
   async function refresh() {
     setLoading(true);
     try {
-      const [coursesRes, tasksRes, notebooksRes, sessionsRes] = await Promise.all([
+      const [coursesRes, tasksRes, notebooksRes, sessionsRes, settingsRes] = await Promise.all([
         fetch(`/api/courses?_ts=${Date.now()}`, { cache: 'no-store' }),
         fetch('/api/tasks?allTerms=true', { cache: 'no-store' }),
         fetch('/api/notes/notebooks', { cache: 'no-store' }),
         fetch('/api/sessions', { cache: 'no-store' }),
+        fetch('/api/settings?keys=ruleBankV1', { cache: 'no-store' }),
       ]);
       const coursesData = await coursesRes.json().catch(() => ({ courses: [] }));
       const found = ((coursesData.courses || []) as Course[]).find(c => c.id === params.id) || null;
@@ -138,6 +164,8 @@ export default function CourseDetailPage({ params }: { params: { id: string } })
       setNotebooks((notebooksData.notebooks || []) as Notebook[]);
       const sessionsData = await sessionsRes.json().catch(() => ({ sessions: [] }));
       setSessions((sessionsData.sessions || []) as Session[]);
+      const settingsData = await settingsRes.json().catch(() => ({ settings: {} }));
+      setRules(normalizeRuleBank(settingsData?.settings?.ruleBankV1));
 
       if (found) {
         const [notesRes, docsRes] = await Promise.all([
@@ -229,6 +257,18 @@ export default function CourseDetailPage({ params }: { params: { id: string } })
       avgFocus,
     };
   }, [courseSessions, weekKeys]);
+
+  const courseRules = useMemo(() => course ? rules.filter(rule => norm(rule.course) === courseKey || (!!codeKey && norm(rule.course) === codeKey)) : [], [rules, course, courseKey, codeKey]);
+  const dueRules = useMemo(() => courseRules.filter(rule => dueForReview(rule)), [courseRules]);
+  const nextClass = useMemo(() => course ? nextClassOccurrence(course) : null, [course]);
+  const nextReading = openReadings[0] || null;
+  const readingProgress = readingTasks.length ? Math.round((doneReadingCount / readingTasks.length) * 100) : 0;
+  const effectivePace = course?.overrideEnabled && course.overrideMpp ? course.overrideMpp : course?.learnedMpp || stats.timePerPage || 0;
+  const lastReviewSession = useMemo(() => courseSessions
+    .filter(session => /review|practice/i.test(String((session as any).activity || '')))
+    .sort((a, b) => new Date(b.when).getTime() - new Date(a.when).getTime())[0] || null, [courseSessions]);
+  const outlinePages = useMemo(() => courseSessions.reduce((sum, session: any) => sum + Math.max(0, Number(session.outlinePages) || 0), 0), [courseSessions]);
+  const recentCourseNotes = notes.slice(0, 3);
 
   const goalMin = course ? (goals.find(goal => goal.scope === 'course' && (goal.course || '') === course.title)?.weeklyMinutes || 0) : 0;
   const goalPct = goalMin > 0 ? Math.min(1, stats.weekMinutes / goalMin) : 0;
@@ -402,6 +442,7 @@ export default function CourseDetailPage({ params }: { params: { id: string } })
               <button type="button" onClick={() => openTab('readings')} className="rounded-full border border-white/10 px-2.5 py-1 text-slate-300 hover:bg-white/5">{openReadings.length} reading{openReadings.length === 1 ? '' : 's'}</button>
               <button type="button" onClick={() => openTab('notes')} className="rounded-full border border-white/10 px-2.5 py-1 text-slate-300 hover:bg-white/5">{noteCount} note{noteCount === 1 ? '' : 's'}</button>
               <button type="button" onClick={() => openTab('documents')} className="rounded-full border border-white/10 px-2.5 py-1 text-slate-300 hover:bg-white/5">{documents.length} document{documents.length === 1 ? '' : 's'}</button>
+              <Link href={`/rules?course=${encodeURIComponent(course.title)}`} className="rounded-full border border-white/10 px-2.5 py-1 text-slate-300 hover:bg-white/5">{courseRules.length} rule{courseRules.length === 1 ? '' : 's'}{dueRules.length ? ` · ${dueRules.length} due` : ''}</Link>
             </div>
           </div>
           <div className="flex flex-wrap gap-2">
@@ -429,6 +470,34 @@ export default function CourseDetailPage({ params }: { params: { id: string } })
 
       {activeTab === 'overview' && (
         <div className="space-y-4">
+          <section className="card p-4">
+            <div className="flex flex-wrap items-center justify-between gap-3"><div><div className="text-sm font-medium">Course command center</div><div className="mt-1 text-xs text-slate-500">The next class, current workload, review health, and study pace in one view.</div></div><Link href={`/rules?course=${encodeURIComponent(course.title)}`} className="rounded border border-[#1b2344] px-3 py-1.5 text-xs hover:bg-[#1b2344]">Rule Bank</Link></div>
+            <div className="mt-4 grid grid-cols-2 gap-2 md:grid-cols-3 xl:grid-cols-6">
+              {[
+                ['Next class', nextClass ? nextClass.toLocaleString([], { weekday: 'short', hour: 'numeric', minute: '2-digit' }) : 'Not set'],
+                ['Next reading', nextReading ? new Date(nextReading.dueDate).toLocaleDateString([], { weekday: 'short', month: 'short', day: 'numeric' }) : 'Clear'],
+                ['Reading progress', readingTasks.length ? `${readingProgress}%` : '—'],
+                ['Current pace', effectivePace > 0 ? `${effectivePace.toFixed(1)}m/page` : 'Learning'],
+                ['Rules due', dueRules.length ? String(dueRules.length) : '0'],
+                ['Last review', lastReviewSession ? new Date(lastReviewSession.when).toLocaleDateString([], { month: 'short', day: 'numeric' }) : 'None yet'],
+              ].map(([label, value]) => <div key={label} className="rounded-lg border border-white/10 bg-white/[0.02] p-3"><div className="text-[10px] uppercase tracking-wide text-slate-500">{label}</div><div className="mt-2 text-sm font-medium">{value}</div></div>)}
+            </div>
+            <div className="mt-3 grid gap-3 lg:grid-cols-2">
+              <div className="rounded-lg border border-white/10 bg-white/[0.015] p-3">
+                <div className="flex items-center justify-between"><div className="text-xs font-medium text-slate-300">What needs attention</div><span className="text-[10px] text-slate-500">{outlinePages ? `${outlinePages} outline pages logged` : 'No outline pages logged'}</span></div>
+                <div className="mt-2 space-y-2">
+                  {nextReading ? <div className="text-xs text-slate-400"><span className="text-slate-200">Reading:</span> {nextReading.title}</div> : <div className="text-xs text-slate-500">No open readings.</div>}
+                  {dueRules.length ? <div className="text-xs text-amber-300">{dueRules.length} spaced rule review{dueRules.length === 1 ? '' : 's'} due.</div> : <div className="text-xs text-emerald-400">Rule review queue is clear.</div>}
+                  {nextItems[0] ? <div className="text-xs text-slate-400"><span className="text-slate-200">Next deadline:</span> {nextItems[0].title} · {new Date(nextItems[0].dueDate).toLocaleDateString()}</div> : null}
+                </div>
+              </div>
+              <div className="rounded-lg border border-white/10 bg-white/[0.015] p-3">
+                <div className="flex items-center justify-between"><div className="text-xs font-medium text-slate-300">Recent notes</div><button type="button" onClick={() => openTab('notes')} className="text-[10px] text-blue-300">Open notes</button></div>
+                <div className="mt-2 space-y-2">{recentCourseNotes.length ? recentCourseNotes.map(note => <div key={note.id} className="text-xs"><div className="truncate text-slate-200">{note.title}</div><div className="text-slate-500">{new Date(note.updatedAt).toLocaleDateString()}</div></div>) : <div className="text-xs text-slate-500">No recent notes.</div>}</div>
+              </div>
+            </div>
+          </section>
+
           <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
             <section className="card p-4">
               <div className="text-sm font-medium mb-3">Schedule</div>

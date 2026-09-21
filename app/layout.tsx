@@ -5,6 +5,7 @@ import PWARegister from '@/components/PWARegister'
 import CommandPalette from '@/components/CommandPalette'
 import SiteChrome from '@/components/SiteChrome'
 import Providers from '@/app/providers'
+import AutoRebalanceManager from '@/components/AutoRebalanceManager'
 
 /**
  * The brand mark. This used to be an inline base64 PNG whose data was
@@ -42,6 +43,6 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
     <style dangerouslySetInnerHTML={{ __html: css }} />
   </head><body><Providers>
     <SiteChrome brandMark={brandIcon}>{children}</SiteChrome>
-    <ReminderManager /><PWARegister /><CommandPalette />
+    <ReminderManager /><AutoRebalanceManager /><PWARegister /><CommandPalette />
   </Providers></body></html>
 }
