@@ -181,7 +181,7 @@ export default function SiteChrome({ children, brandMark }: { children: React.Re
   return <div className={`lst-shell${sideOpen ? ' side-open' : ''}`}>
     <aside className="lst-sidebar">
       <div className="lst-brand"><div className="lst-wordmark">Law School Tracker</div>{termLabel ? <div className="lst-term">{termLabel}</div> : null}</div>
-      <div className="lst-brand-mark-wrap" aria-hidden="true"><img className="lst-brand-mark" src={brandMark} alt="" /></div>
+      <div className="lst-brand-mark-wrap" aria-hidden="true"><img className="lst-brand-mark" src="/sidebar-logo.svg" alt="" /></div>
       <nav>{renderGroup('Plan', PLAN)}{renderGroup('Semester', SEMESTER)}{renderGroup('Progress', PROGRESS)}</nav>
       <div className="lst-grow" />
       <div className="lst-week"><b>This week</b><div className="lst-week-value">{hoursLabel(weekMinutes)} / {hoursLabel(targetMinutes)}</div><div className="lst-track"><span className="lst-fill" style={{ width: `${percent}%` }} /></div><div className="lst-week-copy">{weekCopy}</div></div>
