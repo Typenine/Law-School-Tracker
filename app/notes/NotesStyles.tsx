@@ -211,6 +211,8 @@ export default function NotesStyles() {
       .nb-canvas table.nb-table td, .nb-canvas table.nb-table th { border: 1px solid var(--line2); padding: 7px 10px; text-align: left; vertical-align: top; min-width: 60px; }
       .nb-canvas table.nb-table th { background: var(--s3); color: var(--text2); font-weight: 600; }
       .nb-canvas table.nb-table tr:hover td, .nb-canvas table.nb-table tr:hover th { background: var(--hover); }
+      .nb-rule-selection { position: fixed; z-index: 75; transform: translateX(-50%); padding: 7px 11px; border: 1px solid #d5a900; border-radius: 7px; background: #ffcc00; color: #06152b; font-size: 11.5px; font-weight: 600; box-shadow: 0 10px 26px rgba(0,0,0,.38); cursor: pointer; white-space: nowrap; }
+      .nb-rule-selection:hover { background: #ffd633; }
 
       /* To-do tags */
       .nb-canvas ul.nb-todo-list { padding-left: 6px; list-style: none; }
