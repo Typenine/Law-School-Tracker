@@ -4,7 +4,6 @@ import { useEffect, useMemo, useState } from "react";
 import type { Course, Task } from "@/lib/types";
 import { apiFetch } from "@/lib/apiClient";
 import { countPages, extractPageRangesFromTitle, formatPageRanges, parsePageRanges } from "@/lib/pageRanges";
-import { notifyTasksChanged } from "@/lib/taskBus";
 
 type Props = {
   task: Task | null;
@@ -100,12 +99,12 @@ export default function TodayTaskEditModal({ task, courses, onClose, onSaved }: 
       const estimate = estimatedMinutes.trim() === "" ? null : Math.max(0, Math.round(Number(estimatedMinutes)));
       const priorityValue = priority.trim() === "" ? null : Math.max(1, Math.min(5, Math.round(Number(priority))));
 
-      if (estimatedMinutes.trim() !== "" && !Number.isFinite(estimate)) {
+      if (estimatedMinutes.trim() !== "" && (estimate == null || !Number.isFinite(estimate))) {
         setError("Estimated minutes must be a number.");
         setSaving(false);
         return;
       }
-      if (priority.trim() !== "" && !Number.isFinite(priorityValue)) {
+      if (priority.trim() !== "" && (priorityValue == null || !Number.isFinite(priorityValue))) {
         setError("Priority must be a number from 1 to 5.");
         setSaving(false);
         return;
@@ -129,7 +128,6 @@ export default function TodayTaskEditModal({ task, courses, onClose, onSaved }: 
       }
 
       await apiFetch(`/api/tasks/${task.id}`, { method: "PATCH", body });
-      notifyTasksChanged();
       await onSaved();
       onClose();
     } catch (err: any) {
