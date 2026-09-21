@@ -91,7 +91,7 @@ export default function TodayTaskEditModal({ task, courses, onClose, onSaved }: 
 
       let nextTitle = cleanTitle;
       if (rangesChanged) {
-        nextTitle = nextTitle.replace(/\s*p(?:ages?)?\.?\s*[0-9,\s–—-]+/gi, "").trim();
+        nextTitle = nextTitle.replace(/\s*\b(?:pp?|pages?)\.?\s*[0-9,\s–—-]+/gi, "").trim();
         if (nextRanges) nextTitle = `${nextTitle} p. ${nextRanges}`;
       }
 
