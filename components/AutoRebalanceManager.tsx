@@ -8,6 +8,8 @@ import { onTasksChanged } from "@/lib/taskBus";
 import { onSessionsChanged } from "@/lib/sessionsBus";
 import { writeLocalSchedule, type ScheduledBlock } from "@/lib/useSchedule";
 
+type PlannerTask = Task & { workflowState?: string; blocked?: boolean };
+
 const DEFAULT_AVAIL: Record<number, number> = { 0: 120, 1: 240, 2: 240, 3: 240, 4: 240, 5: 240, 6: 120 };
 
 function chicagoYmd(value: Date = new Date()): string {
@@ -78,7 +80,7 @@ function fingerprint(blocks: ScheduledBlock[]): string {
     .join("\n");
 }
 
-function dueKey(task: Task, fallback: string): string {
+function dueKey(task: PlannerTask, fallback: string): string {
   const raw = String(task.dueDate || "").slice(0, 10);
   return /^\d{4}-\d{2}-\d{2}$/.test(raw) ? raw : fallback;
 }
@@ -102,7 +104,7 @@ export default function AutoRebalanceManager() {
     try {
       const [settingsData, taskData, scheduleData] = await Promise.all([
         apiFetch<{ settings: Record<string, any> }>("/api/settings?keys=autoRebalanceEnabled,availabilityTemplateV1,availabilityWindowsV1,availabilityBreaksV1"),
-        apiFetch<{ tasks: Task[] }>("/api/tasks?allTerms=true"),
+        apiFetch<{ tasks: PlannerTask[] }>("/api/tasks/workspace?allTerms=true"),
         apiFetch<{ blocks: ScheduledBlock[] }>("/api/schedule"),
       ]);
       const settings = settingsData?.settings || {};
@@ -117,7 +119,7 @@ export default function AutoRebalanceManager() {
       let next: ScheduledBlock[] = [];
       for (const block of original) {
         const task = taskMap.get(String(block.taskId));
-        if (!task || task.status === "done") continue;
+        if (!task || task.status === "done" || task.workflowState === "done" || task.workflowState === "canceled" || task.blocked) continue;
         if (block.day < today) {
           carry.set(String(block.taskId), (carry.get(String(block.taskId)) || 0) + Math.max(0, Number(block.plannedMinutes) || 0));
           continue;
@@ -128,7 +130,7 @@ export default function AutoRebalanceManager() {
       // As real work is logged, do not leave more future time scheduled than
       // the task's remaining estimate. Trim from the latest blocks first.
       for (const task of tasks) {
-        if (task.status === "done" || !Number(task.estimatedMinutes)) continue;
+        if (task.status === "done" || task.workflowState === "done" || task.workflowState === "canceled" || task.blocked || !Number(task.estimatedMinutes)) continue;
         const remaining = Math.max(0, Math.round(Number(task.estimatedMinutes)));
         const indices = next
           .map((block, index) => ({ block, index }))
@@ -152,7 +154,7 @@ export default function AutoRebalanceManager() {
 
       const carryItems = [...carry.entries()]
         .map(([taskId, missed]) => ({ task: taskMap.get(taskId), missed }))
-        .filter((item): item is { task: Task; missed: number } => Boolean(item.task && item.task.status !== "done" && item.missed > 0))
+        .filter((item): item is { task: PlannerTask; missed: number } => Boolean(item.task && item.task.status !== "done" && item.task.workflowState !== "done" && item.task.workflowState !== "canceled" && !item.task.blocked && item.missed > 0))
         .sort((a, b) => dueKey(a.task, today).localeCompare(dueKey(b.task, today)) || (a.task.priority || 9) - (b.task.priority || 9));
 
       for (const { task, missed } of carryItems) {
