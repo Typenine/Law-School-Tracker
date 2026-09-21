@@ -8,6 +8,8 @@ import NotesStyles from './NotesStyles';
 import NotesTree, { notebookKey, sectionKey, semesterKey } from './NotesTree';
 import { useNotesActions } from './NotesActionsContext';
 import { sanitizeNoteHtml } from '@/lib/notes/htmlUtils';
+import { addDaysYmd, chicagoYmd, normalizeRuleBank, type RuleBankEntry, type RuleConfidence } from '@/lib/ruleBank';
+import { notifyToast } from '@/lib/toastBus';
 import {
   Notebook,
   Page,
@@ -31,6 +33,15 @@ type ImportForm = {
   sourceType: string;
   topics: string;
   file: File | null;
+};
+type RuleCaptureForm = {
+  course: string;
+  topic: string;
+  ruleText: string;
+  source: string;
+  exceptions: string;
+  example: string;
+  confidence: RuleConfidence;
 };
 
 const AUTOSAVE_MS = 900;
@@ -173,6 +184,8 @@ export default function NotesPage() {
   const [notebookModal, setNotebookModal] = useState<NotebookForm | null>(null);
   const [sectionModal, setSectionModal] = useState<SectionForm | null>(null);
   const [importModal, setImportModal] = useState<ImportForm | null>(null);
+  const [ruleCapture, setRuleCapture] = useState<RuleCaptureForm | null>(null);
+  const [savingRule, setSavingRule] = useState(false);
   const [savingModal, setSavingModal] = useState(false);
   const [showDetails, setShowDetails] = useState(false);
   const [railOpen, setRailOpen] = useState(true);
@@ -297,6 +310,72 @@ export default function NotesPage() {
     () => notebooks.find(item => item.id === notebookId) || null,
     [notebooks, notebookId],
   );
+
+  const ruleCourseOptions = useMemo(() => Array.from(new Set([
+    ...notebooks.map(item => item.course || item.name),
+    ...assignments.map(item => item.course || ''),
+  ].map(value => value.trim()).filter(Boolean))).sort((a, b) => a.localeCompare(b)), [notebooks, assignments]);
+
+  const openRuleCapture = useCallback((text: string) => {
+    const current = draftRef.current;
+    const linkedCourse = current?.taskId
+      ? assignments.find(item => item.id === current.taskId)?.course || ''
+      : '';
+    const course = current?.course || activeNotebook?.course || linkedCourse || activeNotebook?.name || '';
+    setRuleCapture({
+      course,
+      topic: current?.topics?.[0] || '',
+      ruleText: text.trim(),
+      source: current?.title ? `Notes: ${current.title}` : 'Notes',
+      exceptions: '',
+      example: '',
+      confidence: 3,
+    });
+  }, [activeNotebook, assignments]);
+
+  const saveRuleCapture = useCallback(async (event: FormEvent) => {
+    event.preventDefault();
+    if (!ruleCapture?.ruleText.trim() || !ruleCapture.topic.trim()) return;
+    setSavingRule(true);
+    try {
+      const settingsData = await api('/api/settings?keys=ruleBankV1');
+      const currentRules = normalizeRuleBank(settingsData?.settings?.ruleBankV1);
+      const duplicate = currentRules.find(rule =>
+        rule.course.trim().toLowerCase() === ruleCapture.course.trim().toLowerCase()
+        && rule.ruleText.trim().toLowerCase() === ruleCapture.ruleText.trim().toLowerCase()
+      );
+      if (duplicate) {
+        notifyToast({ kind: 'error', message: 'That rule is already in the Rule Bank.' });
+        return;
+      }
+      const now = new Date().toISOString();
+      const entry: RuleBankEntry = {
+        id: `rule-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`,
+        course: ruleCapture.course.trim(),
+        topic: ruleCapture.topic.trim(),
+        ruleText: ruleCapture.ruleText.trim(),
+        source: ruleCapture.source.trim() || null,
+        exceptions: ruleCapture.exceptions.trim() || null,
+        example: ruleCapture.example.trim() || null,
+        confidence: ruleCapture.confidence,
+        createdAt: now,
+        updatedAt: now,
+        nextReview: addDaysYmd(chicagoYmd(), 1),
+        reviewStep: 0,
+        reviewCount: 0,
+      };
+      await api('/api/settings', {
+        method: 'PATCH',
+        body: JSON.stringify({ ruleBankV1: [entry, ...currentRules] }),
+      });
+      setRuleCapture(null);
+      notifyToast({ kind: 'success', message: 'Added to the Rule Bank. First review is tomorrow.' });
+    } catch (err) {
+      notifyToast({ kind: 'error', message: err instanceof Error ? err.message : 'Unable to add the rule.' });
+    } finally {
+      setSavingRule(false);
+    }
+  }, [ruleCapture]);
   const notebookSections = useMemo(
     () => sections.filter(section => section.notebookId === notebookId),
     [sections, notebookId],
@@ -2019,6 +2098,7 @@ export default function NotesPage() {
                     }}
                     onSaveNow={() => void savePage(true)}
                     onUploadImage={uploadImage}
+                    onAddToRuleBank={openRuleCapture}
                   />
                 </>
               )}
@@ -2124,6 +2204,103 @@ export default function NotesPage() {
           </div>
         </div>
       </div>
+
+      {ruleCapture && (
+        <div className="nb-modal-scrim" onMouseDown={event => event.target === event.currentTarget && setRuleCapture(null)}>
+          <form className="nb-modal nb-modal-wide" onSubmit={saveRuleCapture}>
+            <div className="nb-modal-head">
+              <div>
+                <h3>Add selected text to Rule Bank</h3>
+                <p>The selected note text is prefilled as the rule. Edit it before saving if the wording needs cleanup.</p>
+              </div>
+              <button type="button" onClick={() => setRuleCapture(null)} aria-label="Close">×</button>
+            </div>
+            <div className="nb-field-grid">
+              <label className="nb-field">
+                <span>Course</span>
+                <input
+                  list="nb-rule-course-options"
+                  value={ruleCapture.course}
+                  onChange={event => setRuleCapture(current => current && { ...current, course: event.target.value })}
+                  placeholder="Evidence"
+                />
+                <datalist id="nb-rule-course-options">
+                  {ruleCourseOptions.map(course => <option key={course} value={course} />)}
+                </datalist>
+              </label>
+              <label className="nb-field">
+                <span>Topic</span>
+                <input
+                  required
+                  autoFocus
+                  value={ruleCapture.topic}
+                  onChange={event => setRuleCapture(current => current && { ...current, topic: event.target.value })}
+                  placeholder="FRE 407"
+                />
+              </label>
+            </div>
+            <label className="nb-field">
+              <span>Rule</span>
+              <textarea
+                required
+                rows={5}
+                value={ruleCapture.ruleText}
+                onChange={event => setRuleCapture(current => current && { ...current, ruleText: event.target.value })}
+              />
+            </label>
+            <div className="nb-field-grid">
+              <label className="nb-field">
+                <span>Source</span>
+                <input
+                  value={ruleCapture.source}
+                  onChange={event => setRuleCapture(current => current && { ...current, source: event.target.value })}
+                  placeholder="Notes: Subsequent Remedial Measures"
+                />
+              </label>
+              <label className="nb-field">
+                <span>Confidence</span>
+                <select
+                  value={ruleCapture.confidence}
+                  onChange={event => setRuleCapture(current => current && { ...current, confidence: Number(event.target.value) as RuleConfidence })}
+                >
+                  <option value={1}>1 · Weak</option>
+                  <option value={2}>2 · Shaky</option>
+                  <option value={3}>3 · Developing</option>
+                  <option value={4}>4 · Strong</option>
+                  <option value={5}>5 · Solid</option>
+                </select>
+              </label>
+            </div>
+            <label className="nb-field">
+              <span>Exceptions / limits</span>
+              <textarea
+                rows={2}
+                value={ruleCapture.exceptions}
+                onChange={event => setRuleCapture(current => current && { ...current, exceptions: event.target.value })}
+                placeholder="Optional"
+              />
+            </label>
+            <label className="nb-field">
+              <span>Example</span>
+              <textarea
+                rows={2}
+                value={ruleCapture.example}
+                onChange={event => setRuleCapture(current => current && { ...current, example: event.target.value })}
+                placeholder="Optional"
+              />
+            </label>
+            <div className="nb-modal-foot">
+              <span className="text-xs text-slate-500">The saved rule enters spaced review tomorrow.</span>
+              <div>
+                <button type="button" className="nb-secondary" onClick={() => setRuleCapture(null)}>Cancel</button>
+                <button type="submit" className="nb-primary" disabled={savingRule || !ruleCapture.topic.trim() || !ruleCapture.ruleText.trim()}>
+                  {savingRule ? 'Adding…' : 'Add to Rule Bank'}
+                </button>
+              </div>
+            </div>
+          </form>
+        </div>
+      )}
 
       {setAside && (
         <div className="nb-modal-scrim" onMouseDown={event => event.target === event.currentTarget && setSetAside(null)}>
