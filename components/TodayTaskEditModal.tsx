@@ -76,6 +76,8 @@ export default function TodayTaskEditModal({ task, courses, onClose, onSaved }: 
   if (!task) return null;
 
   async function save() {
+    if (!task) return;
+    const currentTask = task;
     const cleanTitle = title.trim();
     if (!cleanTitle) {
       setError("Title is required.");
@@ -85,7 +87,7 @@ export default function TodayTaskEditModal({ task, courses, onClose, onSaved }: 
     setSaving(true);
     setError("");
     try {
-      const initialRanges = normalizedRanges(taskPageRanges(task));
+      const initialRanges = normalizedRanges(taskPageRanges(currentTask));
       const nextRanges = normalizedRanges(pageRanges);
       const rangesChanged = initialRanges !== nextRanges;
 
@@ -127,7 +129,7 @@ export default function TodayTaskEditModal({ task, courses, onClose, onSaved }: 
         body.pagesRead = nextRanges ? pageCount : null;
       }
 
-      await apiFetch(`/api/tasks/${task.id}`, { method: "PATCH", body });
+      await apiFetch(`/api/tasks/${currentTask.id}`, { method: "PATCH", body });
       await onSaved();
       onClose();
     } catch (err: any) {
