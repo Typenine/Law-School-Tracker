@@ -6,7 +6,7 @@ import { apiFetch } from "@/lib/apiClient";
 import { notifyScheduleChanged } from "@/lib/scheduleBus";
 import { onTasksChanged } from "@/lib/taskBus";
 import { onSessionsChanged } from "@/lib/sessionsBus";
-import type { ScheduledBlock } from "@/lib/useSchedule";
+import { writeLocalSchedule, type ScheduledBlock } from "@/lib/useSchedule";
 
 const DEFAULT_AVAIL: Record<number, number> = { 0: 120, 1: 240, 2: 240, 3: 240, 4: 240, 5: 240, 6: 120 };
 
@@ -211,6 +211,7 @@ export default function AutoRebalanceManager() {
       if (before === after || after === lastFingerprint.current) return;
       lastFingerprint.current = after;
       await apiFetch("/api/schedule", { method: "PUT", body: { blocks: next } });
+      writeLocalSchedule(next);
       notifyScheduleChanged();
     } catch {
       // This is background maintenance. A failed pass should not interrupt the user.
