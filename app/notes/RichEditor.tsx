@@ -10,6 +10,8 @@ type Props = {
   onSaveNow: () => void;
   /** Uploads an image and returns its URL, or null if it could not be stored. */
   onUploadImage: (file: File) => Promise<string | null>;
+  /** Opens the Rule Bank capture flow with text selected inside the note. */
+  onAddToRuleBank?: (text: string) => void;
 };
 
 const HIGHLIGHTS = [
@@ -52,13 +54,14 @@ const SIZES = [
  * by the DOM. Re-rendering the markup on each change would reset the caret to
  * the top of the page on every character.
  */
-export default function RichEditor({ pageId, initialHtml, onChange, onSaveNow, onUploadImage }: Props) {
+export default function RichEditor({ pageId, initialHtml, onChange, onSaveNow, onUploadImage, onAddToRuleBank }: Props) {
   const editorRef = useRef<HTMLDivElement | null>(null);
   const [blockStyle, setBlockStyle] = useState('p');
   const [openMenu, setOpenMenu] = useState<'highlight' | 'color' | null>(null);
   const [linkOpen, setLinkOpen] = useState(false);
   const [linkUrl, setLinkUrl] = useState('https://');
   const savedRangeRef = useRef<Range | null>(null);
+  const [ruleSelection, setRuleSelection] = useState<{ text: string; top: number; left: number } | null>(null);
 
   useEffect(() => {
     const editor = editorRef.current;
@@ -95,6 +98,36 @@ export default function RichEditor({ pageId, initialHtml, onChange, onSaveNow, o
     selection.removeAllRanges();
     selection.addRange(range);
   }, []);
+
+  const captureRuleSelection = useCallback(() => {
+    if (!onAddToRuleBank) return;
+    const editor = editorRef.current;
+    const selection = window.getSelection();
+    if (!editor || !selection || !selection.rangeCount || selection.isCollapsed) {
+      setRuleSelection(null);
+      return;
+    }
+    const range = selection.getRangeAt(0);
+    if (!editor.contains(range.commonAncestorContainer)) {
+      setRuleSelection(null);
+      return;
+    }
+    const text = selection.toString().replace(/\s+\n/g, '\n').trim();
+    if (text.length < 2) {
+      setRuleSelection(null);
+      return;
+    }
+    savedRangeRef.current = range.cloneRange();
+    const rect = range.getBoundingClientRect();
+    if (!rect.width && !rect.height) {
+      setRuleSelection(null);
+      return;
+    }
+    const half = 92;
+    const left = Math.min(window.innerWidth - half - 8, Math.max(half + 8, rect.left + rect.width / 2));
+    const top = Math.max(8, rect.top - 42);
+    setRuleSelection({ text, top, left });
+  }, [onAddToRuleBank]);
 
   const emit = useCallback(() => {
     const editor = editorRef.current;
@@ -573,11 +606,29 @@ export default function RichEditor({ pageId, initialHtml, onChange, onSaveNow, o
         onInput={emit}
         onBlur={emit}
         onClick={handleClick}
+        onMouseUp={() => window.setTimeout(captureRuleSelection, 0)}
+        onKeyUp={() => window.setTimeout(captureRuleSelection, 0)}
+        onScroll={() => setRuleSelection(null)}
         onKeyDown={handleKeyDown}
         onPaste={handlePaste}
         onDrop={handleDrop}
         onDragOver={event => { if (event.dataTransfer.types.includes('Files')) event.preventDefault(); }}
       />
+      {ruleSelection && onAddToRuleBank ? (
+        <button
+          type="button"
+          className="nb-rule-selection"
+          style={{ top: ruleSelection.top, left: ruleSelection.left }}
+          onMouseDown={event => event.preventDefault()}
+          onClick={() => {
+            const text = ruleSelection.text;
+            setRuleSelection(null);
+            onAddToRuleBank(text);
+          }}
+        >
+          § Add to Rule Bank
+        </button>
+      ) : null}
     </div>
   );
 }
