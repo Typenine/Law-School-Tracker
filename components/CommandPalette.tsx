@@ -4,6 +4,7 @@ import { useEffect, useMemo, useState } from 'react';
 import { usePathname } from 'next/navigation';
 import { onTasksChanged } from '@/lib/taskBus';
 import { useSemester } from '@/lib/useSemester';
+import { normalizeRuleBank, type RuleBankEntry } from '@/lib/ruleBank';
 
 export const COMMAND_PALETTE_EVENT = 'app:command-palette';
 export function openCommandPalette(): void {
@@ -25,6 +26,7 @@ export default function CommandPalette() {
   const [tasks, setTasks] = useState<TaskResult[]>([]);
   const [courses, setCourses] = useState<CourseResult[]>([]);
   const [notes, setNotes] = useState<NoteResult[]>([]);
+  const [rules, setRules] = useState<RuleBankEntry[]>([]);
   const [notesLoading, setNotesLoading] = useState(false);
   const { currentTerm, showAllTerms } = useSemester();
   const pathname = usePathname() || '/';
@@ -43,12 +45,14 @@ export default function CommandPalette() {
 
   async function refreshCore() {
     try {
-      const [taskRes, courseRes] = await Promise.all([
+      const [taskRes, courseRes, settingsRes] = await Promise.all([
         fetch('/api/tasks/workspace?allTerms=true', { cache: 'no-store' }).then(r => r.json()),
         fetch('/api/courses', { cache: 'no-store' }).then(r => r.json()),
+        fetch('/api/settings?keys=ruleBankV1', { cache: 'no-store' }).then(r => r.json()),
       ]);
       setTasks(Array.isArray(taskRes?.tasks) ? taskRes.tasks : []);
       setCourses(Array.isArray(courseRes?.courses) ? courseRes.courses : []);
+      setRules(normalizeRuleBank(settingsRes?.settings?.ruleBankV1));
     } catch {}
   }
 
@@ -86,6 +90,12 @@ export default function CommandPalette() {
     return courses.filter(course => norm(course.title).includes(needle) || norm(course.code || '').includes(needle)).slice(0, 8);
   }, [courses, q]);
 
+  const ruleResults = useMemo(() => {
+    const needle = norm(q.trim());
+    if (!needle) return [];
+    return rules.filter(rule => [rule.topic, rule.course, rule.ruleText, rule.source || ''].some(value => norm(value).includes(needle))).slice(0, 8);
+  }, [rules, q]);
+
   function openTask(id: string) {
     setOpen(false);
     const url = new URL(window.location.href);
@@ -94,6 +104,7 @@ export default function CommandPalette() {
   }
   function openNote(id: string) { setOpen(false); window.location.href = `/notes?pageId=${encodeURIComponent(id)}`; }
   function openCourse(id: string) { setOpen(false); window.location.href = `/courses/${encodeURIComponent(id)}`; }
+  function openRule(rule: RuleBankEntry) { setOpen(false); window.location.href = `/rules?q=${encodeURIComponent(rule.topic)}`; }
 
   if (!open) return null;
   return <div className="fixed inset-0 z-[1500] bg-black/55" onClick={() => setOpen(false)}>
@@ -109,7 +120,9 @@ export default function CommandPalette() {
 
         {q.trim() && (notes.length || notesLoading) ? <Group title={notesLoading ? 'Notes · searching…' : 'Notes & case briefs'}>{notes.map(note => <button key={note.id} type="button" onClick={() => openNote(note.id)} className="w-full text-left rounded px-2 py-2 hover:bg-white/5"><div className="text-sm truncate">{note.title}</div><div className="text-xs text-slate-500 truncate">{note.course || note.notebookName || 'Notes'} · {note.section || note.sourceType || 'Page'}</div></button>)}</Group> : null}
 
-        {!taskResults.length && !courseResults.length && !notes.length && !notesLoading ? <div className="p-4 text-sm text-slate-400">No matching tasks, courses, or notes.</div> : null}
+        {ruleResults.length ? <Group title="Rule Bank">{ruleResults.map(rule => <button key={rule.id} type="button" onClick={() => openRule(rule)} className="w-full text-left rounded px-2 py-2 hover:bg-white/5"><div className="text-sm truncate">{rule.topic}</div><div className="text-xs text-slate-500 truncate">{rule.course || 'Unassigned'} · {rule.ruleText}</div></button>)}</Group> : null}
+
+        {!taskResults.length && !courseResults.length && !notes.length && !ruleResults.length && !notesLoading ? <div className="p-4 text-sm text-slate-400">No matching tasks, courses, notes, or rules.</div> : null}
       </div>
       <div className="mt-2 border-t border-white/10 pt-2 text-[10px] text-slate-600">Current page: {pathname} · Esc closes</div>
     </div>
