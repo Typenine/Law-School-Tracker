@@ -4,6 +4,7 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import type { CalendarEvent, Course, StudySession, Task } from "@/lib/types";
 import { apiFetch } from "@/lib/apiClient";
 import LogModal, { type LogSubmitData } from "@/components/LogModal";
+import TodayTaskEditModal from "@/components/TodayTaskEditModal";
 import { countPages, parsePageRanges } from "@/lib/pageRanges";
 import { notifyTasksChanged, onTasksChanged } from "@/lib/taskBus";
 import { notifySessionsChanged } from "@/lib/sessionsBus";
@@ -27,10 +28,12 @@ type ScheduledBlock = {
 type TimerState = { accMs: number; running: boolean; startedAt?: number };
 type PlannedTask = { task: Task; minutes: number };
 type SettingsMap = Record<string, any>;
+type TodayFocus = { dateKey: string; taskId: string };
 
 const LS_TODAY = "todayPlanV1";
 const LS_SCHEDULE = "weekScheduleV1";
 const LS_TIMERS = "taskTimersV1";
+const LS_FOCUS = "todayFocusV1";
 
 function chicagoYmd(value: Date | string = new Date()): string {
   const date = typeof value === "string" ? new Date(value) : value;
@@ -186,10 +189,19 @@ export default function TodayPage() {
   const [loading, setLoading] = useState(true);
   const [logTask, setLogTask] = useState<Task | null>(null);
   const [logMode, setLogMode] = useState<"partial" | "finish">("partial");
+  const [selectedTaskId, setSelectedTaskId] = useState<string | null>(null);
+  const [editTask, setEditTask] = useState<Task | null>(null);
 
   const today = chicagoYmd();
   const dayParts = chicagoDateParts();
   const dateHeading = `${dayParts.weekday}, ${dayParts.month} ${dayParts.day}`;
+
+  const persistFocus = useCallback((taskId: string) => {
+    setSelectedTaskId(taskId);
+    if (typeof window === "undefined") return;
+    const focus: TodayFocus = { dateKey: today, taskId };
+    window.localStorage.setItem(LS_FOCUS, JSON.stringify(focus));
+  }, [today]);
 
   const refresh = useCallback(async () => {
     setLoading(true);
@@ -223,6 +235,8 @@ export default function TodayPage() {
   useEffect(() => {
     setTodayPlan(readLocalJson<TodayPlan | null>(LS_TODAY, null));
     setSchedule(readLocalJson<ScheduledBlock[]>(LS_SCHEDULE, []));
+    const savedFocus = readLocalJson<TodayFocus | null>(LS_FOCUS, null);
+    if (savedFocus?.dateKey === today && savedFocus.taskId) setSelectedTaskId(savedFocus.taskId);
     void refresh();
     // Reflect task and schedule edits made elsewhere in the app straight away.
     const offTasks = onTasksChanged(() => { void refresh(); });
@@ -230,7 +244,7 @@ export default function TodayPage() {
       setSchedule(readLocalJson<ScheduledBlock[]>(LS_SCHEDULE, []));
     });
     return () => { offTasks(); offSchedule(); };
-  }, [refresh]);
+  }, [refresh, today]);
 
   useEffect(() => {
     const id = window.setInterval(() => setTimerTick(value => value + 1), 1000);
@@ -294,8 +308,21 @@ export default function TodayPage() {
   }, [schedule, tasks, today, todayPlan]);
 
   const runningTaskId = useMemo(() => Object.entries(timers).find(([, timer]) => timer?.running)?.[0], [timers]);
-  const upNext = useMemo(() => plannedTasks.find(item => item.task.id === runningTaskId) || plannedTasks[0] || null, [plannedTasks, runningTaskId]);
+  const runningPlannedTaskId = useMemo(() => runningTaskId && plannedTasks.some(item => item.task.id === runningTaskId) ? runningTaskId : null, [plannedTasks, runningTaskId]);
+  const upNext = useMemo(() => plannedTasks.find(item => item.task.id === selectedTaskId) || plannedTasks[0] || null, [plannedTasks, selectedTaskId]);
   const thenToday = useMemo(() => plannedTasks.filter(item => item.task.id !== upNext?.task.id).slice(0, 5), [plannedTasks, upNext]);
+  const upNextIndex = upNext ? plannedTasks.findIndex(item => item.task.id === upNext.task.id) : -1;
+
+  useEffect(() => {
+    if (loading || !plannedTasks.length) return;
+    if (runningPlannedTaskId && runningPlannedTaskId !== selectedTaskId) {
+      persistFocus(runningPlannedTaskId);
+      return;
+    }
+    if (!selectedTaskId || !plannedTasks.some(item => item.task.id === selectedTaskId)) {
+      persistFocus(plannedTasks[0].task.id);
+    }
+  }, [loading, plannedTasks, runningPlannedTaskId, selectedTaskId, persistFocus]);
 
   const loggedToday = useMemo(() => sessions
     .filter(session => chicagoYmd(session.when || session.createdAt) === today)
@@ -396,6 +423,13 @@ export default function TodayPage() {
     return () => setPageSubtitle(null);
   }, [dateHeading, leftToday, plannedToday]);
 
+  function cycleUpNext(direction: -1 | 1) {
+    if (plannedTasks.length < 2 || runningPlannedTaskId) return;
+    const currentIndex = upNextIndex >= 0 ? upNextIndex : 0;
+    const nextIndex = (currentIndex + direction + plannedTasks.length) % plannedTasks.length;
+    persistFocus(plannedTasks[nextIndex].task.id);
+  }
+
   function elapsedMs(taskId: string): number {
     void timerTick;
     const timer = timers[taskId];
@@ -404,6 +438,7 @@ export default function TodayPage() {
   }
 
   function toggleTimer(taskId: string) {
+    if (!timers[taskId]?.running) persistFocus(taskId);
     setTimers(current => {
       const timer = current[taskId] || { accMs: 0, running: false };
       if (timer.running) {
@@ -520,10 +555,10 @@ export default function TodayPage() {
   return (
     <main className="today-dashboard">
       <style jsx global>{`
-        .today-dashboard{max-width:1140px!important}.today-grid{display:grid;grid-template-columns:minmax(0,1.85fr) minmax(300px,.95fr);gap:34px}.today-main,.today-rail{min-width:0}.dash-card{border:1px solid #203451;border-radius:13px;background:#0e1c2f}.dash-eyebrow{color:#7695c3;font:500 10px/1.2 'IBM Plex Mono',monospace;letter-spacing:.13em;text-transform:uppercase}.up-card{position:relative;min-height:330px;padding:31px 30px 27px;background:#102342;overflow:hidden}.up-card:before{content:'';position:absolute;inset:0 auto 0 0;width:5px;background:#4e9ee8}.up-line{display:flex;align-items:center;gap:10px;color:#8db3e4;font-size:13px}.up-line strong{color:#ffcc00;font:500 10px/1 'IBM Plex Mono',monospace;letter-spacing:.13em}.up-title{margin:17px 0 24px;font:400 34px/1.15 'Newsreader',Georgia,serif;color:#fff}.up-facts{display:grid;grid-template-columns:1fr 1.25fr 1.1fr;margin-bottom:28px}.up-fact{padding-right:26px}.up-fact+.up-fact{padding-left:27px;border-left:1px solid #29405f}.up-fact label{display:block;margin-bottom:8px;color:#7593bd!important;font:500 10px/1.2 'IBM Plex Mono',monospace!important;letter-spacing:.13em;text-transform:uppercase}.up-fact div{color:#f2f6fb;font-size:17px}.up-actions{display:flex;align-items:center;gap:14px}.dash-primary,.dash-secondary,.row-start,.row-finish{border-radius:8px;font-weight:500;transition:.12s}.dash-primary{min-height:50px;padding:0 26px;border:1px solid #ffcc00;background:#ffcc00;color:#06152b}.dash-primary:hover{background:#ffdb4d}.dash-secondary{min-height:45px;padding:0 19px;border:1px solid #2c4a70;background:transparent;color:#dce8f6}.dash-secondary:hover,.row-start:hover{background:#162d4d}.dash-finish{border-color:#2f6f58;color:#9be3bd;background:#0e2a20}.dash-finish:hover{background:#173b2d}.timer-readout{min-width:146px;color:#fff;font:500 34px/1 'IBM Plex Mono',monospace}.up-progress{height:4px;margin-top:24px;border-radius:4px;background:#223856;overflow:hidden}.up-progress span{display:block;height:100%;background:#54a9ee}.up-progress-copy{margin-top:9px;color:#7697c4;font-size:12px}.section-heading{display:flex;align-items:center;justify-content:space-between;margin:25px 0 13px}.section-heading h2{margin:0;color:#fff;font:600 17px/1.2 'IBM Plex Sans',sans-serif!important}.section-heading span{color:#7797c2;font:400 12px/1 'IBM Plex Mono',monospace}.task-stack{overflow:hidden}.dash-task{display:grid;grid-template-columns:60px 4px minmax(0,1fr) 74px 64px;align-items:center;gap:14px;min-height:82px;padding:13px 20px;border-bottom:1px solid #203451}.dash-task:last-child{border-bottom:0}.row-finish{height:34px;border:1px solid #2f6f58;background:#0e2a20;color:#9be3bd;font-size:12px}.row-finish:hover{background:#173b2d}.course-stripe{width:4px;height:34px;border-radius:3px}.task-title{color:#f3f7fb;font-size:15px;font-weight:500;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}.task-meta{margin-top:4px;color:#78a4d8;font-size:12px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}.task-duration{color:#d9e5f3;font:400 13px/1 'IBM Plex Mono',monospace;text-align:right}.row-start{height:34px;border:1px solid #2c4a70;background:transparent;color:#cfe0f5}.summary-grid{display:grid;grid-template-columns:repeat(3,1fr);gap:17px;margin-top:26px}.summary-card{min-height:126px;padding:22px 20px}.summary-value{margin-top:11px;color:#f6f9fd;font:500 29px/1 'IBM Plex Mono',monospace}.summary-value.green{color:#55a77f}.summary-copy{margin-top:10px;color:#83a6d2;font-size:12px}.rail-card{padding:24px 20px}.rail-card+.rail-card{margin-top:24px}.class-row{display:grid;grid-template-columns:48px minmax(0,1fr);gap:0;padding:16px 0 0}.class-time{color:#c7dcf5;font:400 12px/1.4 'IBM Plex Mono',monospace}.class-name{color:#fff;font-size:15px;font-weight:500}.class-location{margin-top:3px;color:#769bd0;font-size:12px}.rail-head{display:flex;align-items:center;justify-content:space-between}.rail-links{display:flex;gap:10px}.rail-link{color:#4fa3ef;font-size:12px;text-decoration:none}.due-row{display:grid;grid-template-columns:48px minmax(0,1fr);gap:10px;padding-top:17px}.due-day{color:#90b0d6;font:400 11px/1.4 'IBM Plex Mono',monospace}.due-title{color:#f4f7fb;font-size:14px;font-weight:500;line-height:1.35}.due-course{margin-top:4px;color:#7397c7;font-size:12px}.count-row{display:flex;align-items:center;justify-content:space-between;margin-top:17px;color:#dce8f7}.count-row strong{font:500 14px/1 'IBM Plex Mono',monospace}.count-row strong.gold{color:#ffdd00}.empty-dash{padding:35px 24px;color:#7e9aba;text-align:center}.loading-dash{display:grid;place-items:center;min-height:420px;color:#7e9aba}.today-dashboard .fixed.inset-0 label{letter-spacing:0!important;text-transform:none!important;font-size:12px!important}.today-dashboard .fixed.inset-0 h2{font-family:'IBM Plex Sans',sans-serif!important}
+        .today-dashboard{max-width:1140px!important}.today-grid{display:grid;grid-template-columns:minmax(0,1.85fr) minmax(300px,.95fr);gap:34px}.today-main,.today-rail{min-width:0}.dash-card{border:1px solid #203451;border-radius:13px;background:#0e1c2f}.dash-eyebrow{color:#7695c3;font:500 10px/1.2 'IBM Plex Mono',monospace;letter-spacing:.13em;text-transform:uppercase}.up-card{position:relative;min-height:330px;padding:31px 30px 27px;background:#102342;overflow:hidden}.up-card:before{content:'';position:absolute;inset:0 auto 0 0;width:5px;background:#4e9ee8}.up-line{display:flex;align-items:center;justify-content:space-between;gap:14px;color:#8db3e4;font-size:13px}.up-line-copy{display:flex;align-items:center;gap:10px;min-width:0}.up-line strong{color:#ffcc00;font:500 10px/1 'IBM Plex Mono',monospace;letter-spacing:.13em}.up-tools{display:flex;align-items:center;gap:6px;flex:0 0 auto}.up-tool,.up-edit,.row-edit{border:1px solid #2c4a70;background:transparent;color:#b9d3ee;border-radius:6px;font:500 11px/1 'IBM Plex Sans',sans-serif}.up-tool{width:28px;height:26px;font-size:18px}.up-tool:disabled{opacity:.32;cursor:not-allowed}.up-edit{height:26px;padding:0 9px}.up-tool:not(:disabled):hover,.up-edit:hover,.row-edit:hover{background:#162d4d}.up-position{min-width:34px;color:#7697c4;text-align:center;font:400 10px/1 'IBM Plex Mono',monospace}.up-title{margin:17px 0 24px;font:400 34px/1.15 'Newsreader',Georgia,serif;color:#fff}.up-facts{display:grid;grid-template-columns:1fr 1.25fr 1.1fr;margin-bottom:28px}.up-fact{padding-right:26px}.up-fact+.up-fact{padding-left:27px;border-left:1px solid #29405f}.up-fact label{display:block;margin-bottom:8px;color:#7593bd!important;font:500 10px/1.2 'IBM Plex Mono',monospace!important;letter-spacing:.13em;text-transform:uppercase}.up-fact div{color:#f2f6fb;font-size:17px}.up-actions{display:flex;align-items:center;gap:14px}.dash-primary,.dash-secondary,.row-start,.row-finish{border-radius:8px;font-weight:500;transition:.12s}.dash-primary{min-height:50px;padding:0 26px;border:1px solid #ffcc00;background:#ffcc00;color:#06152b}.dash-primary:hover{background:#ffdb4d}.dash-secondary{min-height:45px;padding:0 19px;border:1px solid #2c4a70;background:transparent;color:#dce8f6}.dash-secondary:hover,.row-start:hover{background:#162d4d}.dash-finish{border-color:#2f6f58;color:#9be3bd;background:#0e2a20}.dash-finish:hover{background:#173b2d}.timer-readout{min-width:146px;color:#fff;font:500 34px/1 'IBM Plex Mono',monospace}.up-progress{height:4px;margin-top:24px;border-radius:4px;background:#223856;overflow:hidden}.up-progress span{display:block;height:100%;background:#54a9ee}.up-progress-copy{margin-top:9px;color:#7697c4;font-size:12px}.section-heading{display:flex;align-items:center;justify-content:space-between;margin:25px 0 13px}.section-heading h2{margin:0;color:#fff;font:600 17px/1.2 'IBM Plex Sans',sans-serif!important}.section-heading span{color:#7797c2;font:400 12px/1 'IBM Plex Mono',monospace}.task-stack{overflow:hidden}.dash-task{display:grid;grid-template-columns:60px 4px minmax(0,1fr) 74px 64px;align-items:center;gap:14px;min-height:82px;padding:13px 20px;border-bottom:1px solid #203451}.dash-task:last-child{border-bottom:0}.row-finish{height:34px;border:1px solid #2f6f58;background:#0e2a20;color:#9be3bd;font-size:12px}.row-finish:hover{background:#173b2d}.course-stripe{width:4px;height:34px;border-radius:3px}.task-title{color:#f3f7fb;font-size:15px;font-weight:500;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}.task-meta-wrap{display:flex;align-items:center;gap:10px;min-width:0;margin-top:4px}.task-meta{min-width:0;flex:1;color:#78a4d8;font-size:12px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}.row-edit{height:24px;padding:0 7px;border-color:#29405f;color:#8db3e4}.task-duration{color:#d9e5f3;font:400 13px/1 'IBM Plex Mono',monospace;text-align:right}.row-start{height:34px;border:1px solid #2c4a70;background:transparent;color:#cfe0f5}.summary-grid{display:grid;grid-template-columns:repeat(3,1fr);gap:17px;margin-top:26px}.summary-card{min-height:126px;padding:22px 20px}.summary-value{margin-top:11px;color:#f6f9fd;font:500 29px/1 'IBM Plex Mono',monospace}.summary-value.green{color:#55a77f}.summary-copy{margin-top:10px;color:#83a6d2;font-size:12px}.rail-card{padding:24px 20px}.rail-card+.rail-card{margin-top:24px}.class-row{display:grid;grid-template-columns:48px minmax(0,1fr);gap:0;padding:16px 0 0}.class-time{color:#c7dcf5;font:400 12px/1.4 'IBM Plex Mono',monospace}.class-name{color:#fff;font-size:15px;font-weight:500}.class-location{margin-top:3px;color:#769bd0;font-size:12px}.rail-head{display:flex;align-items:center;justify-content:space-between}.rail-links{display:flex;gap:10px}.rail-link{color:#4fa3ef;font-size:12px;text-decoration:none}.due-row{display:grid;grid-template-columns:48px minmax(0,1fr);gap:10px;padding-top:17px}.due-day{color:#90b0d6;font:400 11px/1.4 'IBM Plex Mono',monospace}.due-title{color:#f4f7fb;font-size:14px;font-weight:500;line-height:1.35}.due-course{margin-top:4px;color:#7397c7;font-size:12px}.count-row{display:flex;align-items:center;justify-content:space-between;margin-top:17px;color:#dce8f7}.count-row strong{font:500 14px/1 'IBM Plex Mono',monospace}.count-row strong.gold{color:#ffdd00}.empty-dash{padding:35px 24px;color:#7e9aba;text-align:center}.loading-dash{display:grid;place-items:center;min-height:420px;color:#7e9aba}.today-dashboard .fixed.inset-0 label{letter-spacing:0!important;text-transform:none!important;font-size:12px!important}.today-dashboard .fixed.inset-0 h2{font-family:'IBM Plex Sans',sans-serif!important}
         @media(max-width:1180px){.today-grid{grid-template-columns:minmax(0,1fr) 300px;gap:22px}.up-title{font-size:30px}.up-actions{flex-wrap:wrap}.timer-readout{min-width:120px}.summary-card{padding-inline:16px}}
         @media(max-width:960px){.today-grid{grid-template-columns:1fr}.today-rail{display:grid;grid-template-columns:repeat(3,1fr);gap:14px}.rail-card+.rail-card{margin-top:0}.summary-grid{margin-bottom:4px}}
-        @media(max-width:760px){.today-rail{grid-template-columns:1fr}.up-card{padding:25px 21px}.up-title{font-size:27px}.up-facts{grid-template-columns:1fr;gap:16px}.up-fact+.up-fact{padding-left:0;border-left:0}.up-actions{align-items:stretch}.timer-readout{order:5;width:100%;padding-top:5px}.dash-task{grid-template-columns:56px 4px minmax(0,1fr) 56px}.row-start{display:none}.summary-grid{grid-template-columns:1fr}.task-duration{font-size:12px}}
+        @media(max-width:760px){.today-rail{grid-template-columns:1fr}.up-card{padding:25px 21px}.up-line{align-items:flex-start}.up-line-copy{flex-wrap:wrap}.up-tools{gap:4px}.up-title{font-size:27px}.up-facts{grid-template-columns:1fr;gap:16px}.up-fact+.up-fact{padding-left:0;border-left:0}.up-actions{align-items:stretch}.timer-readout{order:5;width:100%;padding-top:5px}.dash-task{grid-template-columns:56px 4px minmax(0,1fr) 56px}.row-start{display:none}.summary-grid{grid-template-columns:1fr}.task-duration{font-size:12px}}
       `}</style>
 
       {loading ? <div className="loading-dash">Loading today’s plan…</div> : (
@@ -531,7 +566,15 @@ export default function TodayPage() {
           <section className="today-main">
             {upTask && upNext ? (
               <article className="dash-card up-card">
-                <div className="up-line"><strong>UP NEXT</strong><span>•</span><span>{upTask.course || "Unassigned"} · {activityLabel(upTask)}</span></div>
+                <div className="up-line">
+                  <div className="up-line-copy"><strong>UP NEXT</strong><span>•</span><span>{upTask.course || "Unassigned"} · {activityLabel(upTask)}</span></div>
+                  <div className="up-tools">
+                    <button className="up-tool" onClick={() => cycleUpNext(-1)} disabled={plannedTasks.length < 2 || !!runningPlannedTaskId} aria-label="Previous task" title={runningPlannedTaskId ? "Pause the running task to change Up Next" : "Previous task"}>‹</button>
+                    <span className="up-position">{upNextIndex + 1}/{plannedTasks.length}</span>
+                    <button className="up-tool" onClick={() => cycleUpNext(1)} disabled={plannedTasks.length < 2 || !!runningPlannedTaskId} aria-label="Next task" title={runningPlannedTaskId ? "Pause the running task to change Up Next" : "Next task"}>›</button>
+                    <button className="up-edit" onClick={() => setEditTask(upTask)}>Edit</button>
+                  </div>
+                </div>
                 <h2 className="up-title">{upTask.title}</h2>
                 <div className="up-facts">
                   <div className="up-fact"><label>Remaining</label><div>{remainingPages ? `${remainingPages} pages · est. ${minutesLabel(Math.max(1, remainingPages * effectiveMpp))}` : `est. ${minutesLabel(upNext.minutes)}`}</div></div>
@@ -559,7 +602,7 @@ export default function TodayPage() {
                 return <div className="dash-task" key={task.id}>
                   <button className="row-finish" aria-label={`Finish ${task.title}`} onClick={() => openLog(task, "finish")}>Finish</button>
                   <span className="course-stripe" style={{ background: color }} />
-                  <div><div className="task-title">{task.title}</div><div className="task-meta">{task.course || "Unassigned"} · {activityLabel(task)} · {due}</div></div>
+                  <div><div className="task-title">{task.title}</div><div className="task-meta-wrap"><div className="task-meta">{task.course || "Unassigned"} · {activityLabel(task)} · {due}</div><button className="row-edit" onClick={() => setEditTask(task)}>Edit</button></div></div>
                   <div className="task-duration">{minutesLabel(minutes)}</div>
                   <button className="row-start" onClick={() => toggleTimer(task.id)}>{timers[task.id]?.running ? "Pause" : "Start"}</button>
                 </div>;
@@ -592,6 +635,13 @@ export default function TodayPage() {
           </aside>
         </div>
       )}
+
+      <TodayTaskEditModal
+        task={editTask}
+        courses={courses}
+        onClose={() => setEditTask(null)}
+        onSaved={async () => { await refresh(); }}
+      />
 
       <LogModal
         isOpen={!!logTask}
