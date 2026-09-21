@@ -1,7 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useRef } from "react";
-import type { StudySession, Task } from "@/lib/types";
+import type { Task } from "@/lib/types";
 import { apiFetch } from "@/lib/apiClient";
 import { notifyScheduleChanged } from "@/lib/scheduleBus";
 import { onTasksChanged } from "@/lib/taskBus";
@@ -100,10 +100,9 @@ export default function AutoRebalanceManager() {
     if (running.current || document.visibilityState === "hidden") return;
     running.current = true;
     try {
-      const [settingsData, taskData, sessionData, scheduleData] = await Promise.all([
+      const [settingsData, taskData, scheduleData] = await Promise.all([
         apiFetch<{ settings: Record<string, any> }>("/api/settings?keys=autoRebalanceEnabled,availabilityTemplateV1,availabilityWindowsV1,availabilityBreaksV1"),
         apiFetch<{ tasks: Task[] }>("/api/tasks?allTerms=true"),
-        apiFetch<{ sessions: StudySession[] }>("/api/sessions"),
         apiFetch<{ blocks: ScheduledBlock[] }>("/api/schedule"),
       ]);
       const settings = settingsData?.settings || {};
@@ -111,14 +110,8 @@ export default function AutoRebalanceManager() {
 
       const today = chicagoYmd();
       const tasks = Array.isArray(taskData?.tasks) ? taskData.tasks : [];
-      const sessions = Array.isArray(sessionData?.sessions) ? sessionData.sessions : [];
       const original = Array.isArray(scheduleData?.blocks) ? scheduleData.blocks : [];
       const taskMap = new Map(tasks.map(task => [String(task.id), task]));
-      const logged = new Map<string, number>();
-      for (const session of sessions) {
-        if (!session.taskId) continue;
-        logged.set(String(session.taskId), (logged.get(String(session.taskId)) || 0) + Math.max(0, Number(session.minutes) || 0));
-      }
 
       const carry = new Map<string, number>();
       let next: ScheduledBlock[] = [];
@@ -136,7 +129,7 @@ export default function AutoRebalanceManager() {
       // the task's remaining estimate. Trim from the latest blocks first.
       for (const task of tasks) {
         if (task.status === "done" || !Number(task.estimatedMinutes)) continue;
-        const remaining = Math.max(0, Math.round(Number(task.estimatedMinutes) - (logged.get(String(task.id)) || 0)));
+        const remaining = Math.max(0, Math.round(Number(task.estimatedMinutes)));
         const indices = next
           .map((block, index) => ({ block, index }))
           .filter(item => String(item.block.taskId) === String(task.id))
@@ -165,7 +158,7 @@ export default function AutoRebalanceManager() {
       for (const { task, missed } of carryItems) {
         const futurePlanned = next.filter(block => String(block.taskId) === String(task.id)).reduce((sum, block) => sum + block.plannedMinutes, 0);
         const estimate = Math.max(0, Number(task.estimatedMinutes) || 0);
-        const remainingEstimate = estimate > 0 ? Math.max(0, estimate - (logged.get(String(task.id)) || 0)) : missed + futurePlanned;
+        const remainingEstimate = estimate > 0 ? estimate : missed + futurePlanned;
         let amount = Math.min(missed, Math.max(0, remainingEstimate - futurePlanned));
         if (amount <= 0) continue;
 
