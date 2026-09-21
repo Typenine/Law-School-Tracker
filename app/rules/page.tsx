@@ -78,6 +78,8 @@ export default function RulesPage() {
       setReviewMode(params.get("review") === "1");
       const course = params.get("course");
       if (course) setCourseFilter(course);
+      const query = params.get("q");
+      if (query) setSearch(query);
     }
     return () => { cancelled = true; };
   }, []);
