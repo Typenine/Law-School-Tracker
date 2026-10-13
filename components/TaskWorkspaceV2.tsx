@@ -129,6 +129,7 @@ export default function TaskWorkspaceV2() {
   const [textFilter, setTextFilter] = useState('');
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [activeId, setActiveId] = useState<string | null>(null);
+  const [justSaved, setJustSaved] = useState<Task | null>(null);
   const [drawerTab, setDrawerTab] = useState<'overview'|'progress'|'sessions'|'notes'|'schedule'|'details'>('overview');
   const [multiAdd, setMultiAdd] = useState(false);
   const [trashOpen, setTrashOpen] = useState(false);
@@ -165,7 +166,8 @@ export default function TaskWorkspaceV2() {
   useEffect(() => { void refresh(); }, []);
 
   const tasks = data?.tasks || [];
-  const activeTask = activeId ? tasks.find(task => task.id === activeId) || null : null;
+  const selectedTask = activeId ? tasks.find(task => task.id === activeId) || null : null;
+  const activeTask = selectedTask && justSaved?.id === selectedTask.id ? ({ ...selectedTask, ...justSaved } as WorkspaceTask) : selectedTask;
 
   useEffect(() => {
     if (!activeTask) { setEdit(null); return; }
@@ -197,6 +199,7 @@ export default function TaskWorkspaceV2() {
   }
 
   function openTask(task: WorkspaceTask) {
+    setJustSaved(null);
     setActiveId(task.id);
     setDrawerTab('overview');
     setNewChecklist('');
@@ -277,6 +280,7 @@ export default function TaskWorkspaceV2() {
       const response = await apiFetch<{ task: Task }>(`/api/tasks/${activeTask.id}`, { method: 'PATCH', body });
       const saved = response.task;
       if (!saved) throw new Error('The server did not return the saved task.');
+      setJustSaved(saved);
       setData(prev => prev ? {
         ...prev,
         tasks: prev.tasks.map(task => task.id === saved.id ? ({ ...task, ...saved, id: task.id } as WorkspaceTask) : task),
