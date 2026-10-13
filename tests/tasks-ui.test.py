@@ -105,7 +105,7 @@ with sync_playwright() as p:
     dialog.get_by_role("button", name="Log partial progress", exact=True).click()
     # Both overlays are modal; address the frontmost log overlay directly
     # rather than relying on accessibility filtering of sibling aria-modal nodes.
-    log_dialog = page.locator('[role="dialog"]').filter(has_text="Log Partial Progress")
+    log_dialog = page.locator('[role="dialog"]').filter(has=page.get_by_role("heading", name="Log Partial Progress", exact=True))
     try:
         expect(log_dialog).to_be_visible(timeout=10000)
     except AssertionError:
