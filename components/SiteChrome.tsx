@@ -16,6 +16,8 @@ import TaskContextStrip from '@/components/TaskContextStrip';
 import WeeklyReviewSummary from '@/components/WeeklyReviewSummary';
 
 type NavItem = { href: string; icon: string; label: string; count?: 'tasks' | 'courses' };
+type RecentItem = { href: string; label: string };
+const RECENT_KEY = 'lstRecentPagesV1';
 
 const PLAN: NavItem[] = [
   { href: '/', icon: '●', label: 'Today' },
@@ -77,6 +79,18 @@ function startOfWeek(): Date {
 export default function SiteChrome({ children, brandMark }: { children: React.ReactNode; brandMark: string }) {
   const pathname = normalize(usePathname() || '/');
   const [sideOpen, setSideOpen] = useState(false);
+  const [recentItems, setRecentItems] = useState<RecentItem[]>([]);
+
+  useEffect(() => {
+    try {
+      const previous = JSON.parse(window.localStorage.getItem(RECENT_KEY) || '[]') as RecentItem[];
+      const valid = Array.isArray(previous) ? previous.filter(item => item && typeof item.href === 'string' && typeof item.label === 'string') : [];
+      const label = PAGES[pathname]?.[0] || (pathname.startsWith('/courses/') ? 'Course details' : null);
+      const next = label ? [{ href: pathname, label }, ...valid.filter(item => item.href !== pathname)].slice(0, 5) : valid.slice(0, 5);
+      setRecentItems(next);
+      window.localStorage.setItem(RECENT_KEY, JSON.stringify(next));
+    } catch { setRecentItems([]); }
+  }, [pathname]);
   const [taskCount, setTaskCount] = useState<number | null>(null);
   const [courseCount, setCourseCount] = useState<number | null>(null);
   const [weekMinutes, setWeekMinutes] = useState(0);
@@ -182,7 +196,7 @@ export default function SiteChrome({ children, brandMark }: { children: React.Re
     <aside className="lst-sidebar">
       <div className="lst-brand"><div className="lst-wordmark">Law School Tracker</div>{termLabel ? <div className="lst-term">{termLabel}</div> : null}</div>
       <div className="lst-brand-mark-wrap" aria-hidden="true"><img className="lst-brand-mark" src="/sidebar-logo.svg" alt="" /></div>
-      <nav>{renderGroup('Plan', PLAN)}{renderGroup('Semester', SEMESTER)}{renderGroup('Progress', PROGRESS)}</nav>
+      <nav>{renderGroup('Plan', PLAN)}{renderGroup('Semester', SEMESTER)}{renderGroup('Progress', PROGRESS)}{recentItems.length > 1 ? renderGroup('Recently opened', recentItems.filter(item => item.href !== pathname).map(item => ({ ...item, icon: '↺' }))) : null}</nav>
       <div className="lst-grow" />
       <div className="lst-week"><b>This week</b><div className="lst-week-value">{hoursLabel(weekMinutes)} / {hoursLabel(targetMinutes)}</div><div className="lst-track"><span className="lst-fill" style={{ width: `${percent}%` }} /></div><div className="lst-week-copy">{weekCopy}</div></div>
       <div className="lst-bottom lst-list"><Link href="/help" className={`lst-nav${pathname === '/help' ? ' active' : ''}`}><span className="lst-icon">?</span><span className="lst-name">Help</span></Link><Link href="/settings" className={`lst-nav${pathname.startsWith('/settings') ? ' active' : ''}`}><span className="lst-icon">⚙</span><span className="lst-name">Settings</span></Link></div>
