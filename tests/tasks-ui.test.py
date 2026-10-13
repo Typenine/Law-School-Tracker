@@ -125,7 +125,7 @@ with sync_playwright() as p:
     expect(dialog).not_to_be_visible(timeout=10000)
     expect(page.get_by_text(UPDATED, exact=True)).not_to_be_visible(timeout=10000)
 
-    trash_button = page.get_by_role("button", name=re.compile(r"^Trash"))
+    trash_button = page.get_by_role("button", name=re.compile(r"^Trash ·"))
     trash_button.click()
     expect(page.get_by_text(UPDATED, exact=True)).to_be_visible(timeout=10000)
     page.get_by_role("button", name="Restore", exact=True).click()
