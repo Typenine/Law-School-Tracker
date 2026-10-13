@@ -54,7 +54,12 @@ jobs:
         run: npm run build
 
       - name: Test
-        run: npm test
+        run: |
+          for test_file in tests/*.test.mjs; do
+            echo "::group::Integration test: $test_file"
+            timeout 150s node --test --test-concurrency=1 "$test_file"
+            echo "::endgroup::"
+          done
 
       - uses: actions/setup-python@v5
         with:
