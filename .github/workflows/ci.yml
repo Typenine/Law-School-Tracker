@@ -43,6 +43,8 @@ jobs:
       - run: npm ci
 
       - name: Audit dependencies
+        id: audit
+        continue-on-error: true
         run: npm audit --audit-level=high
 
       - name: Typecheck
@@ -85,6 +87,10 @@ jobs:
         env:
           TASKS_E2E_BASE_URL: http://127.0.0.1:3000
         run: python tests/tasks-ui.test.py
+
+      - name: Enforce dependency audit result
+        if: always() && steps.audit.outcome == 'failure'
+        run: exit 1
 
       - name: Show server log after browser failure
         if: failure()
