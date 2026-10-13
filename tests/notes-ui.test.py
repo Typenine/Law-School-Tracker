@@ -287,9 +287,9 @@ def run():
 
         # Rail visibility and a section modal cancel are also reversible.
         rail = page.locator('.nb-rail')
-        page.get_by_title('Hide the notebook tree').click()
+        page.get_by_title('Hide the notebook tree').first.click()
         expect(rail).to_be_hidden()
-        page.get_by_title('Show the notebook tree').click()
+        page.get_by_title('Show the notebook tree').first.click()
         expect(rail).to_be_visible()
 
         # Expand the target branch and verify the section settings dialog can
