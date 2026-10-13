@@ -82,9 +82,9 @@ with sync_playwright() as p:
     dialog.locator("aside").get_by_role("button", name="Close task details", exact=True).click()
     expect(dialog).not_to_be_visible(timeout=10000)
     expect(page.get_by_text(UPDATED, exact=True)).to_be_visible(timeout=10000)
-    page.get_by_role("button", name=UPDATED, exact=True).click()
+    page.get_by_role("button", name=f"Open {UPDATED}", exact=True).click()
     dialog = page.get_by_role("dialog")
-    expect(dialog).to_be_visible()
+    expect(dialog).to_be_visible(timeout=10000)
 
     dialog.get_by_role("button", name="progress", exact=True).click()
     step_input = dialog.get_by_placeholder("Add a step…")
