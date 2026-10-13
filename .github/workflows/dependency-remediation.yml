@@ -1,0 +1,33 @@
+name: Dependency remediation
+on:
+  push:
+    branches:
+      - feature/academic-workflow-upgrades-20261013
+    paths:
+      - .github/workflows/dependency-remediation.yml
+permissions:
+  contents: write
+jobs:
+  remediate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: true
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+      - run: npm ci
+      - name: Apply nonbreaking security updates and patched Next.js
+        run: |
+          npm install next@16.4.0 --save-exact
+          npm audit fix || true
+          npm run typecheck
+          npm run build
+      - name: Commit dependency updates to feature branch
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add package.json package-lock.json
+          if ! git diff --cached --quiet; then git commit -m 'Update vulnerable dependencies where safely available'; git push; fi
