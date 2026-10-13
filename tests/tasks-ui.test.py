@@ -103,8 +103,15 @@ with sync_playwright() as p:
     expect(dialog.get_by_text("100%", exact=True)).to_be_visible(timeout=10000)
 
     dialog.get_by_role("button", name="Log partial progress", exact=True).click()
-    log_dialog = page.get_by_role("dialog").filter(has_text="Log Partial Progress")
-    expect(log_dialog).to_be_visible(timeout=10000)
+    # Both overlays are modal; address the frontmost log overlay directly
+    # rather than relying on accessibility filtering of sibling aria-modal nodes.
+    log_dialog = page.locator('[role="dialog"]').filter(has_text="Log Partial Progress")
+    try:
+        expect(log_dialog).to_be_visible(timeout=10000)
+    except AssertionError:
+        print("Log dialog diagnostic:", page.locator('[role="dialog"]').all_inner_texts(), flush=True)
+        print("Body:", page.locator("body").inner_text()[-2200:], flush=True)
+        raise
     duration = log_dialog.locator('input[type="text"]').first
     expect(duration).to_be_visible()
     duration.fill("20")
