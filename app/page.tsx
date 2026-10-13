@@ -188,6 +188,22 @@ export default function TodayPage() {
   const [timers, setTimers] = useState<Record<string, TimerState>>({});
   const [timerTick, setTimerTick] = useState(0);
   const [loading, setLoading] = useState(true);
+  const [dashboardSections, setDashboardSections] = useState<Record<string, boolean>>({ classes: true, due: true, reviews: true, countdown: true, summary: true });
+  const [customizing, setCustomizing] = useState(false);
+  useEffect(() => {
+    let active = true;
+    apiFetch<{settings: Record<string, unknown>}>('/api/settings?keys=dashboardSectionsV1').then(data => {
+      const stored = data.settings?.dashboardSectionsV1;
+      if (active && stored && typeof stored === 'object' && !Array.isArray(stored)) setDashboardSections(prev => ({ ...prev, ...stored as Record<string, boolean> }));
+    }).catch(() => {});
+    return () => { active = false; };
+  }, []);
+  async function toggleDashboardSection(section: string) {
+    const next = { ...dashboardSections, [section]: !dashboardSections[section] };
+    setDashboardSections(next);
+    try { await apiFetch('/api/settings', { method: 'PATCH', body: { dashboardSectionsV1: next } }); }
+    catch { setDashboardSections(dashboardSections); }
+  }
   const [logTask, setLogTask] = useState<Task | null>(null);
   const [logMode, setLogMode] = useState<"partial" | "finish">("partial");
   const [selectedTaskId, setSelectedTaskId] = useState<string | null>(null);
@@ -594,6 +610,7 @@ export default function TodayPage() {
         @media(max-width:760px){.today-rail{grid-template-columns:1fr}.up-card{padding:25px 21px}.up-line{align-items:flex-start}.up-line-copy{flex-wrap:wrap}.up-tools{gap:4px}.up-title{font-size:27px}.up-facts{grid-template-columns:1fr;gap:16px}.up-fact+.up-fact{padding-left:0;border-left:0}.up-actions{align-items:stretch}.timer-readout{order:5;width:100%;padding-top:5px}.dash-task{grid-template-columns:56px 4px minmax(0,1fr) 56px}.row-start{display:none}.summary-grid{grid-template-columns:1fr}.task-duration{font-size:12px}}
       `}</style>
 
+      <div className="flex flex-wrap items-center justify-end gap-2 mb-3"><button type="button" className="dash-secondary text-xs" onClick={() => setCustomizing(v => !v)}>Customize dashboard</button>{customizing && <div className="flex flex-wrap gap-3 text-xs">{([["classes","Classes"],["due","Due soon"],["reviews","Spaced review"],["countdown","Countdown"],["summary","Daily statistics"]] as const).map(([key,label]) => <label key={key} className="flex items-center gap-1"><input type="checkbox" checked={dashboardSections[key]} onChange={() => void toggleDashboardSection(key)} />{label}</label>)}</div>}</div>
       {loading ? <div className="loading-dash">Loading today’s plan…</div> : (
         <div className="today-grid">
           <section className="today-main">
@@ -647,34 +664,34 @@ export default function TodayPage() {
               }) : <div className="empty-dash">No other tasks are planned today.</div>}
             </div>
 
-            <div className="summary-grid">
+            {dashboardSections.summary && <div className="summary-grid">
               <article className="dash-card summary-card"><div className="dash-eyebrow">Planned today</div><div className="summary-value">{compactMinutes(plannedToday)}</div><div className="summary-copy">of {compactMinutes(availableToday)} available</div></article>
               <article className="dash-card summary-card"><div className="dash-eyebrow">Logged today</div><div className="summary-value green">{compactMinutes(loggedToday)}</div><div className="summary-copy">{compactMinutes(leftToday)} still planned</div></article>
               <article className="dash-card summary-card"><div className="dash-eyebrow">Focus average</div><div className="summary-value">{focusAverage ? focusAverage.toFixed(1) : "—"}</div><div className="summary-copy">{strongestWindow}</div></article>
-            </div>
+            </div>}
           </section>
 
           <aside className="today-rail">
-            <article className="dash-card rail-card">
+            {dashboardSections.classes && <article className="dash-card rail-card">
               <div className="dash-eyebrow">Classes today</div>
               {classesToday.length ? classesToday.map((row, index) => <div className="class-row" key={`${row.course.id}-${row.start}-${index}`}><div className="class-time">{row.start}</div><div><div className="class-name">{row.course.title}</div>{row.location ? <div className="class-location">{row.location}</div> : null}</div></div>) : <div className="empty-dash">No classes scheduled today.</div>}
-            </article>
+            </article>}
 
-            <article className="dash-card rail-card">
+            {dashboardSections.due && <article className="dash-card rail-card">
               <div className="rail-head"><div className="dash-eyebrow">Due soon</div><div className="rail-links"><a className="rail-link" href="/week-plan">Week →</a><a className="rail-link" href="/tasks/completed">Completed →</a></div></div>
               {dueSoon.length ? dueSoon.map(task => <div className="due-row" key={task.id}><div className="due-day">{dayLabel(chicagoYmd(task.dueDate), today)}</div><div><div className="due-title">{task.title}</div><div className="due-course">{task.course || "Unassigned"}</div></div></div>) : <div className="empty-dash">Nothing due soon.</div>}
-            </article>
+            </article>}
 
-            <article className="dash-card rail-card">
+            {dashboardSections.reviews && <article className="dash-card rail-card">
               <div className="rail-head"><div className="dash-eyebrow">Spaced review</div><a className="rail-link" href="/rules?review=1">{dueRuleReviews.length ? "Review now →" : "Rule Bank →"}</a></div>
               {dueRuleReviews.length ? <>{dueRuleReviews.map(rule => <div className="review-row" key={rule.id}><div className="review-topic">{rule.topic}</div><div className="review-meta">{rule.course || "Unassigned"} · due now</div></div>)}<div className="mt-4 text-xs text-slate-500">{dueRuleReviews.length} rule{dueRuleReviews.length === 1 ? "" : "s"} shown{normalizeRuleBank(settings.ruleBankV1).filter(rule => dueForReview(rule, today)).length > dueRuleReviews.length ? " · more waiting" : ""}</div></> : <div className="empty-dash">No rule reviews due today.</div>}
-            </article>
+            </article>}
 
-            <article className="dash-card rail-card">
+            {dashboardSections.countdown && <article className="dash-card rail-card">
               <div className="dash-eyebrow">Countdown</div>
               <div className="count-row"><span>First final</span><strong className="gold">{countdowns.firstFinal == null ? "—" : `${countdowns.firstFinal} days`}</strong></div>
               <div className="count-row"><span>Graduation</span><strong>{countdowns.graduation == null ? "—" : `${countdowns.graduation} days`}</strong></div>
-            </article>
+            </article>}
           </aside>
         </div>
       )}
