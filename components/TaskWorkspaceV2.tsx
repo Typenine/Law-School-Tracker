@@ -113,7 +113,7 @@ function editStateFor(task: WorkspaceTask): EditState {
     estimate: task.estimatedMinutes == null ? '' : String(task.estimatedMinutes),
     estimateTouched: false,
     priority: task.priority == null ? '' : String(task.priority),
-    tags: (task.tags || []).join(', '),
+    tags: (Array.isArray(task.tags) ? task.tags : []).join(', '),
     notes: task.notes || '',
     dependsOn: new Set((task.dependsOn || []).map(String)),
   };
@@ -179,7 +179,7 @@ export default function TaskWorkspaceV2() {
   const filtered = useMemo(() => tasks.filter(task => {
     if (courseFilter && (task.course || '').toLowerCase() !== courseFilter.toLowerCase()) return false;
     if (textFilter) {
-      const haystack = `${task.title} ${task.course || ''} ${(task.tags || []).join(' ')}`.toLowerCase();
+      const haystack = `${task.title} ${task.course || ''} ${(Array.isArray(task.tags) ? task.tags : []).join(' ')}`.toLowerCase();
       if (!haystack.includes(textFilter.toLowerCase())) return false;
     }
     if (stateFilter === 'all') return true;
@@ -281,7 +281,7 @@ export default function TaskWorkspaceV2() {
       const response = await apiFetch<{ task: Task }>(`/api/tasks/${activeTask.id}`, { method: 'PATCH', body });
       const saved = response.task;
       if (!saved) throw new Error('The server did not return the saved task.');
-      setJustSaved(saved);
+      setJustSaved({ ...saved, tags: Array.isArray(saved.tags) ? saved.tags : (Array.isArray(activeTask.tags) ? activeTask.tags : []) });
       setData(prev => prev ? {
         ...prev,
         tasks: prev.tasks.map(task => task.id === saved.id ? ({ ...task, ...saved, id: task.id } as WorkspaceTask) : task),
