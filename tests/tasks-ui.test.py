@@ -82,9 +82,15 @@ with sync_playwright() as p:
     dialog.locator("aside").get_by_role("button", name="Close task details", exact=True).click()
     expect(dialog).not_to_be_visible(timeout=10000)
     expect(page.get_by_text(UPDATED, exact=True)).to_be_visible(timeout=10000)
-    page.get_by_role("button", name=f"Open {UPDATED}", exact=True).click()
+    page.get_by_role("button", name=UPDATED, exact=True).click()
     dialog = page.get_by_role("dialog")
-    expect(dialog).to_be_visible(timeout=10000)
+    try:
+        expect(dialog).to_be_visible(timeout=10000)
+    except AssertionError:
+        print("Reopen diagnostic: " + page.locator("body").inner_text()[-2800:])
+        print("Dialogs: " + str(page.get_by_role("dialog").count()))
+        print("Task open rows: " + str(page.get_by_role("button", name=f"Open {UPDATED}", exact=True).count()))
+        raise
 
     dialog.get_by_role("button", name="progress", exact=True).click()
     step_input = dialog.get_by_placeholder("Add a step…")
