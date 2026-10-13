@@ -96,49 +96,40 @@ export default function PlannerBoard() {
     return m;
   }, [blocks, days]);
 
-  // Load-balancing assist: move tasks from heavy to lighter days within +/-2 days
+  // Rebalance study blocks, never assignment deadlines. The user confirms the proposal.
   async function balanceWeek() {
-    const heavy = (typeof window !== 'undefined') ? parseFloat(window.localStorage.getItem('heavyDayThreshold') || '240') : 240;
-    const dayKeys = days.map(d => d.key);
-    const indexOf: Record<string, number> = Object.fromEntries(dayKeys.map((k, i) => [k, i] as const));
-    const loads: Record<string, number> = Object.fromEntries(dayKeys.map(k => [k, 0] as const));
-    const bucketTasks: Record<string, Task[]> = Object.fromEntries(dayKeys.map(k => [k, [] as Task[]] as const));
-    for (const t of tasks) {
-      if (t.status === 'done') continue;
-      const key = keyOf(new Date(t.dueDate));
-      if (loads[key] === undefined) continue;
-      loads[key] += (t.estimatedMinutes || 0);
-      bucketTasks[key].push(t);
+    const availableDays = days.map(d => d.key);
+    const existing = blocks.filter(b => availableDays.includes(b.day));
+    if (!existing.length) {
+      notifyToast({ kind: 'info', message: 'Schedule study blocks first, then rebalance them.' });
+      return;
     }
-    const moves: Array<{ id: string; toKey: string }> = [];
-    for (const k of dayKeys) {
-      if ((loads[k] || 0) <= heavy) continue;
-      const tasksBySize = bucketTasks[k].slice().sort((a, b) => (b.estimatedMinutes || 0) - (a.estimatedMinutes || 0));
-      for (const t of tasksBySize) {
-        if ((loads[k] || 0) <= heavy) break;
-        const i = indexOf[k];
-        for (const off of [-2, -1, 1, 2]) {
-          const j = i + off;
-          if (j < 0 || j >= dayKeys.length) continue;
-          const targetKey = dayKeys[j];
-          const due = startOfDay(new Date(t.dueDate));
-          const targetDate = new Date(days[j].date);
-          if (targetDate > due) continue;
-          const est = t.estimatedMinutes || 0;
-          if ((loads[targetKey] || 0) + est <= heavy) {
-            loads[k] -= est; loads[targetKey] += est;
-            moves.push({ id: t.id, toKey: targetKey });
-            break;
-          }
-        }
+    const thresholdRaw = Number(window.localStorage.getItem('heavyDayThreshold') || 240);
+    const threshold = Number.isFinite(thresholdRaw) && thresholdRaw > 0 ? thresholdRaw : 240;
+    const loads = Object.fromEntries(availableDays.map(day => [day, existing.filter(b => b.day === day).reduce((n, b) => n + b.plannedMinutes, 0)])) as Record<string, number>;
+    const proposal = blocks.map(b => ({ ...b }));
+    let moves = 0;
+    for (const day of availableDays) {
+      for (const block of proposal.filter(b => b.day === day).sort((a,b) => b.plannedMinutes-a.plannedMinutes)) {
+        if (loads[day] <= threshold) break;
+        const task = tasks.find(t => t.id === block.taskId);
+        const dueKey = task ? keyOf(new Date(task.dueDate)) : day;
+        const alternative = availableDays.filter(target => target !== day && target <= dueKey && target >= keyOf(new Date()))
+          .sort((a,b) => loads[a]-loads[b]).find(target => loads[target] + block.plannedMinutes <= threshold && loads[target] < loads[day]);
+        if (!alternative) continue;
+        loads[day] -= block.plannedMinutes;
+        loads[alternative] += block.plannedMinutes;
+        block.day = alternative;
+        moves++;
       }
     }
-    for (const m of moves) {
-      const [y, mo, d] = m.toKey.split('-').map(n => parseInt(n, 10));
-      const nd = new Date(y, mo - 1, d, 23, 59, 59, 999);
-      await tasksClient.update(m.id, { dueDate: nd.toISOString() } as any);
+    if (!moves) {
+      notifyToast({ kind: 'info', message: 'No safer redistribution found within the daily workload limit.' });
+      return;
     }
-    if (moves.length) await refresh();
+    if (!window.confirm(`Move ${moves} study block${moves === 1 ? '' : 's'} to less busy days? Assignment due dates and unscheduled work will remain unchanged.`)) return;
+    setBlocks(proposal);
+    notifyToast({ kind: 'success', message: `Rescheduled ${moves} study block${moves === 1 ? '' : 's'}. Due dates unchanged.` });
   }
 
   const filteredTasks = useMemo(() => tasks.filter(t => (showAllTerms || !currentTerm || (t.term || '') === currentTerm)), [tasks, currentTerm, showAllTerms]);
