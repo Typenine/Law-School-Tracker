@@ -279,7 +279,7 @@ export default function TaskWorkspaceV2() {
       if (!saved) throw new Error('The server did not return the saved task.');
       setData(prev => prev ? {
         ...prev,
-        tasks: prev.tasks.map(task => task.id === saved.id ? { ...task, ...saved } : task),
+        tasks: prev.tasks.map(task => task.id === saved.id ? ({ ...task, ...saved, id: task.id } as WorkspaceTask) : task),
       } : prev);
       notifyToast({ kind: 'success', message: 'Task updated.' });
       notifyTasksChanged();
