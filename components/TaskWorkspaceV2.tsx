@@ -444,7 +444,7 @@ export default function TaskWorkspaceV2() {
       </section>
 
       {activeTask && (
-        <div className="fixed inset-0 z-[80] flex justify-end" role="dialog" aria-modal="true">
+        <div className="fixed inset-0 flex justify-end" style={{ zIndex: 10000 }} role="dialog" aria-modal="true">
           <button className="absolute inset-0 bg-black/60" onClick={() => setActiveId(null)} aria-label="Close task details" />
           <aside className="relative z-10 h-full w-full max-w-2xl bg-[#07111f] border-l border-white/10 shadow-2xl overflow-y-auto">
             <div className="sticky top-0 z-20 bg-[#07111f]/95 backdrop-blur border-b border-white/10 px-5 py-4">
