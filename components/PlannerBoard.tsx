@@ -9,7 +9,7 @@ import { useSemester } from '@/lib/useSemester';
 import { tasksClient } from '@/lib/tasksClient';
 import { apiFetch } from '@/lib/apiClient';
 import { notifyToast } from '@/lib/toastBus';
-import { useSchedule } from '@/lib/useSchedule';
+import { useSchedule, useAvailability } from '@/lib/useSchedule';
 
 function startOfDay(d: Date) { const x = new Date(d); x.setHours(0,0,0,0); return x; }
 function keyOf(d: Date) { const x = startOfDay(d); return `${x.getFullYear()}-${String(x.getMonth()+1).padStart(2,'0')}-${String(x.getDate()).padStart(2,'0')}`; }
@@ -44,10 +44,15 @@ export default function PlannerBoard() {
     setLoading(false);
   }
 
-  async function applyAllSuggestions() {
-    for (const s of suggestions) {
-      await applySuggestion(s);
-    }
+  function applyAllSuggestions() {
+    if (!suggestions.length) return;
+    const total = suggestions.reduce((sum, suggestion) => sum + suggestion.plan.reduce((n, part) => n + part.minutes, 0), 0);
+    if (!window.confirm(`Schedule ${total} minutes across ${suggestions.length} assignments? Assignment deadlines will not change.`)) return;
+    setBlocks(previous => [...previous, ...suggestions.flatMap(s => s.plan.map(part => ({
+      id: `adaptive-${s.id}-${part.key}-${Math.random().toString(36).slice(2,8)}`,
+      taskId: s.id, day: part.key, plannedMinutes: part.minutes, title: s.title, course: s.course || '',
+    })))]);
+    notifyToast({ kind: 'success', message: `Scheduled ${total} minutes without changing deadlines.` });
   }
   useEffect(() => { refresh(); }, []);
   useEffect(() => {
@@ -90,6 +95,7 @@ export default function PlannerBoard() {
 
   // Planned study minutes from Schedule (read-only)
   const { blocks, setBlocks } = useSchedule();
+  const { availability } = useAvailability();
   const plannedByKey = useMemo(() => {
     const m: Record<string, number> = Object.fromEntries(days.map(d => [d.key, 0] as const));
     for (const b of (blocks || [])) { if (m[b.day] !== undefined) m[b.day] += b.plannedMinutes || 0; }
@@ -155,81 +161,62 @@ export default function PlannerBoard() {
     return m;
   }, [sessions, days]);
 
-  // Suggestions: split large readings/assignments across days before due (informational only)
+  // Propose study time, not extra assignments or altered academic deadlines.
+  // Capacity is calculated from the user's availability, existing commitments,
+  // and earlier suggestions in deadline/priority order.
   const suggestions = useMemo(() => {
-    const today = startOfDay(new Date());
-    const out: Array<{ id: string; title: string; course: string | null | undefined; dueKey: string; plan: Array<{ key: string; minutes: number }> }> = [];
-    for (const t of filteredTasks) {
-      if (t.status === 'done') continue;
-      const base = t.estimatedMinutes || 0;
-      const scale = (t.course && courseScales[(t.course || '').toLowerCase()]) || 1;
-      const est = Math.max(0, Math.round(base * scale));
-      if (est < 120) continue; // threshold for suggesting splits
-      const due = startOfDay(new Date(t.dueDate));
-      if (due < today) continue;
-      const daysBefore = Math.max(0, Math.floor((due.getTime() - today.getTime()) / (24*60*60*1000)));
-      if (daysBefore < 1) continue; // nothing to split before due
-      const splits = Math.min(3, Math.max(2, Math.ceil(est / 90))); // 90m chunks, 2-3 parts
-      const per = Math.round(est / splits);
-      const plan: Array<{ key: string; minutes: number }> = [];
-      for (let i = splits - 1; i >= 1; i--) { // allocate to preceding days; keep final work on due day implicitly
-        const d = new Date(due); d.setDate(d.getDate() - i);
-        if (d < today) continue;
-        plan.push({ key: keyOf(d), minutes: per });
+    const today = keyOf(new Date());
+    const capacity: Record<string, number> = {};
+    for (const day of days) {
+      const existing = blocks.filter(block => block.day === day.key)
+        .reduce((sum, block) => sum + Math.max(0, block.plannedMinutes), 0);
+      capacity[day.key] = Math.max(0, (availability[day.date.getDay()] || 0) - existing);
+    }
+    const ordered = filteredTasks.filter(task => task.status !== 'done')
+      .sort((a,b) => a.dueDate.localeCompare(b.dueDate) || (b.priority || 0) - (a.priority || 0));
+    const out: Array<{ id: string; title: string; course: string | null | undefined; dueKey: string; plan: Array<{key:string;minutes:number}> }> = [];
+    for (const task of ordered) {
+      const dueKey = keyOf(new Date(task.dueDate));
+      if (dueKey < today) continue;
+      const scale = task.course ? courseScales[task.course.toLowerCase()] || 1 : 1;
+      const estimated = Math.max(0, Math.ceil((task.estimatedMinutes || 0) * scale));
+      const alreadyPlanned = blocks.filter(block => block.taskId === task.id)
+        .reduce((sum, block) => sum + Math.max(0, block.plannedMinutes), 0);
+      let remaining = Math.max(0, estimated - alreadyPlanned);
+      if (remaining < 30) continue;
+      const plan: Array<{key:string;minutes:number}> = [];
+      for (const day of days.filter(d => d.key >= today && d.key <= dueKey)) {
+        if (remaining <= 0) break;
+        const minutes = Math.min(90, remaining, capacity[day.key]);
+        if (minutes < 15) continue;
+        capacity[day.key] -= minutes;
+        remaining -= minutes;
+        plan.push({ key: day.key, minutes });
       }
-      if (plan.length) out.push({ id: t.id, title: t.title, course: t.course, dueKey: keyOf(due), plan });
+      if (plan.length) out.push({ id: task.id, title: task.title, course: task.course, dueKey, plan });
     }
     return out;
-  }, [filteredTasks, courseScales]);
+  }, [filteredTasks, courseScales, days, availability, blocks]);
 
-  // Suggested allocation per day using per-course scales
   const suggestedDaily = useMemo(() => {
-    const daily: Record<string, number> = Object.fromEntries(days.map(d => [d.key, 0] as const));
-    const today = startOfDay(new Date());
-    for (const t of filteredTasks) {
-      if (t.status === 'done') continue;
-      const base = t.estimatedMinutes || 0;
-      const scale = (t.course && courseScales[(t.course || '').toLowerCase()]) || 1;
-      const est = Math.max(0, Math.round(base * scale));
-      const due = startOfDay(new Date(t.dueDate));
-      if (due < today) continue;
-      // distribute in 90m chunks across preceding days
-      const CHUNK = 90;
-      const splits = Math.max(1, Math.ceil(est / CHUNK));
-      for (let i = splits - 1; i >= 0; i--) {
-        const d = new Date(due); d.setDate(d.getDate() - i);
-        const key = keyOf(d);
-        if (daily[key] !== undefined) daily[key] += Math.min(CHUNK, est - (splits - 1 - i) * CHUNK);
-      }
-    }
+    const daily: Record<string, number> = Object.fromEntries(days.map(day => [day.key, 0] as const));
+    for (const suggestion of suggestions) for (const block of suggestion.plan) daily[block.key] += block.minutes;
     return daily;
-  }, [filteredTasks, courseScales, days]);
+  }, [suggestions, days]);
 
-  async function applySuggestion(s: { id: string; title: string; course: string | null | undefined; dueKey: string; plan: Array<{ key: string; minutes: number }> }) {
-    try {
-      // Create prep subtasks
-      const createdIds: string[] = [];
-      const total = s.plan.length;
-      for (let i = 0; i < s.plan.length; i++) {
-        const p = s.plan[i];
-        const [y, m, d] = p.key.split('-').map(n => parseInt(n, 10));
-        const due = new Date(y, m - 1, d, 23, 59, 59, 999);
-        const created = await tasksClient.create({
-          title: `[Prep] ${s.title} (part ${i+1}/${total})`,
-          course: s.course || null,
-          dueDate: due.toISOString(),
-          status: 'todo',
-          estimatedMinutes: p.minutes,
-          term: currentTerm || null,
-        } as any);
-        createdIds.push(created.id);
-      }
-      // Update main task dependsOn
-      const main = tasks.find(t => t.id === s.id);
-      const prev = (main?.dependsOn || []) as string[];
-      await tasksClient.update(s.id, { dependsOn: [...prev, ...createdIds] } as any);
-      await refresh();
-    } catch { /* ignore for now, could add toast */ }
+  function applySuggestion(s: { id: string; title: string; course: string | null | undefined; dueKey: string; plan: Array<{ key: string; minutes: number }> }) {
+    setBlocks(previous => [
+      ...previous,
+      ...s.plan.map(part => ({
+        id: `adaptive-${s.id}-${part.key}-${Math.random().toString(36).slice(2,8)}`,
+        taskId: s.id,
+        day: part.key,
+        plannedMinutes: part.minutes,
+        title: s.title,
+        course: s.course || '',
+      })),
+    ]);
+    notifyToast({ kind: 'success', message: `Scheduled study time for ${s.title}. Deadline unchanged.` });
   }
 
   function onDragStart(e: React.DragEvent, t: Task) {
@@ -294,7 +281,7 @@ export default function PlannerBoard() {
       </div>
       {suggestions.length > 0 && (
         <div className="rounded border border-[#1b2344] p-4">
-          <div className="text-slate-300/70 text-xs mb-2">Suggestions to spread large readings/assignments across days (date-only)</div>
+          <div className="text-slate-300/70 text-xs mb-2">Suggested study blocks based on available time, existing plans, course pace, priority, and deadlines. Applying them does not create assignments or change due dates.</div>
           <ul className="text-xs space-y-1">
             {suggestions.map((s) => (
               <li key={s.id} className="flex items-center justify-between gap-2">
