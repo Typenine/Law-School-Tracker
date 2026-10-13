@@ -129,7 +129,10 @@ with sync_playwright() as p:
     trash_button.click()
     expect(page.get_by_text(UPDATED, exact=True)).to_be_visible(timeout=10000)
     page.get_by_role("button", name="Restore", exact=True).click()
-    expect(page.get_by_text(UPDATED, exact=True)).to_be_visible(timeout=10000)
+    # Wait for the async restore to complete rather than finding the title
+    # still displayed in Trash before the request has finished.
+    expect(page.get_by_role("button", name="Restore", exact=True)).not_to_be_visible(timeout=10000)
+    expect(page.get_by_role("button", name=f"Open {UPDATED}", exact=True)).to_be_visible(timeout=10000)
 
     workspace = request_json("GET", "/api/tasks/workspace")
     restored = next(item for item in workspace["tasks"] if item["id"] == task["id"])
