@@ -137,6 +137,8 @@ export default function TaskWorkspaceV2() {
   const [newChecklist, setNewChecklist] = useState('');
   const [bulkDue, setBulkDue] = useState('');
   const [bulkCourse, setBulkCourse] = useState('');
+  const [bulkPriority, setBulkPriority] = useState('');
+  const [bulkActivity, setBulkActivity] = useState('');
   const [edit, setEdit] = useState<EditState | null>(null);
 
   async function refresh() {
@@ -305,17 +307,21 @@ export default function TaskWorkspaceV2() {
 
   async function bulkApply() {
     const ids = Array.from(selected);
-    if (!ids.length || (!bulkDue && !bulkCourse)) return;
+    if (!ids.length || (!bulkDue && !bulkCourse && !bulkPriority && !bulkActivity)) return;
     await mutate(`Updated ${ids.length} task${ids.length === 1 ? '' : 's'}.`, async () => {
       for (const id of ids) {
         const body: any = {};
         if (bulkDue) body.dueDate = new Date(`${bulkDue}T23:59:00`).toISOString();
         if (bulkCourse) body.courseId = bulkCourse;
+        if (bulkPriority) body.priority = Number(bulkPriority);
+        if (bulkActivity.trim()) body.activity = bulkActivity.trim();
         await apiFetch(`/api/tasks/${id}`, { method: 'PATCH', body });
       }
       setSelected(new Set());
       setBulkDue('');
       setBulkCourse('');
+      setBulkPriority('');
+      setBulkActivity('');
     });
   }
 
@@ -394,7 +400,9 @@ export default function TaskWorkspaceV2() {
             <button onClick={bulkTrash} className="px-2.5 py-1.5 rounded border border-rose-700 text-rose-300 text-xs">Trash</button>
             <input type="date" value={bulkDue} onChange={e => setBulkDue(e.target.value)} className="px-2 py-1.5 text-xs" />
             <select value={bulkCourse} onChange={e => setBulkCourse(e.target.value)} className="px-2 py-1.5 text-xs"><option value="">Keep course</option>{(data?.courses || []).map(course => <option key={course.id} value={course.id}>{course.title}</option>)}</select>
-            <button onClick={bulkApply} disabled={!bulkDue && !bulkCourse} className="px-2.5 py-1.5 rounded border border-white/10 text-xs disabled:opacity-40">Apply changes</button>
+            <select aria-label="Bulk priority" value={bulkPriority} onChange={e => setBulkPriority(e.target.value)} className="px-2 py-1.5 text-xs"><option value="">Keep priority</option>{[1,2,3,4,5].map(p => <option key={p} value={p}>Priority {p}</option>)}</select>
+             <input aria-label="Bulk activity" value={bulkActivity} onChange={e => setBulkActivity(e.target.value)} placeholder="Set activity" className="px-2 py-1.5 text-xs w-28" />
+             <button onClick={bulkApply} disabled={!bulkDue && !bulkCourse && !bulkPriority && !bulkActivity.trim()} className="px-2.5 py-1.5 rounded border border-white/10 text-xs disabled:opacity-40">Apply changes</button>
             <button onClick={() => setSelected(new Set())} className="ml-auto text-xs text-slate-400">Clear selection</button>
           </div>
         )}
