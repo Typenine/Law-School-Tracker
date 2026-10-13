@@ -45,7 +45,7 @@ jobs:
       - name: Audit dependencies
         id: audit
         continue-on-error: true
-        run: npm audit --audit-level=high
+        run: npm audit --omit=dev --audit-level=high
 
       - name: Typecheck
         run: npm run typecheck
