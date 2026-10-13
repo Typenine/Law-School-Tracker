@@ -273,19 +273,21 @@ export default function TaskWorkspaceV2() {
     };
     if (edit.activity === 'reading') body.originalPageRanges = edit.originalPageRanges.trim() || null;
     if (edit.estimateTouched || !rangeChanged || activeTask.estimateOrigin === 'manual') body.estimatedMinutes = edit.estimate ? Math.max(0, Number(edit.estimate)) : null;
-    let updatedTask: Task | null = null;
-    await mutate('Task updated.', async () => {
+    try {
       const response = await apiFetch<{ task: Task }>(`/api/tasks/${activeTask.id}`, { method: 'PATCH', body });
-      updatedTask = response.task || null;
-      return response;
-    });
-    if (updatedTask) {
-      // Update the open drawer immediately after the persisted response. The
-      // workspace refresh can lag behind the individual task update.
+      const saved = response.task;
+      if (!saved) throw new Error('The server did not return the saved task.');
       setData(prev => prev ? {
         ...prev,
-        tasks: prev.tasks.map(task => task.id === updatedTask!.id ? { ...task, ...updatedTask, loggedMinutes: task.loggedMinutes, percentComplete: task.percentComplete } : task),
+        tasks: prev.tasks.map(task => task.id === saved.id ? { ...task, ...saved } : task),
       } : prev);
+      notifyToast({ kind: 'success', message: 'Task updated.' });
+      notifyTasksChanged();
+      // Refresh other computed workspace metrics without making the editor wait.
+      void refresh();
+    } catch (e: any) {
+      notifyToast({ kind: 'error', message: e?.message || 'Unable to update task.' });
+      setError(e?.message || 'Unable to update task.');
     }
   }
 
