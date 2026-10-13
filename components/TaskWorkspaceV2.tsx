@@ -287,8 +287,8 @@ export default function TaskWorkspaceV2() {
       } : prev);
       notifyToast({ kind: 'success', message: 'Task updated.' });
       notifyTasksChanged();
-      // Refresh other computed workspace metrics without making the editor wait.
-      void refresh();
+      // Keep the successful server response visible; a concurrent full refresh
+      // can arrive with stale derived workspace data and undo the visible edit.
     } catch (e: any) {
       notifyToast({ kind: 'error', message: e?.message || 'Unable to update task.' });
       setError(e?.message || 'Unable to update task.');
