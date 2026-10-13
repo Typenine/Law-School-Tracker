@@ -1,6 +1,7 @@
 "use client";
 
 import Link from 'next/link';
+import { createPortal } from 'react-dom';
 import { useEffect, useMemo, useState } from 'react';
 import type { Course, StudySession, Task } from '@/lib/types';
 import AddTaskPanel from '@/components/AddTaskPanel';
@@ -443,7 +444,7 @@ export default function TaskWorkspaceV2() {
         )}
       </section>
 
-      {activeTask && (
+      {activeTask && typeof document !== 'undefined' && createPortal(
         <div className="fixed inset-0 flex justify-end" style={{ zIndex: 10000 }} role="dialog" aria-modal="true">
           <button className="absolute inset-0 bg-black/60" onClick={() => setActiveId(null)} aria-label="Close task details" />
           <aside className="relative z-10 h-full w-full max-w-2xl bg-[#07111f] border-l border-white/10 shadow-2xl overflow-y-auto">
@@ -487,7 +488,8 @@ export default function TaskWorkspaceV2() {
               </div>}
             </div>
           </aside>
-        </div>
+        </div>,
+        document.body
       )}
 
       <LogModal isOpen={Boolean(logTask)} onClose={() => setLogTask(null)} onSubmit={submitLog} task={logTask} mode={logMode} />
