@@ -280,6 +280,8 @@ export default function TaskWorkspaceV2() {
       return response;
     });
     if (updatedTask) {
+      // Update the open drawer immediately after the persisted response. The
+      // workspace refresh can lag behind the individual task update.
       setData(prev => prev ? {
         ...prev,
         tasks: prev.tasks.map(task => task.id === updatedTask!.id ? { ...task, ...updatedTask, loggedMinutes: task.loggedMinutes, percentComplete: task.percentComplete } : task),
