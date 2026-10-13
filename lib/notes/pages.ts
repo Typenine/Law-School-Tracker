@@ -201,6 +201,23 @@ export async function updateAiNote(
     sectionId = target?.id ?? null;
   }
 
+  // Keep the previous saved document once per fifteen-minute editing window.
+  // A snapshot is only needed for content changes, not metadata-only updates.
+  if ((input.contentHtml !== undefined || input.content !== undefined) &&
+      (contentHtml !== current.contentHtml || content !== current.content)) {
+    const bucket = Math.floor(Date.now() / 900000);
+    await notesDb().query(
+      `INSERT INTO ai_note_versions (note_id, bucket, title, content_html)
+       VALUES ($1, $2, $3, $4) ON CONFLICT (note_id, bucket) DO NOTHING`,
+      [id, bucket, current.title, current.contentHtml],
+    );
+    // Retain the newest fifty snapshots per note to bound database usage.
+    await notesDb().query(
+      `DELETE FROM ai_note_versions WHERE note_id=$1 AND bucket NOT IN
+       (SELECT bucket FROM ai_note_versions WHERE note_id=$1 ORDER BY bucket DESC LIMIT 50)`,
+      [id],
+    );
+  }
   const result = await notesDb().query(
     `UPDATE ai_notes SET
        title=$2, notebook_id=$3, course=$4, semester=$5, section=$6, class_date=$7::date,

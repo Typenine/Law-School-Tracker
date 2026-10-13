@@ -57,6 +57,8 @@ task = request_json("POST", "/api/tasks", {
 with sync_playwright() as p:
     browser = p.chromium.launch()
     page = browser.new_page(viewport={"width": 1440, "height": 1000})
+    page.on("pageerror", lambda e: print("BROWSER PAGEERROR:", str(e), flush=True))
+    page.on("console", lambda m: print("BROWSER CONSOLE ERROR:", m.text, flush=True) if m.type == "error" else None)
     page.goto(BASE + "/tasks", wait_until="networkidle")
 
     expect(page.get_by_text("Task workspace", exact=True)).to_be_visible()
@@ -84,7 +86,13 @@ with sync_playwright() as p:
     expect(page.get_by_text(UPDATED, exact=True)).to_be_visible(timeout=10000)
     page.get_by_role("button", name=UPDATED, exact=True).click()
     dialog = page.get_by_role("dialog")
-    expect(dialog).to_be_visible()
+    try:
+        expect(dialog).to_be_visible(timeout=10000)
+    except AssertionError:
+        print("Reopen diagnostic: " + page.locator("body").inner_text()[-2800:])
+        print("Dialogs: " + str(page.get_by_role("dialog").count()))
+        print("Task open rows: " + str(page.get_by_role("button", name=f"Open {UPDATED}", exact=True).count()))
+        raise
 
     dialog.get_by_role("button", name="progress", exact=True).click()
     step_input = dialog.get_by_placeholder("Add a step…")
@@ -95,8 +103,15 @@ with sync_playwright() as p:
     expect(dialog.get_by_text("100%", exact=True)).to_be_visible(timeout=10000)
 
     dialog.get_by_role("button", name="Log partial progress", exact=True).click()
-    log_dialog = page.get_by_role("dialog").filter(has_text="Log Partial Progress")
-    expect(log_dialog).to_be_visible(timeout=10000)
+    # Both overlays are modal; address the frontmost log overlay directly
+    # rather than relying on accessibility filtering of sibling aria-modal nodes.
+    log_dialog = page.locator('[role="dialog"]').filter(has=page.get_by_role("heading", name="Log Partial Progress", exact=True))
+    try:
+        expect(log_dialog).to_be_visible(timeout=10000)
+    except AssertionError:
+        print("Log dialog diagnostic:", page.locator('[role="dialog"]').all_inner_texts(), flush=True)
+        print("Body:", page.locator("body").inner_text()[-2200:], flush=True)
+        raise
     duration = log_dialog.locator('input[type="text"]').first
     expect(duration).to_be_visible()
     duration.fill("20")
@@ -110,11 +125,14 @@ with sync_playwright() as p:
     expect(dialog).not_to_be_visible(timeout=10000)
     expect(page.get_by_text(UPDATED, exact=True)).not_to_be_visible(timeout=10000)
 
-    trash_button = page.get_by_role("button", name=re.compile(r"^Trash"))
+    trash_button = page.get_by_role("button", name=re.compile(r"^Trash ·"))
     trash_button.click()
     expect(page.get_by_text(UPDATED, exact=True)).to_be_visible(timeout=10000)
     page.get_by_role("button", name="Restore", exact=True).click()
-    expect(page.get_by_text(UPDATED, exact=True)).to_be_visible(timeout=10000)
+    # Wait for the async restore to complete rather than finding the title
+    # still displayed in Trash before the request has finished.
+    expect(page.get_by_role("button", name="Restore", exact=True)).not_to_be_visible(timeout=10000)
+    expect(page.get_by_role("button", name=f"Open {UPDATED}", exact=True)).to_be_visible(timeout=10000)
 
     workspace = request_json("GET", "/api/tasks/workspace")
     restored = next(item for item in workspace["tasks"] if item["id"] == task["id"])

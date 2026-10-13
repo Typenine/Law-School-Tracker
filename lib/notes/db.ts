@@ -171,6 +171,17 @@ async function applyNotesSchema(): Promise<void> {
   // Rich text for the editor. `content` stays plain text so search, previews
   // and the GPT endpoints keep working unchanged.
   await run(`ALTER TABLE ai_notes ADD COLUMN IF NOT EXISTS content_html TEXT`);
+  // Bounded, fifteen-minute recovery snapshots for note edit history.
+  await run(`CREATE TABLE IF NOT EXISTS ai_note_versions (
+    note_id TEXT NOT NULL,
+    bucket BIGINT NOT NULL,
+    title TEXT NOT NULL,
+    content_html TEXT NOT NULL,
+    saved_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    PRIMARY KEY (note_id, bucket)
+  )`);
+  await run(`CREATE INDEX IF NOT EXISTS ai_note_versions_recent ON ai_note_versions(note_id, saved_at DESC)`);
+
   await run(`ALTER TABLE ai_notes ADD COLUMN IF NOT EXISTS position INTEGER NOT NULL DEFAULT 0`);
   await run(`ALTER TABLE ai_note_notebooks ADD COLUMN IF NOT EXISTS position INTEGER NOT NULL DEFAULT 0`);
   await run(`

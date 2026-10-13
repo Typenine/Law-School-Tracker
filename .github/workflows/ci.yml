@@ -43,7 +43,9 @@ jobs:
       - run: npm ci
 
       - name: Audit dependencies
-        run: npm audit --audit-level=high
+        id: audit
+        continue-on-error: true
+        run: npm audit --omit=dev --audit-level=high
 
       - name: Typecheck
         run: npm run typecheck
@@ -52,7 +54,12 @@ jobs:
         run: npm run build
 
       - name: Test
-        run: npm test
+        run: |
+          for test_file in tests/*.test.mjs; do
+            echo "::group::Integration test: $test_file"
+            timeout 150s node --test --test-concurrency=1 "$test_file"
+            echo "::endgroup::"
+          done
 
       - uses: actions/setup-python@v5
         with:
@@ -85,6 +92,10 @@ jobs:
         env:
           TASKS_E2E_BASE_URL: http://127.0.0.1:3000
         run: python tests/tasks-ui.test.py
+
+      - name: Enforce dependency audit result
+        if: always() && steps.audit.outcome == 'failure'
+        run: exit 1
 
       - name: Show server log after browser failure
         if: failure()

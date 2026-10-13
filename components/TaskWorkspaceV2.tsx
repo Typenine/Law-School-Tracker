@@ -1,6 +1,7 @@
 "use client";
 
 import Link from 'next/link';
+import { createPortal } from 'react-dom';
 import { useEffect, useMemo, useState } from 'react';
 import type { Course, StudySession, Task } from '@/lib/types';
 import AddTaskPanel from '@/components/AddTaskPanel';
@@ -112,7 +113,7 @@ function editStateFor(task: WorkspaceTask): EditState {
     estimate: task.estimatedMinutes == null ? '' : String(task.estimatedMinutes),
     estimateTouched: false,
     priority: task.priority == null ? '' : String(task.priority),
-    tags: (task.tags || []).join(', '),
+    tags: (Array.isArray(task.tags) ? task.tags : []).join(', '),
     notes: task.notes || '',
     dependsOn: new Set((task.dependsOn || []).map(String)),
   };
@@ -129,6 +130,7 @@ export default function TaskWorkspaceV2() {
   const [textFilter, setTextFilter] = useState('');
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [activeId, setActiveId] = useState<string | null>(null);
+  const [justSaved, setJustSaved] = useState<Task | null>(null);
   const [drawerTab, setDrawerTab] = useState<'overview'|'progress'|'sessions'|'notes'|'schedule'|'details'>('overview');
   const [multiAdd, setMultiAdd] = useState(false);
   const [trashOpen, setTrashOpen] = useState(false);
@@ -137,6 +139,8 @@ export default function TaskWorkspaceV2() {
   const [newChecklist, setNewChecklist] = useState('');
   const [bulkDue, setBulkDue] = useState('');
   const [bulkCourse, setBulkCourse] = useState('');
+  const [bulkPriority, setBulkPriority] = useState('');
+  const [bulkActivity, setBulkActivity] = useState('');
   const [edit, setEdit] = useState<EditState | null>(null);
 
   async function refresh() {
@@ -163,7 +167,8 @@ export default function TaskWorkspaceV2() {
   useEffect(() => { void refresh(); }, []);
 
   const tasks = data?.tasks || [];
-  const activeTask = activeId ? tasks.find(task => task.id === activeId) || null : null;
+  const selectedTask = activeId ? tasks.find(task => task.id === activeId) || null : null;
+  const activeTask = selectedTask && justSaved?.id === selectedTask.id ? ({ ...selectedTask, ...justSaved } as WorkspaceTask) : selectedTask;
 
   useEffect(() => {
     if (!activeTask) { setEdit(null); return; }
@@ -174,7 +179,7 @@ export default function TaskWorkspaceV2() {
   const filtered = useMemo(() => tasks.filter(task => {
     if (courseFilter && (task.course || '').toLowerCase() !== courseFilter.toLowerCase()) return false;
     if (textFilter) {
-      const haystack = `${task.title} ${task.course || ''} ${(task.tags || []).join(' ')}`.toLowerCase();
+      const haystack = `${task.title} ${task.course || ''} ${(Array.isArray(task.tags) ? task.tags : []).join(' ')}`.toLowerCase();
       if (!haystack.includes(textFilter.toLowerCase())) return false;
     }
     if (stateFilter === 'all') return true;
@@ -195,6 +200,7 @@ export default function TaskWorkspaceV2() {
   }
 
   function openTask(task: WorkspaceTask) {
+    setJustSaved(null);
     setActiveId(task.id);
     setDrawerTab('overview');
     setNewChecklist('');
@@ -246,7 +252,23 @@ export default function TaskWorkspaceV2() {
 
   async function saveChecklist(items: ChecklistItem[]) {
     if (!activeTask) return;
-    await mutate('Checklist updated.', () => apiFetch(`/api/tasks/${activeTask.id}/checklist`, { method: 'PUT', body: { items } }));
+    const taskId = activeTask.id;
+    const original = activeTask.checklist;
+    // Controlled checkboxes must reflect the click immediately while the
+    // server save runs; otherwise their state snaps back to unchecked.
+    setData(prev => prev ? {
+      ...prev, tasks: prev.tasks.map(task => task.id === taskId
+        ? { ...task, checklist: items, checklistPercent: items.length ? Math.round(items.filter(item => item.done).length / items.length * 100) : 0 }
+        : task),
+    } : prev);
+    try {
+      await apiFetch(`/api/tasks/${taskId}/checklist`, { method: 'PUT', body: { items } });
+      notifyTasksChanged();
+      await refresh();
+    } catch (e: any) {
+      setData(prev => prev ? { ...prev, tasks: prev.tasks.map(task => task.id === taskId ? { ...task, checklist: original } : task) } : prev);
+      notifyToast({ kind: 'error', message: e?.message || 'Unable to update checklist.' });
+    }
   }
 
   async function addChecklist() {
@@ -271,17 +293,22 @@ export default function TaskWorkspaceV2() {
     };
     if (edit.activity === 'reading') body.originalPageRanges = edit.originalPageRanges.trim() || null;
     if (edit.estimateTouched || !rangeChanged || activeTask.estimateOrigin === 'manual') body.estimatedMinutes = edit.estimate ? Math.max(0, Number(edit.estimate)) : null;
-    let updatedTask: Task | null = null;
-    await mutate('Task updated.', async () => {
+    try {
       const response = await apiFetch<{ task: Task }>(`/api/tasks/${activeTask.id}`, { method: 'PATCH', body });
-      updatedTask = response.task || null;
-      return response;
-    });
-    if (updatedTask) {
+      const saved = response.task;
+      if (!saved) throw new Error('The server did not return the saved task.');
+      setJustSaved({ ...saved, tags: Array.isArray(saved.tags) ? saved.tags : (Array.isArray(activeTask.tags) ? activeTask.tags : []) });
       setData(prev => prev ? {
         ...prev,
-        tasks: prev.tasks.map(task => task.id === updatedTask!.id ? { ...task, ...updatedTask, loggedMinutes: task.loggedMinutes, percentComplete: task.percentComplete } : task),
+        tasks: prev.tasks.map(task => task.id === saved.id ? ({ ...task, ...saved, id: task.id } as WorkspaceTask) : task),
       } : prev);
+      notifyToast({ kind: 'success', message: 'Task updated.' });
+      notifyTasksChanged();
+      // Keep the successful server response visible; a concurrent full refresh
+      // can arrive with stale derived workspace data and undo the visible edit.
+    } catch (e: any) {
+      notifyToast({ kind: 'error', message: e?.message || 'Unable to update task.' });
+      setError(e?.message || 'Unable to update task.');
     }
   }
 
@@ -305,17 +332,21 @@ export default function TaskWorkspaceV2() {
 
   async function bulkApply() {
     const ids = Array.from(selected);
-    if (!ids.length || (!bulkDue && !bulkCourse)) return;
+    if (!ids.length || (!bulkDue && !bulkCourse && !bulkPriority && !bulkActivity)) return;
     await mutate(`Updated ${ids.length} task${ids.length === 1 ? '' : 's'}.`, async () => {
       for (const id of ids) {
         const body: any = {};
         if (bulkDue) body.dueDate = new Date(`${bulkDue}T23:59:00`).toISOString();
         if (bulkCourse) body.courseId = bulkCourse;
+        if (bulkPriority) body.priority = Number(bulkPriority);
+        if (bulkActivity.trim()) body.activity = bulkActivity.trim();
         await apiFetch(`/api/tasks/${id}`, { method: 'PATCH', body });
       }
       setSelected(new Set());
       setBulkDue('');
       setBulkCourse('');
+      setBulkPriority('');
+      setBulkActivity('');
     });
   }
 
@@ -394,7 +425,9 @@ export default function TaskWorkspaceV2() {
             <button onClick={bulkTrash} className="px-2.5 py-1.5 rounded border border-rose-700 text-rose-300 text-xs">Trash</button>
             <input type="date" value={bulkDue} onChange={e => setBulkDue(e.target.value)} className="px-2 py-1.5 text-xs" />
             <select value={bulkCourse} onChange={e => setBulkCourse(e.target.value)} className="px-2 py-1.5 text-xs"><option value="">Keep course</option>{(data?.courses || []).map(course => <option key={course.id} value={course.id}>{course.title}</option>)}</select>
-            <button onClick={bulkApply} disabled={!bulkDue && !bulkCourse} className="px-2.5 py-1.5 rounded border border-white/10 text-xs disabled:opacity-40">Apply changes</button>
+            <select aria-label="Bulk priority" value={bulkPriority} onChange={e => setBulkPriority(e.target.value)} className="px-2 py-1.5 text-xs"><option value="">Keep priority</option>{[1,2,3,4,5].map(p => <option key={p} value={p}>Priority {p}</option>)}</select>
+             <input aria-label="Bulk activity" value={bulkActivity} onChange={e => setBulkActivity(e.target.value)} placeholder="Set activity" className="px-2 py-1.5 text-xs w-28" />
+             <button onClick={bulkApply} disabled={!bulkDue && !bulkCourse && !bulkPriority && !bulkActivity.trim()} className="px-2.5 py-1.5 rounded border border-white/10 text-xs disabled:opacity-40">Apply changes</button>
             <button onClick={() => setSelected(new Set())} className="ml-auto text-xs text-slate-400">Clear selection</button>
           </div>
         )}
@@ -427,8 +460,8 @@ export default function TaskWorkspaceV2() {
         )}
       </section>
 
-      {activeTask && (
-        <div className="fixed inset-0 z-[80] flex justify-end" role="dialog" aria-modal="true">
+      {activeTask && typeof document !== 'undefined' && createPortal(
+        <div className="fixed inset-0 flex justify-end" style={{ zIndex: 10000 }} role="dialog" aria-modal="true">
           <button className="absolute inset-0 bg-black/60" onClick={() => setActiveId(null)} aria-label="Close task details" />
           <aside className="relative z-10 h-full w-full max-w-2xl bg-[#07111f] border-l border-white/10 shadow-2xl overflow-y-auto">
             <div className="sticky top-0 z-20 bg-[#07111f]/95 backdrop-blur border-b border-white/10 px-5 py-4">
@@ -471,10 +504,11 @@ export default function TaskWorkspaceV2() {
               </div>}
             </div>
           </aside>
-        </div>
+        </div>,
+        document.body
       )}
 
-      <LogModal isOpen={Boolean(logTask)} onClose={() => setLogTask(null)} onSubmit={submitLog} task={logTask} mode={logMode} />
+      {typeof document !== 'undefined' && createPortal(<LogModal isOpen={Boolean(logTask)} onClose={() => setLogTask(null)} onSubmit={submitLog} task={logTask} mode={logMode} />, document.body)}
     </div>
   );
 }
