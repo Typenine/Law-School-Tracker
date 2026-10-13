@@ -252,7 +252,23 @@ export default function TaskWorkspaceV2() {
 
   async function saveChecklist(items: ChecklistItem[]) {
     if (!activeTask) return;
-    await mutate('Checklist updated.', () => apiFetch(`/api/tasks/${activeTask.id}/checklist`, { method: 'PUT', body: { items } }));
+    const taskId = activeTask.id;
+    const original = activeTask.checklist;
+    // Controlled checkboxes must reflect the click immediately while the
+    // server save runs; otherwise their state snaps back to unchecked.
+    setData(prev => prev ? {
+      ...prev, tasks: prev.tasks.map(task => task.id === taskId
+        ? { ...task, checklist: items, checklistPercent: items.length ? Math.round(items.filter(item => item.done).length / items.length * 100) : 0 }
+        : task),
+    } : prev);
+    try {
+      await apiFetch(`/api/tasks/${taskId}/checklist`, { method: 'PUT', body: { items } });
+      notifyTasksChanged();
+      await refresh();
+    } catch (e: any) {
+      setData(prev => prev ? { ...prev, tasks: prev.tasks.map(task => task.id === taskId ? { ...task, checklist: original } : task) } : prev);
+      notifyToast({ kind: 'error', message: e?.message || 'Unable to update checklist.' });
+    }
   }
 
   async function addChecklist() {
