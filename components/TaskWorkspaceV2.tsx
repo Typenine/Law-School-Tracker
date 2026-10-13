@@ -508,7 +508,7 @@ export default function TaskWorkspaceV2() {
         document.body
       )}
 
-      <LogModal isOpen={Boolean(logTask)} onClose={() => setLogTask(null)} onSubmit={submitLog} task={logTask} mode={logMode} />
+      {typeof document !== 'undefined' && createPortal(<LogModal isOpen={Boolean(logTask)} onClose={() => setLogTask(null)} onSubmit={submitLog} task={logTask} mode={logMode} />, document.body)}
     </div>
   );
 }
