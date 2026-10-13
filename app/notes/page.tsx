@@ -130,6 +130,9 @@ export default function NotesPage() {
   const [booted, setBooted] = useState(false);
   const [dirty, setDirty] = useState(false);
   const [saveState, setSaveState] = useState<'idle' | 'saving' | 'saved' | 'error'>('idle');
+  const [historyOpen, setHistoryOpen] = useState(false);
+  const [historyVersions, setHistoryVersions] = useState<Array<{ bucket: string; title: string; savedAt: string }>>([]);
+  const [historyLoading, setHistoryLoading] = useState(false);
   const [error, setError] = useState('');
   /** A save that was refused, holding both versions so either can be kept. */
   const [conflict, setConflict] = useState<{ theirs: Page; myHtml: string; myTitle: string } | null>(null);
@@ -1195,6 +1198,40 @@ export default function NotesPage() {
     }
   }
 
+  async function viewEditHistory() {
+    const current = draftRef.current;
+    if (!current) return;
+    if (dirtyRef.current) await savePage(true);
+    setHistoryOpen(true);
+    setHistoryLoading(true);
+    try {
+      const response = await api(`/api/notes/${encodeURIComponent(current.id)}/history`);
+      setHistoryVersions(response.versions || []);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Unable to open edit history.');
+    } finally { setHistoryLoading(false); }
+  }
+
+  async function restoreEditHistory(bucket: string) {
+    const current = draftRef.current;
+    if (!current) return;
+    if (!await ask('Restore this revision?', 'The selected revision will replace the editor contents. Your current saved text will remain available in edit history.', 'Restore revision')) return;
+    try {
+      if (dirtyRef.current) await savePage(true);
+      const response = await api(`/api/notes/${encodeURIComponent(current.id)}/history`, {
+        method: 'POST', body: JSON.stringify({ bucket }),
+      });
+      const revision = response.revision;
+      if (!revision || typeof revision.contentHtml !== 'string') throw new Error('Invalid revision data.');
+      htmlRef.current = revision.contentHtml;
+      patchDraft({ title: revision.title, contentHtml: revision.contentHtml });
+      setHistoryOpen(false);
+      await savePage(true);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Unable to restore revision.');
+    }
+  }
+
   function patchDraft(patch: Partial<Page>) {
     revisionRef.current += 1;
     dirtyRef.current = true;
@@ -2025,9 +2062,27 @@ export default function NotesPage() {
                       >
                         Outline
                       </button>
+                      <button type="button" className="nb-chip" onClick={() => void viewEditHistory()}>Edit history</button>
                       <button type="button" className="nb-chip" onClick={() => void savePage(true)}>Save now</button>
                     </div>
                   </div>
+
+                  {historyOpen && (
+                    <div className="nb-details" role="region" aria-label="Note edit history">
+                      <div className="flex items-center justify-between gap-3">
+                        <strong>Previous saved versions</strong>
+                        <button type="button" className="nb-chip" onClick={() => setHistoryOpen(false)}>Close</button>
+                      </div>
+                      <p className="text-xs text-slate-400">A recovery snapshot is kept approximately every 15 minutes when changes are saved. Up to 50 versions are retained.</p>
+                      {historyLoading ? <p>Loading history…</p> : historyVersions.length ? (
+                        <div className="flex flex-wrap gap-2">
+                          {historyVersions.map(version => <button type="button" className="nb-chip" key={version.bucket} onClick={() => void restoreEditHistory(version.bucket)}>
+                            {new Date(version.savedAt).toLocaleString()} · {version.title}
+                          </button>)}
+                        </div>
+                      ) : <p>No earlier saved versions yet.</p>}
+                    </div>
+                  )}
 
                   {showDetails && (
                     <div className="nb-details">
