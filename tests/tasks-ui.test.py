@@ -57,6 +57,8 @@ task = request_json("POST", "/api/tasks", {
 with sync_playwright() as p:
     browser = p.chromium.launch()
     page = browser.new_page(viewport={"width": 1440, "height": 1000})
+    page.on("pageerror", lambda e: print("BROWSER PAGEERROR:", str(e), flush=True))
+    page.on("console", lambda m: print("BROWSER CONSOLE ERROR:", m.text, flush=True) if m.type == "error" else None)
     page.goto(BASE + "/tasks", wait_until="networkidle")
 
     expect(page.get_by_text("Task workspace", exact=True)).to_be_visible()
