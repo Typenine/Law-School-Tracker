@@ -89,7 +89,7 @@ export default function PlannerBoard() {
   }, []);
 
   // Planned study minutes from Schedule (read-only)
-  const { blocks } = useSchedule();
+  const { blocks, setBlocks } = useSchedule();
   const plannedByKey = useMemo(() => {
     const m: Record<string, number> = Object.fromEntries(days.map(d => [d.key, 0] as const));
     for (const b of (blocks || [])) { if (m[b.day] !== undefined) m[b.day] += b.plannedMinutes || 0; }
