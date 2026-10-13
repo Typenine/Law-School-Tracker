@@ -153,7 +153,7 @@ export default function LogModal({ isOpen, onClose, onSubmit, task, mode, defaul
   };
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center" role="dialog" aria-modal="true">
+    <div className="fixed inset-0 flex items-center justify-center" style={{ zIndex: 20000 }} role="dialog" aria-modal="true">
       <div className="absolute inset-0 bg-black/70" onClick={onClose} />
       <div className="relative z-10 w-[95vw] max-w-md bg-[#0f172a] border border-white/10 rounded-lg shadow-xl">
         {/* Header */}
