@@ -210,7 +210,7 @@ export default function LogPage() {
       const notesL = (s.notes || '').toLowerCase();
       const courseL = (course || '').toLowerCase();
       if (courseL.includes('sports law review') || /\bslr\b/i.test(s.notes || '')) course = 'Sports Law Review';
-      out.push({ id: s.id, when, ymd, minutes: Number(s.minutes)||0, course: course||'', activity: activityLabel(s.activity), focus: (typeof s.focus==='number'? s.focus : null), notes: s.notes ?? null });
+      out.push({ id: s.id, when, ymd, minutes: Number(s.minutes)||0, course: course||'', activity: activityLabel(s.activity), focus: (typeof s.focus==='number'? s.focus : null), notes: (s.notes || '').replace(/^\s*\[[^\]]+\]\s*/, '') || null });
     }
     out.sort((a,b) => b.when.localeCompare(a.when));
     return out;

@@ -50,7 +50,8 @@ export async function statsNowV2(): Promise<StatsPayload> {
   const byCourseLogged = new Map<string | null, number>();
   for (const session of weekSessions) {
     const task = session.taskId ? taskById.get(String(session.taskId)) : undefined;
-    const course = task?.course ?? null;
+    const loggedSubject = session.notes?.match(/^\s*\[([^\]]+)\]/)?.[1]?.trim() || null;
+    const course = task?.course || loggedSubject || null;
     byCourseLogged.set(course, (byCourseLogged.get(course) || 0) + (session.minutes || 0));
   }
   const courseKeys = new Set([...byCourseEst.keys(), ...byCourseLogged.keys()]);

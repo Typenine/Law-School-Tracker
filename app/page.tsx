@@ -5,6 +5,7 @@ import type { CalendarEvent, Course, StudySession, Task } from "@/lib/types";
 import { apiFetch } from "@/lib/apiClient";
 import LogModal, { type LogSubmitData } from "@/components/LogModal";
 import TodayTaskEditModal from "@/components/TodayTaskEditModal";
+import QuickStudyTimer from "@/components/QuickStudyTimer";
 import { countPages, parsePageRanges } from "@/lib/pageRanges";
 import { notifyTasksChanged, onTasksChanged } from "@/lib/taskBus";
 import { notifySessionsChanged } from "@/lib/sessionsBus";
@@ -625,6 +626,7 @@ export default function TodayPage() {
       `}</style>
 
       <div className="flex flex-wrap items-center justify-end gap-2 mb-3"><button type="button" className="dash-secondary text-xs" onClick={() => setCustomizing(v => !v)}>Customize dashboard</button>{customizing && <div className="flex flex-wrap gap-3 text-xs">{([["classes","Classes"],["due","Due soon"],["reviews","Spaced review"],["countdown","Countdown"],["summary","Daily statistics"]] as const).map(([key,label]) => <div key={key} className="flex items-center gap-1"><label className="flex items-center gap-1"><input type="checkbox" checked={dashboardSections[key]} onChange={() => void toggleDashboardSection(key)} />{label}</label>{key !== 'summary' && <><button type="button" title="Move up" aria-label={`Move ${label} up`} disabled={dashboardOrder.indexOf(key) === 0} onClick={() => void moveDashboardSection(key,-1)}>↑</button><button type="button" title="Move down" aria-label={`Move ${label} down`} disabled={dashboardOrder.indexOf(key) === 3} onClick={() => void moveDashboardSection(key,1)}>↓</button></>}</div>)}</div>}</div>
+      <QuickStudyTimer courses={courses} />
       {loading ? <div className="loading-dash">Loading today’s plan…</div> : (
         <div className="today-grid">
           <section className="today-main">
