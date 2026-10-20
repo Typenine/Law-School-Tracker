@@ -42,6 +42,8 @@ function normCourseKey(name?: string | null): string {
 function activityLabel(a?: string | null): string {
   const x = (a || '').toLowerCase();
   if (x === 'reading') return 'Reading';
+  if (x === 'assignment') return 'Assignment';
+  if (x === 'exam-prep') return 'Exam prep';
   if (x === 'review') return 'Review';
   if (x === 'outline') return 'Outline';
   if (x === 'practice') return 'Practice';
@@ -136,6 +138,7 @@ export default function LogPage() {
         focus: s.focus,
         notes: s.notes,
         activity: s.activity,
+        semester: s.semester || null,
         pagesRead: s.pagesRead,
       } });
       try { notifySessionsChanged(); } catch {}
@@ -195,7 +198,7 @@ export default function LogPage() {
     };
   }, [courses]);
 
-  type Row = { id: string; when: string; ymd: string; minutes: number; course: string; activity: string; focus: number | null; notes: string | null };
+  type Row = { id: string; when: string; ymd: string; minutes: number; course: string; semester: string | null; activity: string; focus: number | null; notes: string | null };
   const rows: Row[] = useMemo(() => {
     const out: Row[] = [];
     for (const s of (sessions||[])) {
@@ -210,7 +213,7 @@ export default function LogPage() {
       const notesL = (s.notes || '').toLowerCase();
       const courseL = (course || '').toLowerCase();
       if (courseL.includes('sports law review') || /\bslr\b/i.test(s.notes || '')) course = 'Sports Law Review';
-      out.push({ id: s.id, when, ymd, minutes: Number(s.minutes)||0, course: course||'', activity: activityLabel(s.activity), focus: (typeof s.focus==='number'? s.focus : null), notes: (s.notes || '').replace(/^\s*\[[^\]]+\]\s*/, '') || null });
+      out.push({ id: s.id, when, ymd, minutes: Number(s.minutes)||0, course: course||'', semester: s.semester || null, activity: activityLabel(s.activity), focus: (typeof s.focus==='number'? s.focus : null), notes: (s.notes || '').replace(/^\s*\[[^\]]+\]\s*/, '') || null });
     }
     out.sort((a,b) => b.when.localeCompare(a.when));
     return out;
@@ -391,6 +394,9 @@ export default function LogPage() {
             <select id="f-activity" value={activity} onChange={e=>setActivity(e.target.value)} className="w-full bg-[#0b1020] border border-[#1b2344] rounded px-2 py-1.5 text-sm">
               <option value="all">All</option>
               <option value="reading">Reading</option>
+              <option value="assignment">Assignment</option>
+              <option value="exam-prep">Exam prep</option>
+              <option value="research">Research</option>
               <option value="review">Review</option>
               <option value="outline">Outline</option>
               <option value="practice">Practice</option>
@@ -450,7 +456,7 @@ export default function LogPage() {
                     <td className="py-2 pr-3">
                       <div className="flex items-center gap-2">
                         {r.course ? <span className="inline-block w-2.5 h-2.5 rounded-full flex-shrink-0" style={{ backgroundColor: colorForCourse(r.course) }} /> : null}
-                        <span className="truncate max-w-[140px]">{r.course || '—'}</span>
+                        <span className="min-w-0"><span className="block truncate max-w-[140px]">{r.course || '—'}</span>{r.semester ? <span className="block text-xs text-slate-400">{r.semester}</span> : null}</span>
                       </div>
                     </td>
                     <td className="py-2 pr-3">
@@ -504,6 +510,9 @@ export default function LogPage() {
                 <select value={editActivity} onChange={e=>setEditActivity(e.target.value)} className="w-full bg-[#0b1020] border border-[#1b2344] rounded px-3 py-2">
                   <option value="">—</option>
                   <option value="reading">Reading</option>
+              <option value="assignment">Assignment</option>
+              <option value="exam-prep">Exam prep</option>
+              <option value="research">Research</option>
                   <option value="review">Review</option>
                   <option value="outline">Outline</option>
                   <option value="practice">Practice</option>

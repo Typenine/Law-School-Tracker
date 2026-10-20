@@ -24,6 +24,7 @@ export async function POST(req: NextRequest) {
     outlinePages: z.number().int().min(0).optional().nullable(),
     practiceQs: z.number().int().min(0).optional().nullable(),
     activity: z.string().max(32).optional().nullable(),
+    semester: z.string().max(100).optional().nullable(),
   });
   const parsed = schema.safeParse(await req.json());
   if (!parsed.success) return new Response('Invalid session body', { status: 400 });
@@ -38,6 +39,7 @@ export async function POST(req: NextRequest) {
     outlinePages: body.outlinePages ?? null,
     practiceQs: body.practiceQs ?? null,
     activity: body.activity ?? null,
+    semester: body.semester ?? null,
   });
   return Response.json({ session: s }, { status: 201 });
 }

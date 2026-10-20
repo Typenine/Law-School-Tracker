@@ -192,6 +192,15 @@ export default function TodayPage() {
   const [dashboardSections, setDashboardSections] = useState<Record<string, boolean>>({ classes: true, due: true, reviews: true, countdown: true, summary: true });
   const [customizing, setCustomizing] = useState(false);
   const [dashboardOrder, setDashboardOrder] = useState(['classes', 'due', 'reviews', 'countdown']);
+  const timerPlacement = (['before-up-next','after-up-next','after-task-list','sidebar'].includes(settings.quickStudyTimerPlacementV1)
+    ? settings.quickStudyTimerPlacementV1 : 'after-task-list') as 'before-up-next'|'after-up-next'|'after-task-list'|'sidebar';
+  async function updateTimerPlacement(next: typeof timerPlacement) {
+    const previous = settings;
+    setSettings(current => ({ ...current, quickStudyTimerPlacementV1: next }));
+    try { await apiFetch('/api/settings', { method: 'PATCH', body: { quickStudyTimerPlacementV1: next } }); }
+    catch { setSettings(previous); }
+  }
+
   useEffect(() => {
     let active = true;
     apiFetch<{settings: Record<string, unknown>}>('/api/settings?keys=dashboardSectionsV1,dashboardOrderV1').then(data => {
@@ -626,10 +635,10 @@ export default function TodayPage() {
       `}</style>
 
       <div className="flex flex-wrap items-center justify-end gap-2 mb-3"><button type="button" className="dash-secondary text-xs" onClick={() => setCustomizing(v => !v)}>Customize dashboard</button>{customizing && <div className="flex flex-wrap gap-3 text-xs">{([["classes","Classes"],["due","Due soon"],["reviews","Spaced review"],["countdown","Countdown"],["summary","Daily statistics"]] as const).map(([key,label]) => <div key={key} className="flex items-center gap-1"><label className="flex items-center gap-1"><input type="checkbox" checked={dashboardSections[key]} onChange={() => void toggleDashboardSection(key)} />{label}</label>{key !== 'summary' && <><button type="button" title="Move up" aria-label={`Move ${label} up`} disabled={dashboardOrder.indexOf(key) === 0} onClick={() => void moveDashboardSection(key,-1)}>↑</button><button type="button" title="Move down" aria-label={`Move ${label} down`} disabled={dashboardOrder.indexOf(key) === 3} onClick={() => void moveDashboardSection(key,1)}>↓</button></>}</div>)}</div>}</div>
-      <QuickStudyTimer courses={courses} />
       {loading ? <div className="loading-dash">Loading today’s plan…</div> : (
         <div className="today-grid">
           <section className="today-main">
+            {timerPlacement === 'before-up-next' && <QuickStudyTimer courses={courses} placement={timerPlacement} onPlacementChange={updateTimerPlacement} />}
             {upTask && upNext ? (
               <article className="dash-card up-card">
                 <div className="up-line">
@@ -664,6 +673,7 @@ export default function TodayPage() {
               </article>
             ) : <article className="dash-card empty-dash">Nothing is planned for today. Add a task or build the week plan to populate this dashboard.</article>}
 
+            {timerPlacement === 'after-up-next' && <QuickStudyTimer courses={courses} placement={timerPlacement} onPlacementChange={updateTimerPlacement} />}
             <div className="section-heading"><h2>Then today</h2><span>{thenToday.length} remaining · {compactMinutes(thenToday.reduce((sum, item) => sum + item.minutes, 0))}</span></div>
             <div className="dash-card task-stack">
               {thenToday.length ? thenToday.map(({ task, minutes }) => {
@@ -680,6 +690,7 @@ export default function TodayPage() {
               }) : <div className="empty-dash">No other tasks are planned today.</div>}
             </div>
 
+            {timerPlacement === 'after-task-list' && <QuickStudyTimer courses={courses} placement={timerPlacement} onPlacementChange={updateTimerPlacement} />}
             {dashboardSections.summary && <div className="summary-grid">
               <article className="dash-card summary-card"><div className="dash-eyebrow">Planned today</div><div className="summary-value">{compactMinutes(plannedToday)}</div><div className="summary-copy">of {compactMinutes(availableToday)} available</div></article>
               <article className="dash-card summary-card"><div className="dash-eyebrow">Logged today</div><div className="summary-value green">{compactMinutes(loggedToday)}</div><div className="summary-copy">{compactMinutes(leftToday)} still planned</div></article>
@@ -688,6 +699,7 @@ export default function TodayPage() {
           </section>
 
           <aside className="today-rail">
+            {timerPlacement === 'sidebar' && <QuickStudyTimer courses={courses} placement={timerPlacement} onPlacementChange={updateTimerPlacement} />}
             {dashboardSections.classes && <article className="dash-card rail-card" style={{ order: dashboardOrder.indexOf('classes') }}>
               <div className="dash-eyebrow">Classes today</div>
               {classesToday.length ? classesToday.map((row, index) => <div className="class-row" key={`${row.course.id}-${row.start}-${index}`}><div className="class-time">{row.start}</div><div><div className="class-name">{row.course.title}</div>{row.location ? <div className="class-location">{row.location}</div> : null}</div></div>) : <div className="empty-dash">No classes scheduled today.</div>}

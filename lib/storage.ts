@@ -50,7 +50,7 @@ async function mutateJson<T>(fn: (db: JsonStore) => T | Promise<T>): Promise<T> 
   });
 }
 
-export async function updateSession(id: string, patch: Partial<Pick<StudySession, 'when'|'minutes'|'focus'|'notes'|'pagesRead'|'outlinePages'|'practiceQs'|'activity'>>): Promise<StudySession | null> {
+export async function updateSession(id: string, patch: Partial<Pick<StudySession, 'when'|'minutes'|'focus'|'notes'|'pagesRead'|'outlinePages'|'practiceQs'|'activity'|'semester'>>): Promise<StudySession | null> {
   if (DB_URL) {
     const p = getPool();
     const fields: string[] = []; const values: any[] = []; let idx = 1;
@@ -63,18 +63,19 @@ export async function updateSession(id: string, patch: Partial<Pick<StudySession
     if (patch.outlinePages !== undefined) push('outline_pages', patch.outlinePages);
     if (patch.practiceQs !== undefined) push('practice_qs', patch.practiceQs);
     if (patch.activity !== undefined) push('activity', patch.activity);
+    if (patch.semester !== undefined) push('semester', patch.semester);
     if (!fields.length) {
-      const cur = await p.query(`SELECT id, task_id, when_ts, minutes, focus, notes, pages_read, outline_pages, practice_qs, activity, created_at FROM sessions WHERE id=$1`, [id]);
+      const cur = await p.query(`SELECT id, task_id, when_ts, minutes, focus, notes, pages_read, outline_pages, practice_qs, activity, semester, created_at FROM sessions WHERE id=$1`, [id]);
       if (!cur.rowCount) return null;
       const r = cur.rows[0];
-      return { id: r.id, taskId: r.task_id, when: new Date(r.when_ts).toISOString(), minutes: r.minutes, focus: r.focus, notes: r.notes, pagesRead: r.pages_read, outlinePages: r.outline_pages, practiceQs: r.practice_qs, activity: r.activity, createdAt: new Date(r.created_at).toISOString() };
+      return { id: r.id, taskId: r.task_id, when: new Date(r.when_ts).toISOString(), minutes: r.minutes, focus: r.focus, notes: r.notes, pagesRead: r.pages_read, outlinePages: r.outline_pages, practiceQs: r.practice_qs, activity: r.activity, semester: r.semester, createdAt: new Date(r.created_at).toISOString() };
     }
-    const q = `UPDATE sessions SET ${fields.join(', ')} WHERE id = $${idx} RETURNING id, task_id, when_ts, minutes, focus, notes, pages_read, outline_pages, practice_qs, activity, created_at`;
+    const q = `UPDATE sessions SET ${fields.join(', ')} WHERE id = $${idx} RETURNING id, task_id, when_ts, minutes, focus, notes, pages_read, outline_pages, practice_qs, activity, semester, created_at`;
     values.push(id);
     const res = await p.query(q, values);
     if (!res.rowCount) return null;
     const r = res.rows[0];
-    return { id: r.id, taskId: r.task_id, when: new Date(r.when_ts).toISOString(), minutes: r.minutes, focus: r.focus, notes: r.notes, pagesRead: r.pages_read, outlinePages: r.outline_pages, practiceQs: r.practice_qs, activity: r.activity, createdAt: new Date(r.created_at).toISOString() };
+    return { id: r.id, taskId: r.task_id, when: new Date(r.when_ts).toISOString(), minutes: r.minutes, focus: r.focus, notes: r.notes, pagesRead: r.pages_read, outlinePages: r.outline_pages, practiceQs: r.practice_qs, activity: r.activity, semester: r.semester, createdAt: new Date(r.created_at).toISOString() };
   }
   return mutateJson(db => {
     const i = db.sessions.findIndex(s => s.id === id);
@@ -649,6 +650,7 @@ async function applySchema(): Promise<void> {
        activity text,
        created_at timestamptz NOT NULL DEFAULT now()
      )`,
+    `ALTER TABLE sessions ADD COLUMN IF NOT EXISTS semester text`,
     // Ensure focus supports decimals
     `DO $$ BEGIN
        ALTER TABLE sessions ALTER COLUMN focus TYPE double precision USING focus::double precision;
@@ -1099,10 +1101,10 @@ export async function deleteTask(id: string): Promise<boolean> {
 export async function listSessions(overridePool?: Pool): Promise<StudySession[]> {
   if (DB_URL) {
     const p = overridePool || getPool();
-    type SessionRow = { id: string; task_id: string | null; when_ts: Date | string; minutes: number; focus: number | null; notes: string | null; pages_read: number | null; outline_pages: number | null; practice_qs: number | null; activity: string | null; created_at: Date | string };
-    const res = await p.query(`SELECT id, task_id, when_ts, minutes, focus, notes, pages_read, outline_pages, practice_qs, activity, created_at FROM sessions ORDER BY when_ts DESC`);
+    type SessionRow = { semester: string | null; id: string; task_id: string | null; when_ts: Date | string; minutes: number; focus: number | null; notes: string | null; pages_read: number | null; outline_pages: number | null; practice_qs: number | null; activity: string | null; created_at: Date | string };
+    const res = await p.query(`SELECT id, task_id, when_ts, minutes, focus, notes, pages_read, outline_pages, practice_qs, activity, semester, created_at FROM sessions ORDER BY when_ts DESC`);
     const rows = res.rows as unknown as SessionRow[];
-    return rows.map(r => ({ id: r.id, taskId: r.task_id, when: new Date(r.when_ts).toISOString(), minutes: r.minutes, focus: r.focus, notes: r.notes, pagesRead: r.pages_read, outlinePages: r.outline_pages, practiceQs: r.practice_qs, activity: r.activity, createdAt: new Date(r.created_at).toISOString() }));
+    return rows.map(r => ({ id: r.id, taskId: r.task_id, when: new Date(r.when_ts).toISOString(), minutes: r.minutes, focus: r.focus, notes: r.notes, pagesRead: r.pages_read, outlinePages: r.outline_pages, practiceQs: r.practice_qs, activity: r.activity, semester: r.semester, createdAt: new Date(r.created_at).toISOString() }));
   }
   const db = await readJson();
   return db.sessions.sort((a, b) => b.when.localeCompare(a.when));
@@ -1115,13 +1117,13 @@ export async function createSession(input: NewSessionInput): Promise<StudySessio
     const p = getPool();
     const id = uuid();
     const res = await p.query(
-      `INSERT INTO sessions (id, task_id, when_ts, minutes, focus, notes, pages_read, outline_pages, practice_qs, activity, created_at)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)
-       RETURNING id, task_id, when_ts, minutes, focus, notes, pages_read, outline_pages, practice_qs, activity, created_at`,
-      [id, input.taskId ?? null, new Date(whenISO), input.minutes, input.focus ?? null, input.notes ?? null, input.pagesRead ?? null, input.outlinePages ?? null, input.practiceQs ?? null, input.activity ?? null, new Date(now)]
+      `INSERT INTO sessions (id, task_id, when_ts, minutes, focus, notes, pages_read, outline_pages, practice_qs, activity, semester, created_at)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)
+       RETURNING id, task_id, when_ts, minutes, focus, notes, pages_read, outline_pages, practice_qs, activity, semester, created_at`,
+      [id, input.taskId ?? null, new Date(whenISO), input.minutes, input.focus ?? null, input.notes ?? null, input.pagesRead ?? null, input.outlinePages ?? null, input.practiceQs ?? null, input.activity ?? null, input.semester ?? null, new Date(now)]
     );
     const r = res.rows[0];
-    const created: StudySession = { id: r.id, taskId: r.task_id, when: new Date(r.when_ts).toISOString(), minutes: r.minutes, focus: r.focus, notes: r.notes, pagesRead: r.pages_read, outlinePages: r.outline_pages, practiceQs: r.practice_qs, activity: r.activity, createdAt: new Date(r.created_at).toISOString() };
+    const created: StudySession = { id: r.id, taskId: r.task_id, when: new Date(r.when_ts).toISOString(), minutes: r.minutes, focus: r.focus, notes: r.notes, pagesRead: r.pages_read, outlinePages: r.outline_pages, practiceQs: r.practice_qs, activity: r.activity, semester: r.semester, createdAt: new Date(r.created_at).toISOString() };
     try {
       if (input.taskId) {
         const tc = await p.query(`SELECT course FROM tasks WHERE id=$1`, [input.taskId]);
@@ -1131,7 +1133,7 @@ export async function createSession(input: NewSessionInput): Promise<StudySessio
     } catch {}
     return created;
   }
-  const s: StudySession = { id: uuid(), taskId: input.taskId ?? null, when: whenISO, minutes: input.minutes, focus: input.focus ?? null, notes: input.notes ?? null, pagesRead: input.pagesRead ?? null, outlinePages: input.outlinePages ?? null, practiceQs: input.practiceQs ?? null, activity: input.activity ?? null, createdAt: now };
+  const s: StudySession = { id: uuid(), taskId: input.taskId ?? null, when: whenISO, minutes: input.minutes, focus: input.focus ?? null, notes: input.notes ?? null, pagesRead: input.pagesRead ?? null, outlinePages: input.outlinePages ?? null, practiceQs: input.practiceQs ?? null, activity: input.activity ?? null, semester: input.semester ?? null, createdAt: now };
   await mutateJson(db => {
   db.sessions.unshift(s);
   // Recompute learned MPP for the affected course (if any)

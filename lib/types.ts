@@ -189,7 +189,8 @@ export interface StudySession {
   pagesRead?: number | null;
   outlinePages?: number | null;
   practiceQs?: number | null;
-  activity?: string | null; // reading|review|outline|practice|other
+  activity?: string | null; // reading|assignment|review|outline|practice|exam-prep|research|other
+  semester?: string | null; // e.g. Fall 2026
   createdAt: string; // ISO
 }
 
@@ -203,6 +204,7 @@ export interface NewSessionInput {
   outlinePages?: number | null;
   practiceQs?: number | null;
   activity?: string | null;
+  semester?: string | null;
 }
 
 export interface StatsPayload {
