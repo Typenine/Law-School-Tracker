@@ -4,43 +4,71 @@ import { describe, it } from 'node:test';
 import ts from 'typescript';
 const tsSource = readFileSync(new URL('../lib/studyCapacity.ts', import.meta.url), 'utf8');
 const { outputText } = ts.transpileModule(tsSource, { compilerOptions: { module: ts.ModuleKind.ESNext, target: ts.ScriptTarget.ES2022 } });
-const { summarizeStudyDays, addPlannedStudyMinutes } = await import('data:text/javascript;base64,' + Buffer.from(outputText).toString('base64'));
+const { summarizeStudyDays, addPlannedStudyMinutes, dailyStudyCapacity, conflictsForDay, remainingEstimates } = await import('data:text/javascript;base64,' + Buffer.from(outputText).toString('base64'));
 const date = when => when.slice(0, 10);
-const planned = (minutes, taskId='task1') => ({ id: 'b1', day: '2026-10-21', taskId, plannedMinutes: minutes });
-const session = (minutes, taskId='task1', when='2026-10-21T18:00:00Z') => ({ id: 's1', when, taskId, minutes });
-describe('weekly planner remaining capacity', () => {
-  it('reserves planned time before a task is finished', () => {
-    const d = summarizeStudyDays([planned(100)], [], date)['2026-10-21'];
-    assert.deepEqual([d.plannedMinutes,d.loggedMinutes,d.committedMinutes], [100,0,100]);
-    assert.equal(180-d.committedMinutes,80);
+const block = (minutes, taskId='law-task', day='2026-10-21') => ({ id:'block1', day, taskId, plannedMinutes:minutes });
+const session = (minutes, taskId='law-task', when='2026-10-21T18:00:00Z') => ({ id:'session1', taskId, when, minutes });
+const d = (blocks,sessions,remaining={}) => summarizeStudyDays(blocks,sessions,date,remaining)['2026-10-21'];
+
+describe('actual + unfinished time never double counts', () => {
+  it('reserves planned time before work starts',()=>{
+    assert.deepEqual([d([block(100)],[]).loggedMinutes,d([block(100)],[]).remainingPlannedMinutes], [0,100]);
   });
-  it('keeps used time after finishing removes the plan', () => {
-    const d = summarizeStudyDays([], [session(100)], date)['2026-10-21'];
-    assert.deepEqual([d.plannedMinutes,d.loggedMinutes,d.committedMinutes], [0,100,100]);
-    assert.equal(180-d.committedMinutes,80);
+  it('does not restore hours when a finished task disappears from the plan',()=>{
+    const load=d([],[session(100)],{'law-task':0});
+    assert.equal(load.committedMinutes,100);
+    assert.equal(180-load.committedMinutes,80);
   });
-  it('does not double count partially logged time against an existing planned block', () => {
-    const d = summarizeStudyDays([planned(100)], [session(40)], date)['2026-10-21'];
-    assert.deepEqual([d.plannedMinutes,d.loggedMinutes,d.committedMinutes], [100,40,100]);
+  it('handles original unreconciled block after 40 minutes partial progress',()=>{
+    const load=d([block(100)],[session(40)],{'law-task':60});
+    assert.deepEqual([load.loggedMinutes,load.remainingPlannedMinutes,load.committedMinutes],[40,60,100]);
   });
-  it('counts time logged beyond the planned duration', () => {
-    const d = summarizeStudyDays([planned(100)], [session(125)], date)['2026-10-21'];
-    assert.equal(d.committedMinutes,125);
+  it('handles already-reduced block after 40 minutes partial progress',()=>{
+    const load=d([block(60)],[session(40)],{'law-task':60});
+    assert.deepEqual([load.loggedMinutes,load.remainingPlannedMinutes,load.committedMinutes],[40,60,100]);
   });
-  it('counts separate unscheduled sessions and the correct day', () => {
-    const d = summarizeStudyDays([planned(100)], [session(30,null), {...session(60),id:'s2',when:'2026-10-22T18:00:00Z'}], date);
-    assert.equal(d['2026-10-21'].committedMinutes,130);
-    assert.equal(d['2026-10-22'].committedMinutes,60);
+  it('does not subtract unrelated study from pending task allocations',()=>{
+    const load=d([block(60)],[session(40,null)],{'law-task':60});
+    assert.deepEqual([load.loggedMinutes,load.remainingPlannedMinutes,load.committedMinutes],[40,60,100]);
   });
-  it('only increases capacity use beyond existing logged time when adding a plan', () => {
-    const load = summarizeStudyDays([], [session(40)], date)['2026-10-21'];
-    const newPlan = addPlannedStudyMinutes(load,'task1',60);
-    assert.equal(newPlan.committedMinutes,60);
-    assert.equal(addPlannedStudyMinutes(newPlan,'task1',20).committedMinutes,80);
-    assert.equal(load.committedMinutes,40);
+  it('does not count the same logged time twice when the original plan has not been reconciled',()=>{
+    const load=d([block(100)],[session(40)]);
+    assert.deepEqual([load.loggedMinutes,load.remainingPlannedMinutes,load.committedMinutes],[40,60,100]);
   });
-  it('combines two blocks for the same task on one day', () => {
-    const d = summarizeStudyDays([planned(50),{...planned(50),id:'b2'}],[session(70)],date)['2026-10-21'];
-    assert.equal(d.committedMinutes,100);
+  it('accounts for overruns',()=>{
+    const load=d([block(100)],[session(125)],{'law-task':0});
+    assert.equal(load.committedMinutes,125);
+  });
+  it('splits previously logged work from a future scheduled day',()=>{
+    const days=summarizeStudyDays([block(60,'law-task','2026-10-21'),block(40,'law-task','2026-10-22')],[session(40)],date,{'law-task':60});
+    assert.equal(days['2026-10-21'].committedMinutes,60);
+    assert.equal(days['2026-10-22'].remainingPlannedMinutes,40);
+  });
+  it('keeps separate days independent',()=>{
+    const days=summarizeStudyDays([],[session(40),{...session(60),id:'other',when:'2026-10-22T18:00:00Z'}],date);
+    assert.equal(days['2026-10-21'].committedMinutes,40);
+    assert.equal(days['2026-10-22'].committedMinutes,60);
+  });
+  it('projects newly planned work without mutating prior load',()=>{
+    const prior=d([],[session(40)],{'law-task':60});
+    const next=addPlannedStudyMinutes(prior,'law-task',60,{'law-task':60});
+    assert.equal(next.committedMinutes,100);
+    assert.equal(prior.committedMinutes,40);
+  });
+  it('returns zero availability for an explicitly unavailable day',()=>{
+    assert.equal(dailyStudyCapacity(6,{6:0},{},{},[]),0);
+  });
+  it('does not double subtract overlapping class and break times',()=>{
+    const capacity=dailyStudyCapacity(3,{3:240},{3:[{start:'9:00 AM',end:'12:00 PM'}]},
+      {3:[{start:'10:00 AM',end:'11:00 AM'}]},[[10*60+30,11*60+30]]);
+    assert.equal(capacity,90);
+  });
+  it('subtracts class time inside a configured study window',()=>{
+    const courses=[{startDate:'2026-08-25',endDate:'2026-12-01',meetingDays:[3],meetingStart:'10:30',meetingEnd:'11:45'}];
+    const busy=conflictsForDay('2026-10-21',courses,[]);
+    assert.deepEqual(busy,[[630,705]]);
+  });
+  it('uses the task remaining estimates as the source of unfinished work',()=>{
+    assert.deepEqual(remainingEstimates([{id:'a',status:'todo',estimatedMinutes:60},{id:'b',status:'done',estimatedMinutes:30}]),{a:60,b:0});
   });
 });

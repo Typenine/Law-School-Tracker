@@ -1,6 +1,7 @@
 import { randomUUID } from 'crypto';
 import { Pool } from 'pg';
 import type { Course, StudySession, Task, UpdateTaskInput } from './types';
+import { summarizeStudyDays, remainingEstimates, dailyStudyCapacity, conflictsForDay, chicagoStudyDay, type StudyWindow } from './studyCapacity';
 import { countPages, formatPageRanges, parsePageRanges, subtractPages } from './pageRanges';
 import { canonicalPageRanges, courseReadingPace, readingMetrics, taskOriginalRanges, taskRemainingRanges } from './reading';
 import {
@@ -272,41 +273,45 @@ function dateKey(date: Date): string {
   return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')}`;
 }
 
-function atRiskFor(task: Task, blocked: boolean, blockers: Array<{ id: string; title: string }>, remainingMinutes: number, blocks: ScheduleBlockV2[], availability: Record<string, number>): { atRisk: boolean; reason: string | null } {
+function atRiskFor(
+  task: Task, blocked: boolean, blockers: Array<{ id: string; title: string }>,
+  remainingMinutes: number, blocks: ScheduleBlockV2[], sessions: StudySession[], tasks: Task[], courses: Course[],
+  availability: Record<string, number>, windows: Record<string, StudyWindow[]>, breaks: Record<string, StudyWindow[]>,
+): { atRisk: boolean; reason: string | null } {
   if (task.status === 'done' || remainingMinutes <= 0) return { atRisk: false, reason: null };
-  const now = new Date();
-  const due = new Date(task.dueDate);
+  const now = new Date(), due = new Date(task.dueDate);
   if (Number.isNaN(due.getTime())) return { atRisk: false, reason: null };
   if (due.getTime() < now.getTime()) return { atRisk: true, reason: 'Overdue' };
   if (blocked) return { atRisk: true, reason: `Blocked by ${blockers.map(item => item.title).join(', ')}` };
-  const start = new Date(now); start.setHours(0, 0, 0, 0);
-  const end = new Date(due); end.setHours(23, 59, 59, 999);
-  let available = 0;
-  for (let i = 0; i < 60; i++) {
-    const day = new Date(start); day.setDate(start.getDate() + i);
+  const start = new Date(now); start.setHours(0,0,0,0);
+  const end = new Date(due); end.setHours(23,59,59,999);
+  // Only the other tasks' allocations reserve future capacity. All actual
+  // session time (including this task's already-completed work) is occupied.
+  const otherBlocks = blocks.filter(block => String(block.taskId) !== String(task.id));
+  const loads = summarizeStudyDays(otherBlocks, sessions, chicagoStudyDay, remainingEstimates(tasks));
+  let free = 0;
+  for (let i=0; i<60; i++) {
+    const day = new Date(start); day.setDate(start.getDate()+i);
     if (day > end) break;
     const key = dateKey(day);
-    const configured = Number((availability as any)[day.getDay()]);
-    const cap = Number.isFinite(configured) && configured >= 0 ? configured : (day.getDay() === 0 || day.getDay() === 6 ? 90 : 150);
-    const usedOther = blocks
-      .filter(block => block.day === key && String(block.taskId) !== String(task.id))
-      .reduce((sum, block) => sum + Math.max(0, Number(block.plannedMinutes) || 0), 0);
-    available += Math.max(0, cap - usedOther);
+    const capacity = dailyStudyCapacity(day.getDay(), availability, windows, breaks, conflictsForDay(key,courses,tasks));
+    free += Math.max(0, capacity - (loads[key]?.committedMinutes || 0));
   }
-  if (remainingMinutes > available) return { atRisk: true, reason: `Needs ${remainingMinutes} min; about ${available} min is available before the deadline` };
-  return { atRisk: false, reason: null };
+  if (remainingMinutes > free) return { atRisk:true, reason:`Needs ${remainingMinutes} min; ${free} min free before the deadline after logged and planned work` };
+  return { atRisk:false, reason:null };
 }
 
 export async function getTaskWorkspace(): Promise<{ tasks: TaskWorkspaceItem[]; trash: Array<Task & { deletedAt: string }>; summary: Record<string, number> }> {
   await ensureTaskV2Schema();
   const [tasks, sessions, courses, blocks, settings] = await Promise.all([
-    listTasks(), listSessions(), listCourses(), listScheduleBlocks(), getSettings(['availabilityTemplateV1']),
+    listTasks(), listSessions(), listCourses(), listScheduleBlocks(), getSettings(['availabilityTemplateV1','availabilityWindowsV1','availabilityBreaksV1']),
   ]);
   const metaMap = await getMetaMap(tasks.map(task => String(task.id)));
   const taskMap = new Map(tasks.map(task => [String(task.id), task]));
   const availability = settings?.availabilityTemplateV1 && typeof settings.availabilityTemplateV1 === 'object'
-    ? settings.availabilityTemplateV1 as Record<string, number>
-    : {};
+    ? settings.availabilityTemplateV1 as Record<string, number> : {};
+  const windows = (settings?.availabilityWindowsV1 || {}) as Record<string,StudyWindow[]>;
+  const breaks = (settings?.availabilityBreaksV1 || {}) as Record<string,StudyWindow[]>;
   const active: TaskWorkspaceItem[] = [];
   const trash: Array<Task & { deletedAt: string }> = [];
   for (const task of tasks) {
@@ -347,7 +352,7 @@ export async function getTaskWorkspace(): Promise<{ tasks: TaskWorkspaceItem[]; 
     const ownBlocks = (blocks as ScheduleBlockV2[]).filter(block => String(block.taskId) === String(task.id));
     const scored = ownSessions.filter(session => typeof session.focus === 'number');
     const averageFocus = scored.length ? Math.round((scored.reduce((sum, session) => sum + Number(session.focus), 0) / scored.length) * 10) / 10 : null;
-    const risk = workflowState === 'canceled' ? { atRisk: false, reason: null } : atRiskFor(task, blocked, blockers, remainingMinutes, blocks as ScheduleBlockV2[], availability);
+    const risk = workflowState === 'canceled' ? { atRisk: false, reason: null } : atRiskFor(task, blocked, blockers, remainingMinutes, blocks as ScheduleBlockV2[], sessions, tasks, courses, availability, windows, breaks);
     active.push({
       ...task,
       workflowState,

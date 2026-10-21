@@ -9,7 +9,7 @@ import { useSchedule, useAvailability, clearScheduleDirty, isScheduleDirty } fro
 import { apiFetch } from "@/lib/apiClient";
 import { notifyToast } from '@/lib/toastBus';
 import { fallbackCourseColor } from '@/lib/colors';
-import { summarizeStudyDays, addPlannedStudyMinutes } from '@/lib/studyCapacity';
+import { summarizeStudyDays, addPlannedStudyMinutes, remainingEstimates, dailyStudyCapacity, conflictsForDay } from '@/lib/studyCapacity';
 type BacklogItem = {
   id: string;
   title: string;
@@ -400,10 +400,10 @@ export default function WeekPlanPage() {
     };
   }, [courses]);
 
-  // Completed tasks leave the schedule, but their logged time still uses the
-  // day's capacity. Matching planned and logged time is counted just once.
+  const remainingByTask = useMemo(() => remainingEstimates(tasks), [tasks]);
   const studyLoadByDay = useMemo(() =>
-    summarizeStudyDays(blocks, sessions, when => chicagoYmd(new Date(when))), [blocks, sessions]);
+    summarizeStudyDays(blocks, sessions, when => chicagoYmd(new Date(when)), remainingByTask),
+    [blocks, sessions, remainingByTask]);
 
   
 
@@ -462,42 +462,13 @@ export default function WeekPlanPage() {
   }, [days, eventIntervalsByKey]);
 
   const effectiveCapByKey = useMemo(() => {
-    const m: Record<string, number> = {};
-    for (const d of days) {
-      const k = ymd(d); const dow = d.getDay();
-      // Build merged windows and breaks
-      const winIntervals: Array<[number,number]> = (windowsByDow[dow]||[])
-        .map(w => [toMin(normHHMM(w.start||''))??-1, toMin(normHHMM(w.end||''))??-1])
-        .filter(([a,b]) => a>=0 && b>=0 && b>a) as Array<[number,number]>;
-      winIntervals.sort((a,b)=>a[0]-b[0]);
-      const mergedWins: Array<[number,number]> = [];
-      for (const iv of winIntervals) { if (!mergedWins.length || iv[0] > mergedWins[mergedWins.length-1][1]) mergedWins.push([iv[0], iv[1]]); else mergedWins[mergedWins.length-1][1] = Math.max(mergedWins[mergedWins.length-1][1], iv[1]); }
-      const brIntervals: Array<[number,number]> = (breaksByDow[dow]||[])
-        .map(b => [toMin(normHHMM(b.start||''))??-1, toMin(normHHMM(b.end||''))??-1])
-        .filter(([a,b]) => a>=0 && b>=0 && b>a) as Array<[number,number]>;
-      brIntervals.sort((a,b)=>a[0]-b[0]);
-      const mergedBr: Array<[number,number]> = [];
-      for (const iv of brIntervals) { if (!mergedBr.length || iv[0] > mergedBr[mergedBr.length-1][1]) mergedBr.push([iv[0], iv[1]]); else mergedBr[mergedBr.length-1][1] = Math.max(mergedBr[mergedBr.length-1][1], iv[1]); }
-      const evIntervals: Array<[number,number]> = eventIntervalsByKey[k] || [];
-      // Sum W − overlaps(B) − overlaps(E)
-      let total = 0;
-      if (mergedWins.length>0) {
-        for (const [ws,we] of mergedWins) {
-          const base = Math.max(0, we - ws);
-          let overB = 0; for (const [bs,be] of mergedBr) { const sC = Math.max(ws, bs); const eC = Math.min(we, be); if (eC>sC) overB += (eC - sC); }
-          let overE = 0; for (const [es,ee] of evIntervals) { const sC = Math.max(ws, es); const eC = Math.min(we, ee); if (eC>sC) overE += (eC - sC); }
-          total += Math.max(0, base - overB - overE);
-        }
-        m[k] = Math.max(0, total);
-      } else {
-        // Fallback when no explicit windows: subtract total event minutes from availability
-        const availMin = Math.max(0, Number(availability[dow]||0));
-        const evMin = Math.max(0, Number(eventMinutesByKey[k] || 0));
-        m[k] = Math.max(0, availMin - evMin);
-      }
+    const cap: Record<string, number> = {};
+    for (const day of days) {
+      const key = ymd(day);
+      cap[key] = dailyStudyCapacity(day.getDay(), availability, windowsByDow, breaksByDow, conflictsForDay(key, courses, tasks));
     }
-    return m;
-  }, [days, windowsByDow, breaksByDow, availability, eventIntervalsByKey, eventMinutesByKey]);
+    return cap;
+  }, [days, windowsByDow, breaksByDow, availability, courses, tasks]);
 
   const eventsByDay = useMemo(() => {
     const map: Record<string, Array<{ label: string; time?: string; color?: string; s?: number }>> = {};
@@ -583,8 +554,8 @@ export default function WeekPlanPage() {
     for (let i=1;i<=tryDays;i++) {
       const d = new Date(base); d.setDate(d.getDate()+i);
       const k = ymd(d); const dow = d.getDay();
-      const effCap = Math.max(0, Number(availability[dow] || 0));
-      const candidate = addPlannedStudyMinutes(studyLoadByDay[k], b.taskId, b.plannedMinutes);
+      const effCap = effectiveCapByKey[k] ?? dailyStudyCapacity(dow, availability, windowsByDow, breaksByDow, conflictsForDay(k,courses,tasks));
+      const candidate = addPlannedStudyMinutes(studyLoadByDay[k], b.taskId, b.plannedMinutes, remainingByTask);
       if (candidate.committedMinutes <= effCap) {
         setBlocks(prev => prev.map(x => x.id === b.id ? { ...x, day: k } : x));
         return;
@@ -597,7 +568,7 @@ export default function WeekPlanPage() {
   const todayKeyCur = useMemo(() => chicagoYmd(new Date()), []);
   const todayIdxCur = useMemo(() => weekKeysCur.indexOf(todayKeyCur), [weekKeysCur, todayKeyCur]);
   const todayDowCur = useMemo(() => { const [y,m,da]=todayKeyCur.split('-').map(x=>parseInt(x,10)); return new Date(y,(m as number)-1,da).getDay(); }, [todayKeyCur]);
-  const todayCapacityCur = useMemo(() => Math.max(0, Number(availability[todayDowCur]||0)), [availability, todayDowCur]);
+  const todayCapacityCur = useMemo(() => effectiveCapByKey[todayKeyCur] ?? dailyStudyCapacity(todayDowCur, availability, windowsByDow, breaksByDow, conflictsForDay(todayKeyCur,courses,tasks)), [effectiveCapByKey, todayKeyCur, todayDowCur, availability, windowsByDow, breaksByDow, courses, tasks]);
   const remainingTodayCapacityCur = useMemo(() => Math.max(0, todayCapacityCur - (studyLoadByDay[todayKeyCur]?.committedMinutes || 0)), [todayCapacityCur, studyLoadByDay, todayKeyCur]);
   const workdaysLeftCur = useMemo(() => {
     const future = weekKeysCur.slice(Math.max(0, todayIdxCur+1)).filter(k => { const [y,m,da]=k.split('-').map(x=>parseInt(x,10)); const d=new Date(y,(m as number)-1,da); return (availability[d.getDay()]||0) > 0; }).length;
@@ -621,7 +592,7 @@ export default function WeekPlanPage() {
       const horizonEnd = addDaysYmd(today, 13); // 14 days
       const horizonDays: string[] = []; for (let i=0;i<14;i++) horizonDays.push(addDaysYmd(today, i));
       const totalCap: Record<string, number> = {};
-      for (const dk of horizonDays) { const [Y,M,D] = dk.split('-').map(x=>parseInt(x,10)); const dt = new Date(Y,(M as number)-1,D); totalCap[dk] = availability[dt.getDay()] ?? 0; }
+      for (const dk of horizonDays) { const [Y,M,D] = dk.split('-').map(x=>parseInt(x,10)); const dt = new Date(Y,(M as number)-1,D); totalCap[dk] = effectiveCapByKey[dk] ?? dailyStudyCapacity(dt.getDay(),availability,windowsByDow,breaksByDow,conflictsForDay(dk,courses,tasks)); }
       const previewLoad = new Map(horizonDays.map(day => [day, studyLoadByDay[day]]));
       const usedBefore: Record<string, number> = {};
       const capLeft: Record<string, number> = {};
@@ -657,7 +628,7 @@ export default function WeekPlanPage() {
           let chunk = Math.min(rem, left); if (chunk >= 30) chunk = chunk - (chunk % 30); if (chunk < 30) continue;
           const row = proposed.find(r => r.day === dk)!;
           row.items.push({ taskId: t.id, title: t.title, course: t.course || '', minutes: chunk, guessed });
-          const nextLoad = addPlannedStudyMinutes(previewLoad.get(dk), t.id, chunk);
+          const nextLoad = addPlannedStudyMinutes(previewLoad.get(dk), t.id, chunk, remainingByTask);
           previewLoad.set(dk, nextLoad);
           row.usedAfter = nextLoad.committedMinutes;
           capLeft[dk] = Math.max(0, (totalCap[dk] || 0) - row.usedAfter);
@@ -733,6 +704,10 @@ export default function WeekPlanPage() {
       const { minutes, guessed } = estimateMinutesForTask(t);
       const p = (typeof (t as any).pagesRead==='number' && (t as any).pagesRead>0) ? (t as any).pagesRead : null;
       const block: ScheduledBlock = { id: uid(), taskId: t.id, day: ymd(d), plannedMinutes: minutes, guessed, title: t.title, course: displayCourseFor(t) || '', pages: p, priority: t.priority ?? null };
+      const k=ymd(d);
+      const cap=effectiveCapByKey[k] ?? dailyStudyCapacity(d.getDay(),availability,windowsByDow,breaksByDow,conflictsForDay(k,courses,tasks));
+      const projection=addPlannedStudyMinutes(studyLoadByDay[k],t.id,minutes,remainingByTask);
+      if(projection.committedMinutes>cap&&!window.confirm('Exceeds the day’s study hours by '+(projection.committedMinutes-cap)+' minutes. Add anyway?'))return;
       setBlocks(prev => [...prev, block]);
       return;
     }
@@ -740,6 +715,10 @@ export default function WeekPlanPage() {
     const it = backlog.find(x => x.id === id); if (!it) return;
     const { minutes, guessed } = estimateMinutesFor(it);
     const block: ScheduledBlock = { id: uid(), taskId: it.id, day: ymd(d), plannedMinutes: minutes, guessed, title: it.title, course: it.course, pages: it.pages ?? null, priority: it.priority ?? null };
+    const k=ymd(d);
+    const cap=effectiveCapByKey[k] ?? dailyStudyCapacity(d.getDay(),availability,windowsByDow,breaksByDow,conflictsForDay(k,courses,tasks));
+    const projection=addPlannedStudyMinutes(studyLoadByDay[k],it.id,block.plannedMinutes,remainingByTask);
+    if(projection.committedMinutes>cap&&!window.confirm('Exceeds daily capacity by '+(projection.committedMinutes-cap)+' minutes. Add anyway?'))return;
     setBlocks(prev => [...prev, block]);
   }
   function removeBlock(id: string) { setBlocks(prev => prev.filter(b => b.id !== id)); }
@@ -748,9 +727,10 @@ export default function WeekPlanPage() {
     const keys = new Set(days.map(d => ymd(d)));
     const existing = blocks.filter(b => keys.has(b.day));
     const occupied = new Map(days.map(d => [ymd(d), studyLoadByDay[ymd(d)]]));
-    const eff = (d: Date) => effectiveCapByKey[ymd(d)] ?? (availability[d.getDay()] ?? 0);
+    const eff = (d: Date) => effectiveCapByKey[ymd(d)] ?? dailyStudyCapacity(d.getDay(),availability,windowsByDow,breaksByDow,conflictsForDay(ymd(d),courses,tasks));
     const unscheduled = unscheduledSorted.filter(t => !existing.some(b => b.taskId === t.id));
     const nextBlocks: ScheduledBlock[] = [];
+    let skipped = 0;
     for (const t of unscheduled) {
       const { minutes, guessed } = estimateMinutesForTask(t);
       const dueY = chicagoYmd(new Date(t.dueDate));
@@ -760,32 +740,14 @@ export default function WeekPlanPage() {
         const k = ymd(d);
         if (k > dueY) continue;
         const cap = eff(d);
-        const candidate = addPlannedStudyMinutes(occupied.get(k), t.id, minutes);
+        const candidate = addPlannedStudyMinutes(occupied.get(k), t.id, minutes, remainingByTask);
         if (candidate.committedMinutes <= cap) { nextBlocks.push({ id: uid(), taskId: t.id, day: k, plannedMinutes: minutes, guessed, title: t.title, course: t.course || '', pages: (typeof (t as any).pagesRead==='number' && (t as any).pagesRead>0)? (t as any).pagesRead : null, priority: t.priority ?? null }); occupied.set(k, candidate); placed = true; break; }
       }
-      // if not placed before due date, choose best remaining before due date if any, else best overall
-      if (!placed) {
-        let bestDay: Date | null = null; let bestRem = -Infinity;
-        for (const d of days) { const k = ymd(d); if (k > dueY) continue; const cap = eff(d); const rem = cap - addPlannedStudyMinutes(occupied.get(k), t.id, minutes).committedMinutes; if (rem > bestRem) { bestRem = rem; bestDay = d; } }
-        if (bestDay) {
-          const k = ymd(bestDay);
-          nextBlocks.push({ id: uid(), taskId: t.id, day: k, plannedMinutes: minutes, guessed, title: t.title, course: t.course || '', pages: (typeof (t as any).pagesRead==='number' && (t as any).pagesRead>0)? (t as any).pagesRead : null, priority: t.priority ?? null });
-          occupied.set(k, addPlannedStudyMinutes(occupied.get(k), t.id, minutes));
-          placed = true;
-        }
-      }
-      // final fallback: any day in week with most remaining
-      if (!placed) {
-        let bestDay: Date | null = null; let bestRem = -Infinity;
-        for (const d2 of days) { const k2 = ymd(d2); const cap2 = eff(d2); const rem2 = cap2 - addPlannedStudyMinutes(occupied.get(k2), t.id, minutes).committedMinutes; if (rem2 > bestRem) { bestRem = rem2; bestDay = d2; } }
-        if (bestDay) {
-          const k2 = ymd(bestDay);
-          nextBlocks.push({ id: uid(), taskId: t.id, day: k2, plannedMinutes: minutes, guessed, title: t.title, course: t.course || '', pages: (typeof (t as any).pagesRead==='number' && (t as any).pagesRead>0)? (t as any).pagesRead : null, priority: t.priority ?? null });
-          occupied.set(k2, addPlannedStudyMinutes(occupied.get(k2), t.id, minutes));
-        }
-      }
+      // No silent overflow: leave tasks unscheduled if capacity is exhausted.
+      if (!placed) skipped++;
     }
     if (nextBlocks.length) setBlocks(prev => [...prev, ...nextBlocks]);
+    if (skipped) notifyToast({ kind: 'warning', message: skipped + ' task' + (skipped===1?'':'s') + ' could not fit without exceeding your study hours. Try Catch-Up or change availability.' });
   }
 function toMin(hhmm?: string | null): number | null { if (!hhmm) return null; const m=/^(\d{2}):(\d{2})$/.exec(hhmm); if(!m) return null; const h=parseInt(m[1],10), mi=parseInt(m[2],10); if(isNaN(h)||isNaN(mi)) return null; return h*60+mi; }
 function minutesToHHMM(mins: number): string { const m = ((mins % 1440) + 1440) % 1440; const h = Math.floor(m/60); const mi = m % 60; return `${String(h).padStart(2,'0')}:${String(mi).padStart(2,'0')}`; }
@@ -1022,10 +984,12 @@ function shiftWeek(delta: number) {
             const planned = load?.plannedMinutes || 0;
             const logged = load?.loggedMinutes || 0;
             const committed = load?.committedMinutes || 0;
+            const stillPlanned = load?.remainingPlannedMinutes || 0;
             const cap = effectiveCapByKey[k] ?? (availability[d.getDay()] ?? 0);
             const left = Math.max(0, cap - committed);
             const overBy = Math.max(0, committed - cap);
-            const pct = cap>0 ? Math.min(100, Math.round((committed/cap)*100)) : (committed>0?100:0);
+            const completedPct = cap>0 ? Math.min(100,Math.round(100*logged/cap)) : 0;
+            const scheduledPct = cap>0 ? Math.max(0,Math.min(100-completedPct,Math.round(100*stillPlanned/cap))) : 0;
             const dayBlocks = blocks.filter(b => b.day === k);
             return (
               <div key={k} className={`rounded border ${overBy>0?'border-rose-600':'border-[#1b2344]'} p-3 min-h-[220px]`} onDragOver={(e)=>e.preventDefault()} onDrop={(e)=>onDropDay(e,d)} role="listbox" aria-label={`Planned items for ${dayLabel(d)}`}>
@@ -1036,10 +1000,13 @@ function shiftWeek(delta: number) {
                   </div>
                 </div>
                 <div className="h-2 w-full bg-[#0b1020] border border-[#1b2344] rounded overflow-hidden mb-1" role="progressbar" aria-valuemin={0} aria-valuemax={Math.max(cap,1)} aria-valuenow={Math.min(committed,Math.max(cap,1))} aria-label="Logged and scheduled study minutes">
-                  <div className={`${overBy>0?'bg-rose-600':'bg-emerald-600'}`} style={{ width: `${pct}%`, height: '100%' }} />
+                  <div className="flex h-full w-full">
+                    <div className="bg-emerald-600 h-full" style={{ width: `${completedPct}%` }} />
+                    <div className={`${overBy>0?'bg-rose-600':'bg-blue-500'} h-full`} style={{ width: `${scheduledPct}%` }} />
+                  </div>
                 </div>
-                <div className="text-[10px] text-slate-300/70 mb-1" title="Logged and scheduled time for the same task overlap and are counted once">{minutesToHM(logged)} logged · {minutesToHM(planned)} planned</div>
-                <div className="text-[10px] text-slate-300/70 mb-2">{minutesToHM(left)} remaining</div>
+                <div className="text-[10px] text-slate-300/70 mb-1">{minutesToHM(logged)} completed · {minutesToHM(stillPlanned)} still planned</div>
+                <div className="text-[10px] text-slate-300/70 mb-2">{minutesToHM(left)} available{planned!==stillPlanned?' · partial progress applied':''}</div>
                 {overBy>0 ? <div className="text-[11px] text-rose-400 mb-2">Over by {minutesToHM(overBy)}</div> : null}
                 
                 <div className="text-xs text-slate-300/70 mb-1">Events</div>

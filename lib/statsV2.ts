@@ -39,7 +39,9 @@ export async function statsNowV2(): Promise<StatsPayload> {
   const weekTodos = tasks.filter(task => task.status !== 'done' && new Date(task.dueDate) >= monday && new Date(task.dueDate) <= sunday);
   const estMinutesThisWeek = weekTodos.reduce((sum, task) => sum + (task.estimatedMinutes || 0), 0);
   const loggedMinutesThisWeek = totalMinutes;
-  const remainingMinutesThisWeek = Math.max(0, estMinutesThisWeek - loggedMinutesThisWeek);
+  // Task estimates are already remaining work, adjusted by partial progress.
+  // Logged study may be unrelated to a task. Never subtract it from outstanding work.
+  const remainingMinutesThisWeek = estMinutesThisWeek;
 
   const taskById = new Map(tasks.map(task => [String(task.id), task]));
   const byCourseEst = new Map<string | null, number>();
@@ -58,7 +60,7 @@ export async function statsNowV2(): Promise<StatsPayload> {
   const courseBreakdown = [...courseKeys].map(course => {
     const estMinutes = byCourseEst.get(course) || 0;
     const loggedMinutes = byCourseLogged.get(course) || 0;
-    return { course, estMinutes, loggedMinutes, remainingMinutes: Math.max(0, estMinutes - loggedMinutes) };
+    return { course, estMinutes, loggedMinutes, remainingMinutes: estMinutes };
   }).sort((a, b) => b.remainingMinutes - a.remainingMinutes);
 
   const start = new Date(now); start.setHours(0, 0, 0, 0);
