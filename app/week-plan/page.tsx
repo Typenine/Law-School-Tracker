@@ -152,7 +152,7 @@ export default function WeekPlanPage() {
   const { blocks, setBlocks, hydrate } = useSchedule();
   const { availability, setAvailability } = useAvailability();
   const [backlog, setBacklog] = useState<BacklogItem[]>([]);
-  const { tasks } = useTasks();
+  const { tasks, loading: tasksLoading, error: tasksError } = useTasks();
   const { sessions } = useSessions();
   const [goals, setGoals] = useState<WeeklyGoal[]>([]);
   const [breaksByDow, setBreaksByDow] = useState<Record<number, Array<{ start?: string; end?: string }>>>({ 0:[],1:[],2:[],3:[],4:[],5:[],6:[] });
@@ -1080,8 +1080,12 @@ function shiftWeek(delta: number) {
             </label>
           </div>
         </div>
-        {noTasksToPlan ? (
-          <div className="rounded border border-dashed border-[#1b2344] p-4 text-sm text-slate-300/80">No todo tasks to plan. Add some in <a href="/tasks" className="underline focus-visible:outline focus-visible:outline-2 focus-visible:outline-blue-500">Tasks</a> and return.</div>
+        {tasksLoading && !tasks.length ? (
+          <div className="rounded border border-[#1b2344] p-4 text-sm text-slate-300/80">Loading your existing tasks…</div>
+        ) : tasksError && !tasks.length ? (
+          <div role="alert" className="rounded border border-rose-700/60 p-4 text-sm text-rose-300">Unable to load tasks: {tasksError}. Your saved tasks have not been deleted. Try refreshing the page.</div>
+        ) : noTasksToPlan ? (
+          <div className="rounded border border-dashed border-[#1b2344] p-4 text-sm text-slate-300/80">No unscheduled tasks match this view. Already-planned tasks are shown in the day cards. You can also turn off the two-week filter.</div>
         ) : (
           <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-2">
             {unscheduledSorted.map(t => (

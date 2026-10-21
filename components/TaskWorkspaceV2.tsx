@@ -147,19 +147,21 @@ export default function TaskWorkspaceV2() {
     setLoading(true);
     setError('');
     try {
-      const [workspace, sessionResponse, notesResponse] = await Promise.all([
-        apiFetch<WorkspaceResponse>('/api/tasks/workspace'),
-        apiFetch<{ sessions: StudySession[] }>('/api/sessions'),
-        apiFetch<{ counts: Record<string, number> }>('/api/notes/by-task').catch(() => ({ counts: {} })),
-      ]);
+      // Load the task list first. Session details and note counts are optional
+      // follow-up requests and should never delay the primary workspace.
+      const workspace = await apiFetch<WorkspaceResponse>('/api/tasks/workspace');
       setData(workspace);
-      setSessions(Array.isArray(sessionResponse?.sessions) ? sessionResponse.sessions : []);
-      setNoteCounts(notesResponse?.counts || {});
       setSelected(prev => new Set(Array.from(prev).filter(id => workspace.tasks.some(task => task.id === id))));
       if (activeId && !workspace.tasks.some(task => task.id === activeId)) setActiveId(null);
+      setLoading(false);
+      void apiFetch<{ sessions: StudySession[] }>('/api/sessions')
+        .then(result => setSessions(Array.isArray(result?.sessions) ? result.sessions : []))
+        .catch(() => undefined);
+      void apiFetch<{ counts: Record<string, number> }>('/api/notes/by-task')
+        .then(result => setNoteCounts(result?.counts || {}))
+        .catch(() => undefined);
     } catch (e: any) {
       setError(e?.message || 'Unable to load tasks.');
-    } finally {
       setLoading(false);
     }
   }
