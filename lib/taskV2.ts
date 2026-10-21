@@ -273,32 +273,50 @@ function dateKey(date: Date): string {
   return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')}`;
 }
 
+type RiskCapacity = {
+  loads: Record<string, ReturnType<typeof summarizeStudyDays>[string]>;
+  dayCapacity: (key: string, dow: number) => number;
+};
+
 function atRiskFor(
-  task: Task, blocked: boolean, blockers: Array<{ id: string; title: string }>,
-  remainingMinutes: number, blocks: ScheduleBlockV2[], sessions: StudySession[], tasks: Task[], courses: Course[],
-  availability: Record<string, number>, windows: Record<string, StudyWindow[]>, breaks: Record<string, StudyWindow[]>,
+  task: Task,
+  blocked: boolean,
+  blockers: Array<{ id: string; title: string }>,
+  remainingMinutes: number,
+  capacity: RiskCapacity,
 ): { atRisk: boolean; reason: string | null } {
   if (task.status === 'done' || remainingMinutes <= 0) return { atRisk: false, reason: null };
-  const now = new Date(), due = new Date(task.dueDate);
+  const now = new Date();
+  const due = new Date(task.dueDate);
   if (Number.isNaN(due.getTime())) return { atRisk: false, reason: null };
   if (due.getTime() < now.getTime()) return { atRisk: true, reason: 'Overdue' };
   if (blocked) return { atRisk: true, reason: `Blocked by ${blockers.map(item => item.title).join(', ')}` };
-  const start = new Date(now); start.setHours(0,0,0,0);
-  const end = new Date(due); end.setHours(23,59,59,999);
-  // Only the other tasks' allocations reserve future capacity. All actual
-  // session time (including this task's already-completed work) is occupied.
-  const otherBlocks = blocks.filter(block => String(block.taskId) !== String(task.id));
-  const loads = summarizeStudyDays(otherBlocks, sessions, chicagoStudyDay, remainingEstimates(tasks));
-  let free = 0;
-  for (let i=0; i<60; i++) {
-    const day = new Date(start); day.setDate(start.getDate()+i);
-    if (day > end) break;
+  const start = new Date(now);
+  start.setHours(0, 0, 0, 0);
+  const last = new Date(due);
+  last.setHours(23, 59, 59, 999);
+  let freeBeforeDeadline = 0;
+  for (let i = 0; i < 60; i++) {
+    const day = new Date(start);
+    day.setDate(start.getDate() + i);
+    if (day > last) break;
     const key = dateKey(day);
-    const capacity = dailyStudyCapacity(day.getDay(), availability, windows, breaks, conflictsForDay(key,courses,tasks));
-    free += Math.max(0, capacity - (loads[key]?.committedMinutes || 0));
+    const load = capacity.loads[key];
+    // Task's own not-yet-completed reservation is still time available for
+    // that task. Work already logged, even for this task, remains occupied.
+    const ownKey = 'task:' + String(task.id);
+    const ownStillScheduled = Math.max(0,
+      (load?.plannedByTask[ownKey] || 0) - (load?.overlapByTask[ownKey] || 0));
+    const remainingOccupiedByOthers = Math.max(0,
+      (load?.committedMinutes || 0) - ownStillScheduled);
+    freeBeforeDeadline += Math.max(0,
+      capacity.dayCapacity(key, day.getDay()) - remainingOccupiedByOthers);
   }
-  if (remainingMinutes > free) return { atRisk:true, reason:`Needs ${remainingMinutes} min; ${free} min free before the deadline after logged and planned work` };
-  return { atRisk:false, reason:null };
+  if (remainingMinutes > freeBeforeDeadline) return {
+    atRisk: true,
+    reason: `Needs ${remainingMinutes} min; ${freeBeforeDeadline} min free before the deadline after logged and planned work`,
+  };
+  return { atRisk: false, reason: null };
 }
 
 export async function getTaskWorkspace(): Promise<{ tasks: TaskWorkspaceItem[]; trash: Array<Task & { deletedAt: string }>; summary: Record<string, number> }> {
@@ -312,6 +330,20 @@ export async function getTaskWorkspace(): Promise<{ tasks: TaskWorkspaceItem[]; 
     ? settings.availabilityTemplateV1 as Record<string, number> : {};
   const windows = (settings?.availabilityWindowsV1 || {}) as Record<string,StudyWindow[]>;
   const breaks = (settings?.availabilityBreaksV1 || {}) as Record<string,StudyWindow[]>;
+  // Build shared capacity once. Previously each task scanned every session and
+  // every calendar conflict again for each date before its deadline.
+  const dayLoads = summarizeStudyDays(blocks as ScheduleBlockV2[], sessions, chicagoStudyDay, remainingEstimates(tasks));
+  const cachedCapacity = new Map<string, number>();
+  const riskCapacity: RiskCapacity = {
+    loads: dayLoads,
+    dayCapacity(key, dow) {
+      const cached = cachedCapacity.get(key);
+      if (cached !== undefined) return cached;
+      const value = dailyStudyCapacity(dow, availability, windows, breaks, conflictsForDay(key, courses, tasks));
+      cachedCapacity.set(key, value);
+      return value;
+    },
+  };
   const active: TaskWorkspaceItem[] = [];
   const trash: Array<Task & { deletedAt: string }> = [];
   for (const task of tasks) {
@@ -352,7 +384,7 @@ export async function getTaskWorkspace(): Promise<{ tasks: TaskWorkspaceItem[]; 
     const ownBlocks = (blocks as ScheduleBlockV2[]).filter(block => String(block.taskId) === String(task.id));
     const scored = ownSessions.filter(session => typeof session.focus === 'number');
     const averageFocus = scored.length ? Math.round((scored.reduce((sum, session) => sum + Number(session.focus), 0) / scored.length) * 10) / 10 : null;
-    const risk = workflowState === 'canceled' ? { atRisk: false, reason: null } : atRiskFor(task, blocked, blockers, remainingMinutes, blocks as ScheduleBlockV2[], sessions, tasks, courses, availability, windows, breaks);
+    const risk = workflowState === 'canceled' ? { atRisk: false, reason: null } : atRiskFor(task, blocked, blockers, remainingMinutes, riskCapacity);
     active.push({
       ...task,
       workflowState,
