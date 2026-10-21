@@ -4,6 +4,26 @@ import { useCallback, useEffect, useState } from "react";
 import type { Task } from "@/lib/types";
 import { onTasksChanged } from "@/lib/taskBus";
 
+// Deduplicate simultaneous requests from Today, Tasks, and Week Plan.
+// A short-lived cache avoids redundant reads during page transitions.
+let taskRequest: Promise<SurfaceTask[]> | null = null;
+let taskCache: { tasks: SurfaceTask[]; at: number } | null = null;
+async function readSharedTasks(force = false): Promise<SurfaceTask[]> {
+  if (!force && taskCache && Date.now() - taskCache.at < 5000) return taskCache.tasks;
+  if (taskRequest) return taskRequest;
+  taskRequest = (async () => {
+    const res = await fetch('/api/tasks/workspace', { cache: 'no-store' });
+    if (!res.ok) throw new Error('Failed to load tasks (' + res.status + ')');
+    const data = await res.json();
+    if (!Array.isArray(data?.tasks)) throw new Error('Invalid task response');
+    const next = data.tasks.filter((task: SurfaceTask) => task?.workflowState !== 'canceled') as SurfaceTask[];
+    taskCache = { tasks: next, at: Date.now() };
+    return next;
+  })().finally(() => { taskRequest = null; });
+  return taskRequest;
+}
+
+
 export type SurfaceTask = Task & {
   workflowState?: 'not-started' | 'in-progress' | 'done' | 'canceled';
   displayState?: 'not-started' | 'in-progress' | 'done' | 'canceled' | 'blocked';
@@ -32,13 +52,7 @@ export function useTasks() {
   const refresh = useCallback(async () => {
     setLoading(true);
     try {
-      const res = await fetch("/api/tasks/workspace", { cache: "no-store" });
-      if (!res.ok) throw new Error("Failed to load tasks");
-      const data = await res.json();
-      const next = Array.isArray(data?.tasks)
-        ? data.tasks.filter((task: SurfaceTask) => task?.workflowState !== 'canceled') as SurfaceTask[]
-        : [];
-      setTasks(next);
+      setTasks(await readSharedTasks());
       setError(null);
     } catch (e: any) {
       setError(e?.message || "Failed to load tasks");
@@ -47,8 +61,8 @@ export function useTasks() {
 
   useEffect(() => {
     void refresh();
-    const off = onTasksChanged(() => { void refresh(); });
-    const id = setInterval(() => { void refresh(); }, 60000);
+    const off = onTasksChanged(() => { taskCache = null; void refresh(); });
+    const id = setInterval(() => { taskCache = null; void refresh(); }, 60000);
     return () => { off(); clearInterval(id); };
   }, [refresh]);
 

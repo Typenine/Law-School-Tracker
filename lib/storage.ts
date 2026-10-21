@@ -50,7 +50,7 @@ async function mutateJson<T>(fn: (db: JsonStore) => T | Promise<T>): Promise<T> 
   });
 }
 
-export async function updateSession(id: string, patch: Partial<Pick<StudySession, 'when'|'minutes'|'focus'|'notes'|'pagesRead'|'outlinePages'|'practiceQs'|'activity'|'semester'>>): Promise<StudySession | null> {
+export async function updateSession(id: string, patch: Partial<Pick<StudySession, 'when'|'minutes'|'focus'|'notes'|'pagesRead'|'outlinePages'|'practiceQs'|'activity'|'semester'|'taskId'>>): Promise<StudySession | null> {
   if (DB_URL) {
     const p = getPool();
     const fields: string[] = []; const values: any[] = []; let idx = 1;
@@ -64,6 +64,7 @@ export async function updateSession(id: string, patch: Partial<Pick<StudySession
     if (patch.practiceQs !== undefined) push('practice_qs', patch.practiceQs);
     if (patch.activity !== undefined) push('activity', patch.activity);
     if (patch.semester !== undefined) push('semester', patch.semester);
+    if (patch.taskId !== undefined) push('task_id', patch.taskId);
     if (!fields.length) {
       const cur = await p.query(`SELECT id, task_id, when_ts, minutes, focus, notes, pages_read, outline_pages, practice_qs, activity, semester, created_at FROM sessions WHERE id=$1`, [id]);
       if (!cur.rowCount) return null;

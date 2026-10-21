@@ -380,6 +380,10 @@ export default function TodayPage() {
     when => chicagoYmd(when),
     taskRemaining,
   )[today], [plannedTasks, sessions, today, taskRemaining]);
+  const completedTodayTasks = useMemo(() => tasks.filter(task => task.status === 'done' && task.completedAt && chicagoYmd(task.completedAt) === today)
+    .sort((a,b) => String(b.completedAt).localeCompare(String(a.completedAt))), [tasks, today]);
+  const completedTodaySessions = useMemo(() => sessions.filter(session => chicagoYmd(session.when || session.createdAt) === today)
+    .sort((a,b) => b.when.localeCompare(a.when)), [sessions, today]);
   const loggedToday = todayLoad?.loggedMinutes || 0;
   const plannedToday = todayLoad?.plannedMinutes || 0;
   const leftToday = todayLoad?.remainingPlannedMinutes || 0;
@@ -700,6 +704,26 @@ export default function TodayPage() {
               }) : <div className="empty-dash">No other tasks are planned today.</div>}
             </div>
 
+            <div className="section-heading"><h2>Completed today</h2><a className="rail-link" href="/log">Study log</a></div>
+            <div className="dash-card p-4 sm:p-5 space-y-3">
+              <div className="flex flex-wrap items-center justify-between gap-2 text-sm text-[#a5c0e4]">
+                <span>{completedTodayTasks.length} task{completedTodayTasks.length===1?'':'s'} finished</span>
+                <span>{completedTodaySessions.length} study session{completedTodaySessions.length===1?'':'s'} · {minutesLabel(loggedToday)} logged</span>
+              </div>
+              {completedTodayTasks.length === 0 && completedTodaySessions.length === 0
+                ? <p className="text-sm text-[#86a4cb]">Nothing logged today yet. Start a timer or finish a task to see progress here.</p>
+                : <>
+                  {completedTodayTasks.slice(0,4).map(task => <div key={task.id} className="flex items-start gap-2 border-t border-[#203451] pt-2 text-sm">
+                    <span className="text-emerald-400" aria-hidden="true">✓</span><div className="min-w-0 flex-1"><div className="text-white break-words">{task.title}</div><div className="text-xs text-[#84a9d5]">{task.course || 'Unassigned'}</div></div>
+                  </div>)}
+                  {completedTodaySessions.slice(0,4).map(session => <div key={session.id} className="flex items-start justify-between gap-2 border-t border-[#203451] pt-2 text-sm">
+                    <div className="min-w-0"><div className="text-[#c8def6] break-words">{session.taskId ? tasks.find(t => t.id===session.taskId)?.title || 'Task study session' : (session.notes?.match(/^\[([^\]]+)\]/)?.[1] || 'Unscheduled study')}</div>
+                    <div className="text-xs text-[#7a9bc6]">{session.activity || 'Study'} · {new Date(session.when).toLocaleTimeString([], {hour:'numeric',minute:'2-digit'})}</div></div>
+                    <span className="shrink-0 tabular-nums text-[#a2c6e8]">{minutesLabel(session.minutes)}</span>
+                  </div>)}
+                  {(completedTodayTasks.length>4 || completedTodaySessions.length>4) && <a className="rail-link" href="/log">View all study sessions</a>}
+                </>}
+            </div>
             {timerPlacement === 'after-task-list' && <QuickStudyTimer courses={courses} placement={timerPlacement} onPlacementChange={updateTimerPlacement} />}
             {dashboardSections.summary && <div className="summary-grid">
               <article className="dash-card summary-card"><div className="dash-eyebrow">Still planned</div><div className="summary-value">{compactMinutes(leftToday)}</div><div className="summary-copy">{compactMinutes(plannedToday)} original work allocation</div></article>

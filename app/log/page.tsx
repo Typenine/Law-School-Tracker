@@ -67,13 +67,27 @@ export default function LogPage() {
   const { tasks, loading: tasksLoading } = useTasks();
   const { courses, loading: coursesLoading } = useCourses();
   const { sessions, refresh: refreshSessions, loading: sessionsLoading } = useSessions();
-  const loading = tasksLoading || coursesLoading || sessionsLoading;
+  const loading = sessionsLoading;
   const [editId, setEditId] = useState<string | null>(null);
   const [editMinutes, setEditMinutes] = useState<string>('');
   const [editFocus, setEditFocus] = useState<string>('');
   const [editNotes, setEditNotes] = useState<string>('');
   const [editActivity, setEditActivity] = useState<string>('');
   const [editPagesRead, setEditPagesRead] = useState<string>('');
+  const [editSemester, setEditSemester] = useState('');
+  const [editTaskId, setEditTaskId] = useState('');
+  const [editSubject, setEditSubject] = useState('');
+  const [semesterFilter, setSemesterFilter] = useState('all');
+  const [currentSemester, setCurrentSemester] = useState('');
+  const semesters = useMemo(() => {
+    const items = new Set<string>();
+    if (currentSemester) items.add(currentSemester);
+    sessions.forEach(s => { if (s.semester) items.add(s.semester); });
+    courses.forEach(c => { if (c.semester && c.year) items.add(c.semester + ' ' + c.year); });
+    return [...items].sort((a,b) => Number(b.match(/\d{4}/)?.[0]||0)-Number(a.match(/\d{4}/)?.[0]||0) || a.localeCompare(b));
+  }, [sessions, courses, currentSemester]);
+  const coursesForSemester = useMemo(() => courses.filter(c => !editSemester || (c.semester + ' ' + c.year)===editSemester), [courses, editSemester]);
+  const linkableTasks = useMemo(() => tasks.filter(t => t.status !== 'done' && (!editSemester || coursesForSemester.some(c => c.title === t.course))), [tasks, editSemester, coursesForSemester]);
   
   // Undo state
   const [undoStack, setUndoStack] = useState<Array<{ type: 'delete'; session: any }>>([]);
@@ -89,6 +103,11 @@ export default function LogPage() {
   const [sortBy, setSortBy] = useState<string>("date_desc");
   const [viewMode, setViewMode] = useState<'table' | 'cards'>('table');
 
+  useEffect(() => {
+    void apiFetch<{ term: { season: string; year: number } }>('/api/semesters/current')
+      .then(data => { if (data.term) setCurrentSemester(data.term.season + ' ' + data.term.year); })
+      .catch(() => undefined);
+  }, []);
   async function refresh() { await refreshSessions(); }
   function uid() { return Math.random().toString(36).slice(2) + Date.now().toString(36); }
 
@@ -100,6 +119,10 @@ export default function LogPage() {
     setEditNotes(s.notes || '');
     setEditActivity(s.activity || '');
     setEditPagesRead(s.pagesRead != null ? String(s.pagesRead) : '');
+    setEditSemester(s.semester || '');
+    setEditTaskId(s.taskId || '');
+    setEditSubject(s.taskId ? '' : extractCourseFromNotes(s.notes) || '');
+    setEditNotes((s.notes || '').replace(/^\s*\[[^\]]+\]\s*/,''));
   }
   
   async function saveEditSession() {
@@ -107,13 +130,24 @@ export default function LogPage() {
     const patch: any = {};
     const m = parseInt(editMinutes || '0', 10); if (!isNaN(m) && m > 0) patch.minutes = m;
     const f = parseFloat(editFocus || ''); if (!isNaN(f)) patch.focus = Math.max(1, Math.min(10, f));
-    patch.notes = editNotes || null;
+    const subject = editTaskId ? '' : editSubject.trim().replace(/[\[\]\r\n]/g,'').slice(0,90);
+    patch.notes = [subject ? '[' + subject + ']' : '', editNotes.trim()].filter(Boolean).join(' ') || null;
     patch.activity = editActivity || null;
+    patch.semester = editSemester || null;
+    patch.taskId = editTaskId || null;
     const pr = parseInt(editPagesRead || '', 10);
     if (!isNaN(pr) && pr >= 0) patch.pagesRead = pr;
-    try { await apiFetch(`/api/sessions/${editId}`, { method:'PATCH', body: patch }); try { notifySessionsChanged(); } catch {} try { notifyToast({ kind: 'success', message: 'Session updated.' }); } catch {} } catch {}
-    setEditId(null); setEditMinutes(''); setEditFocus(''); setEditNotes(''); setEditActivity(''); setEditPagesRead('');
-    await refresh();
+    try {
+      await apiFetch(`/api/sessions/${editId}`, { method:'PATCH', body: patch });
+      notifySessionsChanged();
+      notifyToast({ kind: 'success', message: 'Session updated.' });
+      setEditId(null);
+      setEditMinutes(''); setEditFocus(''); setEditNotes('');
+      setEditActivity(''); setEditPagesRead('');
+      await refresh();
+    } catch (error: any) {
+      notifyToast({ kind: 'error', message: error?.message || 'Unable to save session changes.' });
+    }
   }
 
   async function deleteSession(id: string) {
@@ -223,6 +257,7 @@ export default function LogPage() {
     const minF = minFocus ? Math.max(1, Math.min(10, parseInt(minFocus, 10)||0)) : null;
     const maxF = maxFocus ? Math.max(1, Math.min(10, parseInt(maxFocus, 10)||10)) : null;
     const arr = rows.filter(r => {
+      if (semesterFilter !== 'all' && r.semester !== semesterFilter) return false;
       if (from && r.ymd < from) return false;
       if (to && r.ymd > to) return false;
       if (courseContains && !(r.course||'').toLowerCase().includes(courseContains.toLowerCase())) return false;
@@ -243,7 +278,7 @@ export default function LogPage() {
       return b.when.localeCompare(a.when);
     });
     return arr;
-  }, [rows, from, to, courseContains, activity, minFocus, maxFocus, sortBy]);
+  }, [rows, from, to, courseContains, activity, minFocus, maxFocus, sortBy, semesterFilter]);
 
   const totalMinutes = useMemo(() => filtered.reduce((s,r)=>s+(r.minutes||0), 0), [filtered]);
   
@@ -390,6 +425,13 @@ export default function LogPage() {
             <input id="f-course" placeholder="Filter..." value={courseContains} onChange={e=>setCourseContains(e.target.value)} className="w-full bg-[#0b1020] border border-[#1b2344] rounded px-2 py-1.5 text-sm" />
           </div>
           <div>
+            <label className="block text-xs text-slate-300/70" htmlFor="f-semester">Semester</label>
+            <select id="f-semester" value={semesterFilter} onChange={e => setSemesterFilter(e.target.value)} className="w-full bg-[#0b1020] border border-[#1b2344] rounded px-2 py-1.5 text-sm">
+              <option value="all">All semesters</option>
+              {semesters.map(term => <option key={term} value={term}>{term}{term===currentSemester?' (Current)':''}</option>)}
+            </select>
+          </div>
+          <div>
             <label className="block text-xs text-slate-300/70" htmlFor="f-activity">Activity</label>
             <select id="f-activity" value={activity} onChange={e=>setActivity(e.target.value)} className="w-full bg-[#0b1020] border border-[#1b2344] rounded px-2 py-1.5 text-sm">
               <option value="all">All</option>
@@ -423,7 +465,7 @@ export default function LogPage() {
             </select>
           </div>
           <div className="flex items-end">
-            <button onClick={() => { setCourseContains(''); setActivity('all'); setMinFocus(''); setMaxFocus(''); }} className="px-3 py-1.5 rounded border border-[#1b2344] text-xs w-full">Clear Filters</button>
+            <button onClick={() => { setCourseContains(''); setActivity('all'); setSemesterFilter('all'); setMinFocus(''); setMaxFocus(''); }} className="px-3 py-1.5 rounded border border-[#1b2344] text-xs w-full">Clear Filters</button>
           </div>
         </div>
 
@@ -524,6 +566,26 @@ export default function LogPage() {
                 <input type="number" min={0} value={editPagesRead} onChange={e=>setEditPagesRead(e.target.value)} className="w-full bg-[#0b1020] border border-[#1b2344] rounded px-3 py-2" />
               </div>
             </div>
+            <div>
+              <label className="block text-xs text-slate-300/70 mb-1">Semester</label>
+              <select value={editSemester} onChange={e => { setEditSemester(e.target.value); setEditTaskId(''); }} className="w-full bg-[#0b1020] border border-[#1b2344] rounded px-3 py-2">
+                <option value="">No semester assigned</option>
+                {semesters.map(term => <option key={term} value={term}>{term}{term===currentSemester?' (Current)':''}</option>)}
+              </select>
+            </div>
+            <div>
+              <label className="block text-xs text-slate-300/70 mb-1">Linked assignment (optional)</label>
+              <select value={editTaskId} onChange={e => setEditTaskId(e.target.value)} className="w-full bg-[#0b1020] border border-[#1b2344] rounded px-3 py-2">
+                <option value="">Not linked</option>
+                {tasks.filter(t => t.id===editTaskId || linkableTasks.some(x => x.id===t.id)).map(t => <option key={t.id} value={t.id}>{t.course ? t.course+': ':''}{t.title}</option>)}
+              </select>
+              <p className="text-xs text-slate-400 mt-1">Linking changes the session record only. It does not complete an assignment or change its remaining estimate.</p>
+            </div>
+            {!editTaskId && <div>
+              <label className="block text-xs text-slate-300/70 mb-1">Subject</label>
+              <input list="study-log-courses" value={editSubject} onChange={e => setEditSubject(e.target.value)} className="w-full bg-[#0b1020] border border-[#1b2344] rounded px-3 py-2" placeholder="e.g. Evidence" />
+              <datalist id="study-log-courses">{coursesForSemester.map(c => <option key={c.id} value={c.title}/>)}</datalist>
+            </div>}
             <div>
               <label className="block text-xs text-slate-300/70 mb-1">Notes</label>
               <input value={editNotes} onChange={e=>setEditNotes(e.target.value)} className="w-full bg-[#0b1020] border border-[#1b2344] rounded px-3 py-2" placeholder="Optional notes..." />

@@ -149,7 +149,7 @@ export default function WeekPlanPage() {
     } catch {}
     return saturdayOf(new Date());
   });
-  const { blocks, setBlocks, hydrate } = useSchedule();
+  const { blocks, setBlocks, hydrate, saveStatus } = useSchedule();
   const { availability, setAvailability } = useAvailability();
   const [backlog, setBacklog] = useState<BacklogItem[]>([]);
   const { tasks, loading: tasksLoading, error: tasksError } = useTasks();
@@ -162,6 +162,10 @@ export default function WeekPlanPage() {
   const { courses } = useCourses();
   const [twoWeeksOnly, setTwoWeeksOnly] = useState<boolean>(false);
   const [undoSnapshot, setUndoSnapshot] = useState<ScheduledBlock[] | null>(null);
+  const [undoLabel, setUndoLabel] = useState('');
+  const [availabilityExpanded, setAvailabilityExpanded] = useState(false);
+  const [expandedDay, setExpandedDay] = useState<string | null>(null);
+  function snapshot(label: string) { setUndoSnapshot(blocks.slice()); setUndoLabel(label); }
   const [showCatchup, setShowCatchup] = useState(false);
   const [settingsReady, setSettingsReady] = useState<boolean>(false);
   const [blocksLoaded, setBlocksLoaded] = useState<boolean>(false);
@@ -251,82 +255,9 @@ export default function WeekPlanPage() {
   }, []);
   
   
-  // Debounced server save for blocks
-  // Note: localStorage save happens immediately in setBlocks wrapper
-  useEffect(() => {
-    if (!blocksLoaded) return;
-    const id = setTimeout(() => {
-      apiFetch('/api/schedule', { method: 'PUT', body: { blocks } })
-        .then(() => {
-          // The server now matches what is on screen, so a later load can
-          // safely take the server copy.
-          clearScheduleDirty();
-          const now = Date.now();
-          if (now - (lastSavedToastRef.current || 0) > 5000) {
-            try { notifyToast({ kind: 'success', message: 'Schedule saved.' }); } catch {}
-            lastSavedToastRef.current = now;
-          }
-        })
-        .catch(() => {
-          // Leave the dirty flag set: the next load re-pushes these blocks.
-          try { notifyToast({ kind: 'error', message: 'Schedule could not be saved. It will retry.' }); } catch {}
-        });
-    }, 300);
-    return () => clearTimeout(id);
-  }, [blocks, blocksLoaded]);
-  
-  // Keep a ref to blocks for use in cleanup/unload handlers
-  const blocksRef = useRef(blocks);
-  useEffect(() => { blocksRef.current = blocks; }, [blocks]);
-  // Throttle success toast for debounced saves
-  const lastSavedToastRef = useRef<number>(0);
-  
-  // Immediate save function for page unload/navigation
-  const saveBlocksNow = useCallback(() => {
-    const currentBlocks = blocksRef.current;
-
-    // Always save to localStorage first (most reliable)
-    try { window.localStorage.setItem(LS_SCHEDULE, JSON.stringify(currentBlocks)); } catch {}
-
-    // Then flush to the API. This runs even for an empty week: skipping the
-    // empty case meant "clear this week" never reached the server, so the
-    // cleared blocks came straight back on the next load.
-    const data = JSON.stringify({ blocks: currentBlocks });
-    if (navigator.sendBeacon) {
-      navigator.sendBeacon('/api/schedule', new Blob([data], { type: 'application/json' }));
-    } else {
-      fetch('/api/schedule', {
-        method: 'POST', // Use POST for keepalive compatibility
-        headers: { 'Content-Type': 'application/json' },
-        body: data,
-        keepalive: true,
-      }).catch(() => {});
-    }
-  }, []);
-  
-  // Save on page unload/navigation
-  useEffect(() => {
-    window.addEventListener('beforeunload', saveBlocksNow);
-    window.addEventListener('pagehide', saveBlocksNow);
-    
-    // Also save on visibility change (when user switches tabs/apps)
-    const handleVisibilityChange = () => {
-      if (document.visibilityState === 'hidden') {
-        saveBlocksNow();
-      }
-    };
-    document.addEventListener('visibilitychange', handleVisibilityChange);
-    
-    return () => {
-      // Save on component unmount (client-side navigation)
-      saveBlocksNow();
-      window.removeEventListener('beforeunload', saveBlocksNow);
-      window.removeEventListener('pagehide', saveBlocksNow);
-      document.removeEventListener('visibilitychange', handleVisibilityChange);
-    };
-  }, [saveBlocksNow]);
-  
-  useEffect(() => {
+  // useSchedule owns the only schedule write path. Duplicate writes and
+  // unmount beacons previously raced with newer scheduling changes.
+    useEffect(() => {
     const stored = localYmd(weekStart);
     try { if (typeof window !== 'undefined') window.localStorage.setItem(LS_WEEK_START, stored); } catch {}
     try { void apiFetch('/api/settings', { method: 'PATCH', body: { weekPlanWeekStartYmd: stored } }); } catch {}
@@ -544,7 +475,8 @@ export default function WeekPlanPage() {
   }, [tasks]);
 
   function moveBlockLaterToday(b: ScheduledBlock) {
-    // Reordering on the same day does not use any additional capacity.
+    // Moves to the end of today's list. Does not change the clock time.
+    snapshot('Reorder task');
     setBlocks(prev => [...prev.filter(x => x.day !== b.day), ...prev.filter(x => x.day === b.day && x.id !== b.id), b]);
   }
 
@@ -557,6 +489,7 @@ export default function WeekPlanPage() {
       const effCap = effectiveCapByKey[k] ?? dailyStudyCapacity(dow, availability, windowsByDow, breaksByDow, conflictsForDay(k,courses,tasks));
       const candidate = addPlannedStudyMinutes(studyLoadByDay[k], b.taskId, b.plannedMinutes, remainingByTask);
       if (candidate.committedMinutes <= effCap) {
+        snapshot('Move task to another day');
         setBlocks(prev => prev.map(x => x.id === b.id ? { ...x, day: k } : x));
         return;
       }
@@ -650,13 +583,13 @@ export default function WeekPlanPage() {
         additions.push({ id: uid(), taskId: it.taskId, day: dayRow.day, plannedMinutes: it.minutes, guessed: it.guessed, title: it.title, course: it.course || '', pages: null, priority: null, catchup: true });
       }
     }
-    setUndoSnapshot(prev);
+    snapshot('Apply catch-up');
     setBlocks(prev => [...prev, ...additions]);
     setShowCatchup(false);
     setCatchupPreview(null);
   }
 
-  function undoCatchUp() { if (!undoSnapshot) return; setBlocks(undoSnapshot); setUndoSnapshot(null); }
+  function undoCatchUp() { if (!undoSnapshot) return; setBlocks(undoSnapshot); setUndoSnapshot(null); setUndoLabel(''); }
 
   // Tasks to schedule: from Tasks API (status=todo), excluding tasks already scheduled this week
   const tasksTodo = useMemo(() => (tasks||[]).filter(t => t && t.status === 'todo'), [tasks]);
@@ -708,6 +641,7 @@ export default function WeekPlanPage() {
       const cap=effectiveCapByKey[k] ?? dailyStudyCapacity(d.getDay(),availability,windowsByDow,breaksByDow,conflictsForDay(k,courses,tasks));
       const projection=addPlannedStudyMinutes(studyLoadByDay[k],t.id,minutes,remainingByTask);
       if(projection.committedMinutes>cap&&!window.confirm('Exceeds the day’s study hours by '+(projection.committedMinutes-cap)+' minutes. Add anyway?'))return;
+      snapshot('Schedule task');
       setBlocks(prev => [...prev, block]);
       return;
     }
@@ -719,9 +653,10 @@ export default function WeekPlanPage() {
     const cap=effectiveCapByKey[k] ?? dailyStudyCapacity(d.getDay(),availability,windowsByDow,breaksByDow,conflictsForDay(k,courses,tasks));
     const projection=addPlannedStudyMinutes(studyLoadByDay[k],it.id,block.plannedMinutes,remainingByTask);
     if(projection.committedMinutes>cap&&!window.confirm('Exceeds daily capacity by '+(projection.committedMinutes-cap)+' minutes. Add anyway?'))return;
+    snapshot('Schedule task');
     setBlocks(prev => [...prev, block]);
   }
-  function removeBlock(id: string) { setBlocks(prev => prev.filter(b => b.id !== id)); }
+  function removeBlock(id: string) { snapshot('Remove scheduled task'); setBlocks(prev => prev.filter(b => b.id !== id)); }
 
   function autopackWeek() {
     const keys = new Set(days.map(d => ymd(d)));
@@ -746,7 +681,7 @@ export default function WeekPlanPage() {
       // No silent overflow: leave tasks unscheduled if capacity is exhausted.
       if (!placed) skipped++;
     }
-    if (nextBlocks.length) setBlocks(prev => [...prev, ...nextBlocks]);
+    if (nextBlocks.length) { snapshot('Autopack week'); setBlocks(prev => [...prev, ...nextBlocks]); }
     if (skipped) notifyToast({ kind: 'warning', message: skipped + ' task' + (skipped===1?'':'s') + ' could not fit without exceeding your study hours. Try Catch-Up or change availability.' });
   }
 function toMin(hhmm?: string | null): number | null { if (!hhmm) return null; const m=/^(\d{2}):(\d{2})$/.exec(hhmm); if(!m) return null; const h=parseInt(m[1],10), mi=parseInt(m[2],10); if(isNaN(h)||isNaN(mi)) return null; return h*60+mi; }
@@ -761,7 +696,13 @@ function shiftWeek(delta: number) {
     try { void apiFetch('/api/schedule', { method: 'PUT', body: { blocks } }).then(() => { try { notifyToast({ kind: 'success', message: 'Schedule saved.' }); } catch {} }); } catch {}
     setWeekStart(prev => { const x = new Date(prev); x.setDate(x.getDate() + delta*7); return saturdayOf(x); });
   }
-  function clearThisWeek() { const keys = new Set(days.map(d => ymd(d))); setBlocks(prev => prev.filter(b => !keys.has(b.day))); }
+  function clearThisWeek() {
+    const keys = new Set(days.map(d => ymd(d)));
+    const count = blocks.filter(b => keys.has(b.day)).length;
+    if (!count || !window.confirm(`Remove ${count} scheduled item${count===1?'':'s'} from this week? You can undo this change.`)) return;
+    snapshot('Clear week');
+    setBlocks(prev => prev.filter(b => !keys.has(b.day)));
+  }
   async function promoteWeekToTasks() {
     const keys = new Set(days.map(d => ymd(d))); const batch = blocks.filter(b => keys.has(b.day)); let ok = 0, fail = 0;
     for (const b of batch) {
@@ -788,7 +729,7 @@ function shiftWeek(delta: number) {
 
   return (
     <main className="flex flex-col space-y-6">
-      <section className="card p-6 space-y-4 order-1">
+      <section className="card p-4 sm:p-6 space-y-4 order-1">
         <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
           <div className="flex items-center gap-2">
             <button aria-label="Previous week" onClick={()=>shiftWeek(-1)} className="px-2 py-1 rounded border border-[#1b2344] focus-visible:outline focus-visible:outline-2 focus-visible:outline-emerald-500">◀</button>
@@ -801,14 +742,17 @@ function shiftWeek(delta: number) {
             <button onClick={clearThisWeek} className="px-3 py-2 rounded border border-[#1b2344] text-sm focus-visible:outline focus-visible:outline-2 focus-visible:outline-emerald-500">Clear This Week</button>
             <button onClick={promoteWeekToTasks} className="px-3 py-2 rounded border border-emerald-600 text-emerald-400 text-sm focus-visible:outline focus-visible:outline-2 focus-visible:outline-emerald-500">Promote Week → Tasks</button>
             <button onClick={computeCatchUpPreview} className="px-3 py-2 rounded border border-[#1b2344] text-sm focus-visible:outline focus-visible:outline-2 focus-visible:outline-emerald-500">Catch-Up</button>
-            <button onClick={undoCatchUp} className="px-3 py-2 rounded border border-[#1b2344] text-sm disabled:opacity-50" disabled={!undoSnapshot}>Undo Last</button>
+            <button onClick={undoCatchUp} title={undoLabel ? 'Undo: ' + undoLabel : 'Nothing to undo'} className="px-3 py-2 rounded border border-[#1b2344] text-sm disabled:opacity-50" disabled={!undoSnapshot}>Undo {undoLabel || 'last change'}</button>
+            <span role="status" className={`text-xs ${saveStatus==='error'?'text-rose-300':'text-slate-300'}`}>{saveStatus==='saving'?'Saving…':saveStatus==='error'?'Save failed. Restored previous schedule.':'Saved'}</span>
             <div className="text-xs text-slate-300/80 ml-2">Need ~{minutesToHM(dailyQuotaCur)}/day to hit goal · <button onClick={autopackWeek} className="underline">Autopack</button></div>
           </div>
         </div>
         {/* Compact Availability Summary */}
         <div className="space-y-3">
           <div className="flex flex-wrap items-center justify-between gap-3">
-            <div className="text-sm text-slate-300/70">Weekly Availability</div>
+            <button type="button" onClick={() => setAvailabilityExpanded(v => !v)} aria-expanded={availabilityExpanded} className="text-sm text-slate-200 hover:text-white">
+              Weekly availability <span className="ml-2 text-xs text-slate-400">{availabilityExpanded?'Hide settings':'Edit settings'}</span>
+            </button>
             <div className="flex flex-wrap gap-2 text-xs">
               <button onClick={()=>{ const w = [{ id: uid(), start:'9:00 AM', end:'5:00 PM' }]; setWindowsByDow({ 0:[], 1:w.map(x=>({...x, id:uid()})), 2:w.map(x=>({...x, id:uid()})), 3:w.map(x=>({...x, id:uid()})), 4:w.map(x=>({...x, id:uid()})), 5:w.map(x=>({...x, id:uid()})), 6:[] }); setBreaksByDow({ 0:[],1:[],2:[],3:[],4:[],5:[],6:[] }); }} className="px-2 py-1 rounded border border-emerald-600/50 text-emerald-400 hover:bg-emerald-900/20">9–5 Weekdays</button>
               <button onClick={()=>{ const w = [{ id: uid(), start:'6:00 PM', end:'10:00 PM' }]; setWindowsByDow({ 0:w.map(x=>({...x, id:uid()})), 1:w.map(x=>({...x, id:uid()})), 2:w.map(x=>({...x, id:uid()})), 3:w.map(x=>({...x, id:uid()})), 4:w.map(x=>({...x, id:uid()})), 5:w.map(x=>({...x, id:uid()})), 6:w.map(x=>({...x, id:uid()})) }); setBreaksByDow({ 0:[],1:[],2:[],3:[],4:[],5:[],6:[] }); }} className="px-2 py-1 rounded border border-blue-600/50 text-blue-400 hover:bg-blue-900/20">Evenings</button>
@@ -817,7 +761,7 @@ function shiftWeek(delta: number) {
           </div>
           
           {/* Compact 7-day grid */}
-          <div className="grid grid-cols-7 gap-2">
+          {availabilityExpanded && <div className="grid grid-cols-2 sm:grid-cols-4 lg:grid-cols-7 gap-2">
             {[6,0,1,2,3,4,5].map(dow => {
               const wins = windowsByDow[dow] || [];
               const brks = breaksByDow[dow] || [];
@@ -840,10 +784,10 @@ function shiftWeek(delta: number) {
                 </button>
               );
             })}
-          </div>
+          </div>}
 
           {/* Edit Panel for selected day */}
-          {toolbarMenu && (
+          {availabilityExpanded && toolbarMenu && (
             <div className="rounded-xl border border-white/10 bg-[#0b1020] p-4 space-y-4">
               <div className="flex items-center justify-between">
                 <div className="text-sm font-medium">{['Sunday','Monday','Tuesday','Wednesday','Thursday','Friday','Saturday'][toolbarMenu.dow]} Schedule</div>
@@ -977,7 +921,7 @@ function shiftWeek(delta: number) {
       </section>
 
       <section className="space-y-3 order-2">
-        <div className="grid grid-cols-1 md:grid-cols-7 gap-2">
+        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 2xl:grid-cols-7 gap-2">
           {days.map((d) => {
             const k = ymd(d);
             const load = studyLoadByDay[k];
@@ -994,7 +938,7 @@ function shiftWeek(delta: number) {
             return (
               <div key={k} className={`rounded border ${overBy>0?'border-rose-600':'border-[#1b2344]'} p-3 min-h-[220px]`} onDragOver={(e)=>e.preventDefault()} onDrop={(e)=>onDropDay(e,d)} role="listbox" aria-label={`Planned items for ${dayLabel(d)}`}>
                 <div className="flex items-center justify-between mb-2">
-                  <div className="text-sm text-slate-200">{dayLabel(d)}</div>
+                  <button type="button" className="text-sm text-slate-200 underline-offset-2 hover:underline" onClick={() => setExpandedDay(old => old===k?null:k)} aria-expanded={expandedDay===k}>{dayLabel(d)} {expandedDay===k?'▴':'▾'}</button>
                   <div className="text-xs text-slate-300/70 flex items-center gap-2">
                     <span>{minutesToHM(committed)} / {minutesToHM(cap)}</span>
                   </div>
@@ -1040,12 +984,12 @@ function shiftWeek(delta: number) {
                       <li key={b.id} className="text-[11px] flex items-start gap-2">
                         <span className="mt-1 w-2 h-2 rounded-full flex-shrink-0" style={{ backgroundColor: colorForCourse(displayCourse) }} />
                         <div className="flex-1 min-w-0">
-                          <div className="text-slate-200 truncate">{displayCourse ? `${displayCourse}: ` : ''}{displayTitle}</div>
+                          <div className={`text-slate-200 ${expandedDay===k?'whitespace-normal break-words':'truncate'}`} title={displayTitle}>{displayCourse ? `${displayCourse}: ` : ''}{displayTitle}</div>
                           <div className="text-slate-300/70 flex items-center gap-2">
                             <span>{minutesToHM(b.plannedMinutes)}{b.guessed ? <span className="ml-1 inline-block px-1 rounded border border-amber-500 text-amber-400">guessed</span> : null}{pages ? <span className="ml-2">· {pages}p</span> : null}</span>
                             <span className="inline-flex items-center gap-1">
-                              <button onClick={()=>moveBlockLaterToday(b)} className="px-1 py-0.5 rounded border border-[#1b2344]">Move later today</button>
-                              <button onClick={()=>pushBlockToTomorrow(b)} className="px-1 py-0.5 rounded border border-[#1b2344]">Push → tomorrow</button>
+                              <button onClick={()=>moveBlockLaterToday(b)} className="px-1 py-0.5 rounded border border-[#1b2344]">Move to end</button>
+                              <button onClick={()=>pushBlockToTomorrow(b)} className="px-1 py-0.5 rounded border border-[#1b2344]">Move to next available day</button>
                             </span>
                           </div>
                         </div>
@@ -1058,6 +1002,32 @@ function shiftWeek(delta: number) {
             );
           })}
         </div>
+        {expandedDay && days.some(day => ymd(day)===expandedDay) && (() => {
+          const plan = blocks.filter(block => block.day === expandedDay);
+          const load = studyLoadByDay[expandedDay];
+          const cap = effectiveCapByKey[expandedDay] ?? 0;
+          return <section className="mt-4 rounded-lg border border-blue-700/40 bg-blue-950/10 p-4 space-y-3" aria-label="Expanded day details">
+            <div className="flex flex-wrap items-center justify-between gap-2">
+              <h3 className="font-medium">Details for {expandedDay}</h3>
+              <button type="button" className="text-xs underline" onClick={() => setExpandedDay(null)}>Close day</button>
+            </div>
+            <div className="grid grid-cols-3 gap-2 text-sm text-slate-300">
+              <div><div className="text-xs text-slate-500">Studied</div>{minutesToHM(load?.loggedMinutes || 0)}</div>
+              <div><div className="text-xs text-slate-500">Still planned</div>{minutesToHM(load?.remainingPlannedMinutes || 0)}</div>
+              <div><div className="text-xs text-slate-500">Available</div>{minutesToHM(Math.max(0,cap-(load?.committedMinutes||0)))}</div>
+            </div>
+            {plan.length ? plan.map(b => <div key={b.id} className="border-t border-white/10 pt-3 flex flex-wrap justify-between gap-2">
+              <div className="min-w-0 flex-1">
+                <div className="text-sm text-white break-words">{b.title}</div>
+                <div className="text-xs text-slate-400">{b.course || 'Unassigned'} · {minutesToHM(b.plannedMinutes)}</div>
+              </div>
+              <div className="flex flex-wrap gap-2 items-center text-xs">
+                <button type="button" onClick={() => pushBlockToTomorrow(b)} className="rounded border border-white/20 px-2 py-1">Next available day</button>
+                <button type="button" onClick={() => removeBlock(b.id)} className="rounded border border-rose-600/40 text-rose-300 px-2 py-1">Remove</button>
+              </div>
+            </div>) : <p className="text-sm text-slate-400">No remaining planned tasks for this day.</p>}
+          </section>;
+        })()}
       </section>
 
       <section className="card p-6 space-y-4 order-3">

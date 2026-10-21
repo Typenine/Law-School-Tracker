@@ -70,6 +70,7 @@ export function isScheduleDirty(): boolean { return false; }
 export function useSchedule() {
   const [blocks, setBlocksState] = useState<ScheduledBlock[]>([]);
   const [loading, setLoading] = useState(true);
+  const [saveStatus, setSaveStatus] = useState<'saved' | 'saving' | 'error'>('saved');
   const blocksRef = useRef<ScheduledBlock[]>([]);
   const saveSeq = useRef(0);
 
@@ -105,10 +106,12 @@ export function useSchedule() {
     const previous = blocksRef.current;
     apply(next);
     const seq = ++saveSeq.current;
+    setSaveStatus('saving');
     void apiFetch('/api/schedule', { method: 'PUT', body: { blocks: next } })
       .then(() => {
         if (seq !== saveSeq.current) return;
         clearScheduleDirty();
+        setSaveStatus('saved');
         try { notifyScheduleChanged(); } catch {}
       })
       .catch(() => {
@@ -116,6 +119,7 @@ export function useSchedule() {
         // The service worker now returns failure for offline writes; revert the
         // optimistic state rather than pretending a local mutation is durable.
         apply(previous);
+        setSaveStatus('error');
         try { notifyScheduleChanged(); } catch {}
       });
   }, [apply]);
@@ -125,7 +129,7 @@ export function useSchedule() {
     clearScheduleDirty();
   }, [apply]);
 
-  return { blocks, setBlocks: save, hydrate, loading, refresh };
+  return { blocks, setBlocks: save, hydrate, loading, refresh, saveStatus };
 }
 
 export function useAvailability() {

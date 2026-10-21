@@ -2,7 +2,7 @@
 
 import { useEffect, useMemo, useState } from "react";
 import type { FormEvent } from "react";
-import type { Course, SemesterInfo } from "@/lib/types";
+import type { Course, SemesterInfo, Task } from "@/lib/types";
 import { apiFetch } from "@/lib/apiClient";
 import { notifySessionsChanged } from "@/lib/sessionsBus";
 import { notifyToast } from "@/lib/toastBus";
@@ -17,6 +17,7 @@ type Timer = {
   description?: string;
   semester?: string;
   category?: string;
+  linkedTaskId?: string;
 };
 const STORAGE_KEY = "quickStudyTimerV1";
 const EMPTY: Timer = { elapsedMs: 0, creditedMinutes: 0, running: false };
@@ -36,6 +37,7 @@ function restore(): Timer {
       description: typeof saved.description === "string" ? saved.description : "",
       semester: typeof saved.semester === "string" ? saved.semester : "",
       category: typeof saved.category === "string" ? saved.category : "other",
+      linkedTaskId: typeof saved.linkedTaskId === "string" ? saved.linkedTaskId : "",
     };
   } catch {
     return { ...EMPTY };
@@ -84,6 +86,8 @@ export default function QuickStudyTimer({ courses, placement, onPlacementChange 
   const [description, setDescription] = useState("");
   const [semester, setSemester] = useState("");
   const [category, setCategory] = useState("other");
+  const [linkedTaskId, setLinkedTaskId] = useState("");
+  const [assignments, setAssignments] = useState<Task[]>([]);
   const [currentSemester, setCurrentSemester] = useState("");
   const [configuredSemesters, setConfiguredSemesters] = useState<SemesterInfo[]>([]);
   const [saving, setSaving] = useState(false);
@@ -95,6 +99,7 @@ export default function QuickStudyTimer({ courses, placement, onPlacementChange 
     setDescription(saved.description || "");
     setSemester(saved.semester || "");
     setCategory(saved.category || "other");
+    setLinkedTaskId(saved.linkedTaskId || "");
     setReady(true);
   }, []);
   useEffect(() => {
@@ -110,6 +115,7 @@ export default function QuickStudyTimer({ courses, placement, onPlacementChange 
       setDescription(saved.description || "");
       setSemester(saved.semester || "");
       setCategory(saved.category || "other");
+    setLinkedTaskId(saved.linkedTaskId || "");
     };
     window.addEventListener("storage", sync);
     return () => window.removeEventListener("storage", sync);
@@ -146,6 +152,14 @@ export default function QuickStudyTimer({ courses, placement, onPlacementChange 
     return courses.filter(c => c.semester === match[1] && Number(c.year) === Number(match[2])).sort((a,b) => a.title.localeCompare(b.title));
   }, [courses, semester]);
   const selectedCourse = matchingCourses.some(c => c.title === subject);
+  const relevantAssignments = useMemo(() => assignments.filter(task => task.status === 'todo'
+    && (!selectedCourse || task.course === subject)
+    && (!semester || matchingCourses.some(course => course.title === task.course))), [assignments, selectedCourse, subject, semester, matchingCourses]);
+  useEffect(() => {
+    let live = true;
+    void apiFetch<{ tasks: Task[] }>('/api/tasks').then(data => { if (live) setAssignments(Array.isArray(data.tasks) ? data.tasks : []); }).catch(() => undefined);
+    return () => { live = false; };
+  }, []);
   void tick;
   const ms = elapsed(timer);
   // Round the overall elapsed time, not each pause, to prevent duplicate minutes.
@@ -166,7 +180,7 @@ export default function QuickStudyTimer({ courses, placement, onPlacementChange 
   }
   function discard() {
     if (!window.confirm("Discard this timer? Unlogged study time will be lost.")) return;
-    setTimer({ ...EMPTY, subject, description, semester, category });
+    setTimer({ ...EMPTY, subject, description, semester, category, linkedTaskId });
   }
   async function saveLog(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -184,7 +198,7 @@ export default function QuickStudyTimer({ courses, placement, onPlacementChange 
       // Existing Study Log recognizes [Course] in notes for sessions with no task.
       await apiFetch("/api/sessions", {
         method: "POST",
-        body: { taskId: null, minutes, focus: null, activity: category, semester: cleanSemester,
+        body: { taskId: linkedTaskId || null, minutes, focus: null, activity: category, semester: cleanSemester,
           notes: "[" + cleanSubject + "] " + cleanDescription + " (" + status + ")" },
       });
       setSubject(cleanSubject);
@@ -192,9 +206,10 @@ export default function QuickStudyTimer({ courses, placement, onPlacementChange 
       if (action === "pause") {
         setTimer(t => ({ ...t, running: false, startedAt: undefined,
           creditedMinutes: t.creditedMinutes + minutes, subject: cleanSubject, description: cleanDescription,
-          semester: cleanSemester, category }));
+          semester: cleanSemester, category, linkedTaskId }));
       } else {
-        setTimer({ ...EMPTY, subject: cleanSubject, description: cleanDescription, semester: currentSemester || cleanSemester, category });
+        setTimer({ ...EMPTY, subject: cleanSubject, description: cleanDescription, semester: currentSemester || cleanSemester, category, linkedTaskId: "" });
+        setLinkedTaskId("");
         setSemester(currentSemester || cleanSemester);
         setSubject("");
         setDescription("");
@@ -236,7 +251,7 @@ export default function QuickStudyTimer({ courses, placement, onPlacementChange 
         {hasTime ? (
           <>
             <button type="button" onClick={() => openLog("partial")} className={secondary}>Partial finish</button>
-            <button type="button" onClick={() => openLog("finish")} className="rounded-lg border border-[#2f6f58] bg-[#0e2a20] px-4 py-2 text-sm font-medium text-[#9be3bd] hover:bg-[#173b2d]">Finish task</button>
+            <button type="button" onClick={() => openLog("finish")} className="rounded-lg border border-[#2f6f58] bg-[#0e2a20] px-4 py-2 text-sm font-medium text-[#9be3bd] hover:bg-[#173b2d]">Finish study session</button>
             {!timer.running ? <button type="button" onClick={discard} className="ml-auto text-xs text-[#8da7c5] underline hover:text-white">Discard timer</button> : null}
           </>
         ) : null}
@@ -255,14 +270,14 @@ export default function QuickStudyTimer({ courses, placement, onPlacementChange 
             </div>
             <div>
               <label htmlFor="quick-study-semester" className="mb-1 block text-sm text-[#dce8f6]">Semester</label>
-              <select id="quick-study-semester" required value={semester} onChange={e => { setSemester(e.target.value); setSubject(""); }} className={field}>
+              <select id="quick-study-semester" required value={semester} onChange={e => { setSemester(e.target.value); setSubject(""); setLinkedTaskId(""); }} className={field}>
                 <option value="" disabled>Select semester</option>
                 {semesterOptions.map(value => <option key={value} value={value}>{value}{value === currentSemester ? " (Current)" : ""}</option>)}
               </select>
             </div>
             <div>
               <label htmlFor="quick-study-course" className="mb-1 block text-sm text-[#dce8f6]">Class or subject</label>
-              <select id="quick-study-course" value={selectedCourse ? subject : "__other__"} onChange={e => setSubject(e.target.value === "__other__" ? "" : e.target.value)} className={field}>
+              <select id="quick-study-course" value={selectedCourse ? subject : "__other__"} onChange={e => { setSubject(e.target.value === "__other__" ? "" : e.target.value); setLinkedTaskId(""); }} className={field}>
                 {matchingCourses.map(c => <option key={c.id} value={c.title}>{c.title}</option>)}
                 <option value="__other__">Other / unlisted subject</option>
               </select>
@@ -273,6 +288,15 @@ export default function QuickStudyTimer({ courses, placement, onPlacementChange 
               <select id="quick-study-category" required value={category} onChange={e => setCategory(e.target.value)} className={field}>
                 {CATEGORIES.map(option => <option key={option.value} value={option.value}>{option.label}</option>)}
               </select>
+            </div>
+            <div>
+              <label htmlFor="quick-study-assignment" className="mb-1 block text-sm text-[#dce8f6]">Link to an existing assignment (optional)</label>
+              <select id="quick-study-assignment" value={linkedTaskId} onChange={e => setLinkedTaskId(e.target.value)} className={field}>
+                <option value="">No assignment link</option>
+                {assignments.filter(t => t.id===linkedTaskId || relevantAssignments.some(a => a.id===t.id)).map(task =>
+                  <option key={task.id} value={task.id}>{task.course ? task.course + ': ' : ''}{task.title}</option>)}
+              </select>
+              <p className="mt-1 text-xs text-[#8da7c5]">This associates the time with an assignment. It does not complete the task or reduce its remaining estimate.</p>
             </div>
             <div>
               <label htmlFor="quick-study-description" className="mb-1 block text-sm text-[#dce8f6]">What did you work on?</label>
