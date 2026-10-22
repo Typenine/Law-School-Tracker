@@ -640,7 +640,8 @@ export default function WeekPlanPage() {
       const k=ymd(d);
       const cap=effectiveCapByKey[k] ?? dailyStudyCapacity(d.getDay(),availability,windowsByDow,breaksByDow,conflictsForDay(k,courses,tasks));
       const projection=addPlannedStudyMinutes(studyLoadByDay[k],t.id,minutes,remainingByTask);
-      if(projection.committedMinutes>cap&&!window.confirm('Exceeds the day’s study hours by '+(projection.committedMinutes-cap)+' minutes. Add anyway?'))return;
+      // Day-specific study windows can shift; manual placements are always allowed.
+      // The day card shows a neutral overage note without changing weekly settings.
       snapshot('Schedule task');
       setBlocks(prev => [...prev, block]);
       return;
@@ -652,7 +653,7 @@ export default function WeekPlanPage() {
     const k=ymd(d);
     const cap=effectiveCapByKey[k] ?? dailyStudyCapacity(d.getDay(),availability,windowsByDow,breaksByDow,conflictsForDay(k,courses,tasks));
     const projection=addPlannedStudyMinutes(studyLoadByDay[k],it.id,block.plannedMinutes,remainingByTask);
-    if(projection.committedMinutes>cap&&!window.confirm('Exceeds daily capacity by '+(projection.committedMinutes-cap)+' minutes. Add anyway?'))return;
+    // Manual placement may exceed the usual daily window; note it on the card.
     snapshot('Schedule task');
     setBlocks(prev => [...prev, block]);
   }
@@ -936,7 +937,7 @@ function shiftWeek(delta: number) {
             const scheduledPct = cap>0 ? Math.max(0,Math.min(100-completedPct,Math.round(100*stillPlanned/cap))) : 0;
             const dayBlocks = blocks.filter(b => b.day === k);
             return (
-              <div key={k} className={`rounded border ${overBy>0?'border-rose-600':'border-[#1b2344]'} p-3 min-h-[220px]`} onDragOver={(e)=>e.preventDefault()} onDrop={(e)=>onDropDay(e,d)} role="listbox" aria-label={`Planned items for ${dayLabel(d)}`}>
+              <div key={k} className="rounded border border-[#1b2344] p-3 min-h-[220px]" onDragOver={(e)=>e.preventDefault()} onDrop={(e)=>onDropDay(e,d)} role="listbox" aria-label={`Planned items for ${dayLabel(d)}`}>
                 <div className="flex items-center justify-between mb-2">
                   <button type="button" className="text-sm text-slate-200 underline-offset-2 hover:underline" onClick={() => setExpandedDay(old => old===k?null:k)} aria-expanded={expandedDay===k}>{dayLabel(d)} {expandedDay===k?'▴':'▾'}</button>
                   <div className="text-xs text-slate-300/70 flex items-center gap-2">
@@ -946,12 +947,12 @@ function shiftWeek(delta: number) {
                 <div className="h-2 w-full bg-[#0b1020] border border-[#1b2344] rounded overflow-hidden mb-1" role="progressbar" aria-valuemin={0} aria-valuemax={Math.max(cap,1)} aria-valuenow={Math.min(committed,Math.max(cap,1))} aria-label="Logged and scheduled study minutes">
                   <div className="flex h-full w-full">
                     <div className="bg-emerald-600 h-full" style={{ width: `${completedPct}%` }} />
-                    <div className={`${overBy>0?'bg-rose-600':'bg-blue-500'} h-full`} style={{ width: `${scheduledPct}%` }} />
+                    <div className="bg-blue-500 h-full" style={{ width: `${scheduledPct}%` }} />
                   </div>
                 </div>
                 <div className="text-[10px] text-slate-300/70 mb-1">{minutesToHM(logged)} completed · {minutesToHM(stillPlanned)} still planned</div>
                 <div className="text-[10px] text-slate-300/70 mb-2">{minutesToHM(left)} available{planned!==stillPlanned?' · partial progress applied':''}</div>
-                {overBy>0 ? <div className="text-[11px] text-rose-400 mb-2">Over by {minutesToHM(overBy)}</div> : null}
+                {overBy>0 ? <div className="text-[11px] text-slate-400 mb-2" title="This applies only to this date. Your usual weekly study windows are unchanged.">{minutesToHM(overBy)} beyond usual availability for this day</div> : null}
                 
                 <div className="text-xs text-slate-300/70 mb-1">Events</div>
                 <ul className="space-y-1 mb-2">

@@ -7,7 +7,7 @@ import { apiFetch } from "@/lib/apiClient";
 import { notifySessionsChanged } from "@/lib/sessionsBus";
 import { notifyToast } from "@/lib/toastBus";
 
-type Action = "pause" | "partial" | "finish";
+type Action = "partial" | "finish";
 type Timer = {
   elapsedMs: number;
   creditedMinutes: number;
@@ -82,6 +82,10 @@ export default function QuickStudyTimer({ courses, placement, onPlacementChange 
   const [ready, setReady] = useState(false);
   const [tick, setTick] = useState(0);
   const [action, setAction] = useState<Action | null>(null);
+  const [adjustingTime, setAdjustingTime] = useState(false);
+  const [adjustHours, setAdjustHours] = useState("0");
+  const [adjustMinutes, setAdjustMinutes] = useState("0");
+  const [adjustError, setAdjustError] = useState("");
   const [subject, setSubject] = useState("");
   const [description, setDescription] = useState("");
   const [semester, setSemester] = useState("");
@@ -115,7 +119,7 @@ export default function QuickStudyTimer({ courses, placement, onPlacementChange 
       setDescription(saved.description || "");
       setSemester(saved.semester || "");
       setCategory(saved.category || "other");
-    setLinkedTaskId(saved.linkedTaskId || "");
+      setLinkedTaskId(saved.linkedTaskId || "");
     };
     window.addEventListener("storage", sync);
     return () => window.removeEventListener("storage", sync);
@@ -169,11 +173,43 @@ export default function QuickStudyTimer({ courses, placement, onPlacementChange 
   const field = "w-full rounded-lg border border-[#2c4a70] bg-[#081629] px-3 py-2.5 text-sm text-white focus:outline-none focus:border-[#59a8ef]";
 
   function start() {
-    if (!ready || action) return;
+    if (!ready || action || adjustingTime) return;
     setTimer(t => t.running ? t : { ...t, running: true, startedAt: Date.now() });
   }
+  // Pausing never saves or opens a form. The time stays in the local timer
+  // until the user chooses Partial finish or Finish study session.
+  function pause() {
+    if (!ready || !timer.running) return;
+    setTimer(t => stopped(t));
+  }
+  function beginAdjustment() {
+    if (!ready || !hasTime || action || saving) return;
+    const stoppedTimer = stopped(timer);
+    const total = Math.round(stoppedTimer.elapsedMs / 60000);
+    setTimer(stoppedTimer);
+    setAdjustHours(String(Math.floor(total / 60)));
+    setAdjustMinutes(String(total % 60));
+    setAdjustError("");
+    setAdjustingTime(true);
+  }
+  function applyAdjustment() {
+    const hours = Number(adjustHours);
+    const minutes = Number(adjustMinutes);
+    if (!Number.isInteger(hours) || !Number.isInteger(minutes) || hours < 0 || hours > 999 || minutes < 0 || minutes > 59) {
+      setAdjustError("Enter whole hours and minutes (0–59).");
+      return;
+    }
+    const total = hours * 60 + minutes;
+    if (total < timer.creditedMinutes) {
+      setAdjustError("You already logged " + timer.creditedMinutes + " minutes from this timer. The total cannot be lower.");
+      return;
+    }
+    setTimer(t => ({ ...stopped(t), elapsedMs: total * 60000 }));
+    setAdjustingTime(false);
+    setAdjustError("");
+  }
   function openLog(mode: Action) {
-    if (!ready || !hasTime || action) return;
+    if (!ready || !hasTime || action || adjustingTime) return;
     setTimer(t => stopped(t));
     setAction(mode);
     setError("");
@@ -194,7 +230,7 @@ export default function QuickStudyTimer({ courses, placement, onPlacementChange 
     setSaving(true);
     setError("");
     try {
-      const status = action === "pause" ? "Paused" : action === "partial" ? "Partially finished" : "Finished";
+      const status = action === "partial" ? "Partially finished" : "Finished";
       // Existing Study Log recognizes [Course] in notes for sessions with no task.
       await apiFetch("/api/sessions", {
         method: "POST",
@@ -203,20 +239,13 @@ export default function QuickStudyTimer({ courses, placement, onPlacementChange 
       });
       setSubject(cleanSubject);
       setDescription(cleanDescription);
-      if (action === "pause") {
-        setTimer(t => ({ ...t, running: false, startedAt: undefined,
-          creditedMinutes: t.creditedMinutes + minutes, subject: cleanSubject, description: cleanDescription,
-          semester: cleanSemester, category, linkedTaskId }));
-      } else {
-        setTimer({ ...EMPTY, subject: cleanSubject, description: cleanDescription, semester: currentSemester || cleanSemester, category, linkedTaskId: "" });
-        setLinkedTaskId("");
-        setSemester(currentSemester || cleanSemester);
-        setSubject("");
-        setDescription("");
-      }
+      setTimer({ ...EMPTY, subject: cleanSubject, description: cleanDescription, semester: currentSemester || cleanSemester, category, linkedTaskId: "" });
+      setLinkedTaskId("");
+      setSemester(currentSemester || cleanSemester);
+      setSubject("");
+      setDescription("");
       notifySessionsChanged();
-      notifyToast({ kind: "success", message: action === "pause" ? "Time logged. Resume when ready." :
-        action === "partial" ? "Partial study session saved." : "Study session completed." });
+      notifyToast({ kind: "success", message: action === "partial" ? "Partial study session saved." : "Study session completed." });
       setAction(null);
     } catch (err: any) {
       setError(err?.message || "Could not save your study time. Your timer is preserved.");
@@ -244,27 +273,44 @@ export default function QuickStudyTimer({ courses, placement, onPlacementChange 
       </div>
       <div className="mt-5 flex flex-wrap items-center gap-2">
         {!timer.running ? (
-          <button type="button" onClick={start} disabled={!ready} className="rounded-lg bg-[#ffcc00] px-5 py-2.5 font-semibold text-[#06152b] hover:bg-[#ffdb4d] disabled:opacity-40">
+          <button type="button" onClick={start} disabled={!ready || adjustingTime} className="rounded-lg bg-[#ffcc00] px-5 py-2.5 font-semibold text-[#06152b] hover:bg-[#ffdb4d] disabled:opacity-40">
             {hasTime ? "Resume" : "Start timer"}
           </button>
-        ) : <button type="button" onClick={() => openLog("pause")} className={secondary}>Pause</button>}
+        ) : <button type="button" onClick={pause} className={secondary}>Pause</button>}
         {hasTime ? (
           <>
-            <button type="button" onClick={() => openLog("partial")} className={secondary}>Partial finish</button>
-            <button type="button" onClick={() => openLog("finish")} className="rounded-lg border border-[#2f6f58] bg-[#0e2a20] px-4 py-2 text-sm font-medium text-[#9be3bd] hover:bg-[#173b2d]">Finish study session</button>
-            {!timer.running ? <button type="button" onClick={discard} className="ml-auto text-xs text-[#8da7c5] underline hover:text-white">Discard timer</button> : null}
+            <button type="button" onClick={() => openLog("partial")} disabled={adjustingTime} className={secondary}>Partial finish</button>
+            <button type="button" onClick={() => openLog("finish")} disabled={adjustingTime} className="rounded-lg border border-[#2f6f58] bg-[#0e2a20] px-4 py-2 text-sm font-medium text-[#9be3bd] hover:bg-[#173b2d] disabled:opacity-40">Finish study session</button>
+            <button type="button" onClick={beginAdjustment} disabled={adjustingTime} className={secondary}>Adjust time</button>
+            {!timer.running && !adjustingTime ? <button type="button" onClick={discard} className="ml-auto text-xs text-[#8da7c5] underline hover:text-white">Discard timer</button> : null}
           </>
         ) : null}
       </div>
-      <p className="mt-3 text-xs text-[#8da7c5]">{timer.running ? "Timer running, including when you leave this page." : hasTime ? "Paused. You can resume or log your remaining time." : "Start whenever you are ready."}{timer.creditedMinutes ? " " + timer.creditedMinutes + " minutes already logged." : ""}</p>
+      {adjustingTime && (
+        <div className="mt-4 rounded-lg border border-[#2c4a70] bg-[#0b1b30] p-4 space-y-3" aria-label="Adjust timer duration">
+          <p className="text-sm text-[#dce8f6]">Correct the timer to the time you actually studied. The timer is paused while you edit it.</p>
+          <div className="flex flex-wrap items-end gap-3">
+            <label className="text-xs text-[#9bb9dd]">Hours
+              <input type="number" inputMode="numeric" min={0} max={999} step={1} value={adjustHours} onChange={e => setAdjustHours(e.target.value)} className={field + " mt-1 w-24"} />
+            </label>
+            <label className="text-xs text-[#9bb9dd]">Minutes
+              <input type="number" inputMode="numeric" min={0} max={59} step={1} value={adjustMinutes} onChange={e => setAdjustMinutes(e.target.value)} className={field + " mt-1 w-24"} />
+            </label>
+            <button type="button" onClick={applyAdjustment} className="rounded-lg bg-[#ffcc00] px-4 py-2.5 text-sm font-semibold text-[#06152b]">Save time</button>
+            <button type="button" onClick={() => { setAdjustingTime(false); setAdjustError(""); }} className={secondary}>Cancel</button>
+          </div>
+          {adjustError && <p className="text-sm text-rose-300" role="alert">{adjustError}</p>}
+        </div>
+      )}
+      <p className="mt-3 text-xs text-[#8da7c5]">{timer.running ? "Timer running, including when you leave this page." : hasTime ? "Paused. Resume, adjust your time, or finish to log it." : "Start whenever you are ready."}{timer.creditedMinutes ? " " + timer.creditedMinutes + " minutes already logged." : ""}</p>
       {action ? (
         <div role="dialog" aria-modal="true" aria-labelledby="quick-study-dialog-title" className="fixed inset-0 z-[20000] flex items-center justify-center p-4">
           <div className="absolute inset-0 bg-black/75" onClick={() => { if (!saving) setAction(null); }} />
           <form onSubmit={saveLog} className="relative z-10 w-full max-w-md space-y-4 rounded-xl border border-[#2c4a70] bg-[#0e1c2f] p-5 shadow-2xl">
             <div className="flex items-start justify-between gap-4">
               <div>
-                <h2 id="quick-study-dialog-title" className="text-lg font-semibold text-white">{action === "pause" ? "Pause and log study time" : action === "partial" ? "Log partial progress" : "Finish and log study time"}</h2>
-                <p className="mt-1 text-sm text-[#9bb9dd]">{minutesToLog} minute{minutesToLog === 1 ? "" : "s"} to record. No task will be created.</p>
+                <h2 id="quick-study-dialog-title" className="text-lg font-semibold text-white">{action === "partial" ? "Log partial progress" : "Finish and log study time"}</h2>
+                <p className="mt-1 text-sm text-[#9bb9dd]">{minutesToLog} minute{minutesToLog === 1 ? "" : "s"} to record. No new task will be created. If the time is wrong, cancel and select Adjust time first.</p>
               </div>
               <button type="button" aria-label="Close" disabled={saving} onClick={() => setAction(null)} className="text-xl text-[#9bb9dd] hover:text-white">×</button>
             </div>

@@ -56,4 +56,26 @@ describe('critical workflows must survive UI edits', () => {
     assert.match(source, /linkedTaskId \|\| null/);
     assert.match(source, /does not complete the task/);
   });
+  it('pausing a quick timer only freezes elapsed time and does not open logging', () => {
+    const source = read('components/QuickStudyTimer.tsx');
+    assert.match(source, /function pause\(\)\s*\{[\s\S]*?setTimer\(t => stopped\(t\)\)/);
+    assert.match(source, /onClick=\{pause\}/);
+    assert.doesNotMatch(source, /openLog\(["']pause["']\)/);
+    assert.match(source, /type Action = "partial" \| "finish"/);
+  });
+  it('quick timer lets the user correct elapsed time before partial/finish', () => {
+    const source = read('components/QuickStudyTimer.tsx');
+    assert.match(source, /function beginAdjustment\(\)/);
+    assert.match(source, /function applyAdjustment\(\)/);
+    assert.match(source, /elapsedMs: total \* 60000/);
+    assert.match(source, /total < timer\.creditedMinutes/);
+    assert.match(source, />Adjust time<\/button>/);
+  });
+  it('individual day overages are neutral and never require a confirmation', () => {
+    const source = read('app/week-plan/page.tsx');
+    assert.doesNotMatch(source, /window\.confirm\(['"]Exceeds/);
+    assert.doesNotMatch(source, /overBy>0\?'border-rose/);
+    assert.match(source, /beyond usual availability for this day/);
+    assert.match(source, /border border-\[#1b2344\]/);
+  });
 });
