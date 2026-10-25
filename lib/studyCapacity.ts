@@ -17,8 +17,13 @@ const validDay = /^\d{4}-\d{2}-\d{2}$/;
 const positive = (number: unknown): number => { const n = Number(number); return Number.isFinite(n) ? Math.max(0,n) : 0; };
 const blank = (): StudyDayLoad => ({ loggedMinutes:0, plannedMinutes:0, remainingPlannedMinutes:0, committedMinutes:0, plannedByTask:{}, loggedByTask:{}, overlapByTask:{} });
 const keyOf = (taskId?: string | null): string | null => taskId ? 'task:' + taskId : null;
+// Reusing one formatter avoids thousands of expensive Intl allocations while
+// computing per-task schedule conflicts on every workspace load.
+const chicagoDayFormatter = new Intl.DateTimeFormat('en-CA', {
+  timeZone: 'America/Chicago', year: 'numeric', month: '2-digit', day: '2-digit',
+});
 export function chicagoStudyDay(when: string | Date): string {
-  return new Intl.DateTimeFormat('en-CA',{timeZone:'America/Chicago',year:'numeric',month:'2-digit',day:'2-digit'}).format(new Date(when));
+  return chicagoDayFormatter.format(new Date(when));
 }
 export function remainingEstimates(tasks: readonly { id: string; status: string; estimatedMinutes?: number | null }[]): RemainingByTask {
   const result: RemainingByTask = {};
