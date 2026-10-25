@@ -12,7 +12,7 @@ const d = (blocks,sessions,remaining={}) => summarizeStudyDays(blocks,sessions,d
 
 describe('actual + unfinished time never double counts', () => {
   it('reuses its Chicago formatter without breaking daylight-boundary dates', () => {
-    assert.equal((tsSource.match(/new Intl\\.DateTimeFormat/g) || []).length, 1);
+    assert.equal((tsSource.match(/new Intl\.DateTimeFormat/g) || []).length, 1);
     assert.equal(chicagoStudyDay('2026-10-25T04:59:00Z'), '2026-10-24');
     assert.equal(chicagoStudyDay('2026-10-25T05:01:00Z'), '2026-10-25');
   });
