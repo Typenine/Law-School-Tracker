@@ -118,10 +118,20 @@ export function storageMode(): 'db' | 'blob' | 'file' {
 let pool: Pool | null = null;
 /** ensureSchema runs on nearly every request; only do the work once per process. */
 let schemaReady: Promise<void> | null = null;
-function getPool(): Pool {
+export function getPool(): Pool {
   if (!DB_URL) throw new Error('No DATABASE_URL');
   if (!pool) {
-    pool = new Pool({ connectionString: DB_URL, ssl: DB_URL.includes('sslmode=require') ? { rejectUnauthorized: false } : undefined });
+    pool = new Pool({
+      connectionString: DB_URL,
+      ssl: DB_URL.includes('sslmode=require') ? { rejectUnauthorized: false } : undefined,
+      // Bound database work so a stalled database cannot occupy a Vercel
+      // function for its full five-minute default duration.
+      max: 4,
+      connectionTimeoutMillis: 7_000,
+      idleTimeoutMillis: 10_000,
+      query_timeout: 20_000,
+      statement_timeout: 20_000,
+    });
   }
   return pool;
 }
@@ -140,7 +150,15 @@ export function getGptPool(): Pool {
   const gptUrl = process.env.GPT_DATABASE_URL?.trim();
   if (!gptUrl) return getPool();
   if (!gptPool) {
-    gptPool = new Pool({ connectionString: gptUrl, ssl: gptUrl.includes('sslmode=require') ? { rejectUnauthorized: false } : undefined });
+    gptPool = new Pool({
+      connectionString: gptUrl,
+      ssl: gptUrl.includes('sslmode=require') ? { rejectUnauthorized: false } : undefined,
+      max: 2,
+      connectionTimeoutMillis: 7_000,
+      idleTimeoutMillis: 10_000,
+      query_timeout: 20_000,
+      statement_timeout: 20_000,
+    });
   }
   return gptPool;
 }
@@ -515,12 +533,45 @@ export async function recomputeLearnedMppForCourse(courseTitle: string): Promise
   });
 }
 
+/** Existing databases should not perform dozens of DDL operations on each
+ * cold start. A zero-row projection validates the columns used by migrations.
+ * For a fresh/older database only, run the existing idempotent migration.
+ * A connectivity problem must fail quickly, not trigger 60 more DDL attempts.
+ */
+async function schemaNeedsMigration(): Promise<boolean> {
+  try {
+    await getPool().query(`
+      SELECT
+        t.estimated_minutes, t.estimate_origin, t.actual_minutes, t.priority,
+        t.notes, t.attachments, t.depends_on, t.tags, t.term, t.completed_at,
+        t.focus, t.pages_read, t.activity, t.start_time, t.end_time,
+        t.original_page_ranges, t.remaining_page_ranges, t.course_id,
+        c.meeting_blocks, c.color, c.learned_mpp, c.learned_sample,
+        c.learned_updated_at, c.override_enabled, c.override_mpp, c.default_activity,
+        d.category, s.semester, b.catchup, st.key
+      FROM tasks t
+      CROSS JOIN courses c
+      CROSS JOIN course_documents d
+      CROSS JOIN sessions s
+      CROSS JOIN schedule_blocks b
+      CROSS JOIN settings st
+      LIMIT 0
+    `);
+    return false;
+  } catch (error) {
+    const code = String((error as { code?: string })?.code || '');
+    if (code === '42P01' || code === '42703') return true;
+    throw error;
+  }
+}
 export async function ensureSchema() {
   if (!DB_URL) return; // JSON mode doesn't need schema
   if (schemaReady) return schemaReady;
-  // Clear the cache on failure so a transient outage doesn't leave the process
-  // permanently convinced the schema can never be applied.
-  schemaReady = applySchema().catch(e => { schemaReady = null; throw e; });
+  // Only initialize/migrate outdated databases. Cache success per warm instance
+  // and reset on failure to allow recovery from transient outages.
+  schemaReady = (async () => {
+    if (await schemaNeedsMigration()) await applySchema();
+  })().catch(e => { schemaReady = null; throw e; });
   return schemaReady;
 }
 
