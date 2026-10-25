@@ -9,6 +9,8 @@ import { ensureTaskV2Schema, getTaskWorkspace } from '@/lib/taskV2';
 
 export const dynamic = 'force-dynamic';
 export const runtime = 'nodejs';
+// A regression must not run for Vercel's five-minute default timeout.
+export const maxDuration = 30;
 
 function availabilityTemplateIsUnconfigured(value: unknown): boolean {
   if (!value || typeof value !== 'object') return true;
