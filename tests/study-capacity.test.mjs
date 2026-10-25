@@ -4,13 +4,18 @@ import { describe, it } from 'node:test';
 import ts from 'typescript';
 const tsSource = readFileSync(new URL('../lib/studyCapacity.ts', import.meta.url), 'utf8');
 const { outputText } = ts.transpileModule(tsSource, { compilerOptions: { module: ts.ModuleKind.ESNext, target: ts.ScriptTarget.ES2022 } });
-const { summarizeStudyDays, addPlannedStudyMinutes, dailyStudyCapacity, conflictsForDay, remainingEstimates } = await import('data:text/javascript;base64,' + Buffer.from(outputText).toString('base64'));
+const { summarizeStudyDays, addPlannedStudyMinutes, dailyStudyCapacity, conflictsForDay, remainingEstimates, chicagoStudyDay } = await import('data:text/javascript;base64,' + Buffer.from(outputText).toString('base64'));
 const date = when => when.slice(0, 10);
 const block = (minutes, taskId='law-task', day='2026-10-21') => ({ id:'block1', day, taskId, plannedMinutes:minutes });
 const session = (minutes, taskId='law-task', when='2026-10-21T18:00:00Z') => ({ id:'session1', taskId, when, minutes });
 const d = (blocks,sessions,remaining={}) => summarizeStudyDays(blocks,sessions,date,remaining)['2026-10-21'];
 
 describe('actual + unfinished time never double counts', () => {
+  it('reuses its Chicago formatter without breaking daylight-boundary dates', () => {
+    assert.equal((tsSource.match(/new Intl\\.DateTimeFormat/g) || []).length, 1);
+    assert.equal(chicagoStudyDay('2026-10-25T04:59:00Z'), '2026-10-24');
+    assert.equal(chicagoStudyDay('2026-10-25T05:01:00Z'), '2026-10-25');
+  });
   it('reserves planned time before work starts',()=>{
     assert.deepEqual([d([block(100)],[]).loggedMinutes,d([block(100)],[]).remainingPlannedMinutes], [0,100]);
   });
