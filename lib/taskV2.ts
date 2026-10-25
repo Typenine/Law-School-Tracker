@@ -7,6 +7,7 @@ import { canonicalPageRanges, courseReadingPace, readingMetrics, taskOriginalRan
 import {
   deleteTask,
   ensureSchema,
+  getPool as getStoragePool,
   getSettings,
   listCourses,
   listScheduleBlocks,
@@ -100,14 +101,14 @@ function resolveDbUrl(): string | null {
 }
 
 const DB_URL = resolveDbUrl();
-let pool: Pool | null = null;
 let metaSchemaReady: Promise<void> | null = null;
 const fallbackMeta = new Map<string, TaskV2Meta>();
 
 function getPool(): Pool {
   if (!DB_URL) throw new Error('No DATABASE_URL');
-  if (!pool) pool = new Pool({ connectionString: DB_URL, ssl: DB_URL.includes('sslmode=require') ? { rejectUnauthorized: false } : undefined });
-  return pool;
+  // Share the capped storage pool rather than creating a second set of
+  // connections during parallel task and schedule requests.
+  return getStoragePool();
 }
 
 function emptyMeta(taskId: string): TaskV2Meta {
@@ -326,6 +327,23 @@ export async function getTaskWorkspace(): Promise<{ tasks: TaskWorkspaceItem[]; 
   ]);
   const metaMap = await getMetaMap(tasks.map(task => String(task.id)));
   const taskMap = new Map(tasks.map(task => [String(task.id), task]));
+  // Index per-task data once. Previously every task scanned all study sessions
+  // and blocks again, and reading metrics repeated the same session scan.
+  const sessionsByTask = new Map<string, StudySession[]>();
+  for (const session of sessions) {
+    if (!session.taskId) continue;
+    const id = String(session.taskId);
+    const group = sessionsByTask.get(id) || [];
+    group.push(session);
+    sessionsByTask.set(id, group);
+  }
+  const blocksByTask = new Map<string, ScheduleBlockV2[]>();
+  for (const block of blocks as ScheduleBlockV2[]) {
+    const id = String(block.taskId);
+    const group = blocksByTask.get(id) || [];
+    group.push(block);
+    blocksByTask.set(id, group);
+  }
   const availability = settings?.availabilityTemplateV1 && typeof settings.availabilityTemplateV1 === 'object'
     ? settings.availabilityTemplateV1 as Record<string, number> : {};
   const windows = (settings?.availabilityWindowsV1 || {}) as Record<string,StudyWindow[]>;
@@ -352,7 +370,7 @@ export async function getTaskWorkspace(): Promise<{ tasks: TaskWorkspaceItem[]; 
       trash.push({ ...task, deletedAt: meta.deletedAt });
       continue;
     }
-    const ownSessions = sessionsFor(task.id, sessions);
+    const ownSessions = sessionsByTask.get(String(task.id)) || [];
     const blockers = blockersFor(task, taskMap, metaMap);
     const blocked = blockers.length > 0 && !taskDone(task, meta) && meta.workflowState !== 'canceled';
     const workflowState: WorkflowState = meta.workflowState === 'canceled'
@@ -364,7 +382,7 @@ export async function getTaskWorkspace(): Promise<{ tasks: TaskWorkspaceItem[]; 
           : 'not-started';
     const displayState: DisplayState = blocked ? 'blocked' : workflowState;
     const reading = task.activity === 'reading' || task.originalPageRanges || task.remainingPageRanges
-      ? readingMetrics(task, sessions, courses)
+      ? readingMetrics(task, ownSessions, courses)
       : null;
     const loggedMinutes = ownSessions.reduce((sum, session) => sum + Math.max(0, Number(session.minutes) || 0), 0);
     const remainingMinutes = workflowState === 'done' || workflowState === 'canceled'
@@ -381,7 +399,7 @@ export async function getTaskWorkspace(): Promise<{ tasks: TaskWorkspaceItem[]; 
           : loggedMinutes > 0
             ? Math.max(1, Math.min(99, Math.round((loggedMinutes / Math.max(1, loggedMinutes + remainingMinutes)) * 100)))
             : 0;
-    const ownBlocks = (blocks as ScheduleBlockV2[]).filter(block => String(block.taskId) === String(task.id));
+    const ownBlocks = blocksByTask.get(String(task.id)) || [];
     const scored = ownSessions.filter(session => typeof session.focus === 'number');
     const averageFocus = scored.length ? Math.round((scored.reduce((sum, session) => sum + Number(session.focus), 0) / scored.length) * 10) / 10 : null;
     const risk = workflowState === 'canceled' ? { atRisk: false, reason: null } : atRiskFor(task, blocked, blockers, remainingMinutes, riskCapacity);
