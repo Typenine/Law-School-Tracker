@@ -8,6 +8,7 @@ import { notifyTasksChanged } from '@/lib/taskBus';
 import { notifyScheduleChanged } from '@/lib/scheduleBus';
 import { apiFetch } from '@/lib/apiClient';
 import { notifyToast } from '@/lib/toastBus';
+import { MISC_TASK_COURSE_ID, MISC_TASK_LABEL, isMiscTask } from '@/lib/taskCategory';
 
 type Props = { onCreated?: () => void };
 
@@ -70,7 +71,8 @@ export default function AddTaskPanel({ onCreated }: Props) {
   const [setDefaultForCourse, setSetDefaultForCourse] = useState(false);
   const [dupWarn, setDupWarn] = useState('');
 
-  const course = selectedCourse?.title || '';
+  const isMisc = courseId === MISC_TASK_COURSE_ID;
+  const course = isMisc ? MISC_TASK_LABEL : selectedCourse?.title || '';
 
   useEffect(() => {
     void (async () => {
@@ -125,7 +127,7 @@ export default function AddTaskPanel({ onCreated }: Props) {
     const exists = tasks.some(task => {
       let taskDue = task.dueDate;
       try { taskDue = new Date(task.dueDate).toISOString().slice(0, 16); } catch {}
-      return String(task.courseId || '') === String(courseId)
+      return (isMisc ? isMiscTask(task) : String(task.courseId || '') === String(courseId))
         && (task.title || '').trim().toLowerCase() === title.trim().toLowerCase()
         && taskDue === dueKey;
     });
@@ -175,7 +177,7 @@ export default function AddTaskPanel({ onCreated }: Props) {
   }
 
   async function saveDefaultActivity() {
-    if (!setDefaultForCourse || !courseId) return;
+    if (!setDefaultForCourse || !courseId || isMisc) return;
     try {
       await apiFetch(`/api/courses/${courseId}`, { method: 'PATCH', body: { defaultActivity: activity } });
       notifyToast({ kind: 'success', message: 'Default activity saved.' });
@@ -194,7 +196,7 @@ export default function AddTaskPanel({ onCreated }: Props) {
 
       const payload: NewTaskInput = {
         title: title || (activity === 'reading' ? 'Read' : 'Task'),
-        courseId: courseId || null,
+        courseId: isMisc ? null : courseId || null,
         course: course || null,
         term: semesterId || null,
         dueDate: new Date(due).toISOString(),
@@ -279,7 +281,8 @@ export default function AddTaskPanel({ onCreated }: Props) {
           semesterId={semesterId}
           courseId={courseId}
           onSemesterChange={setSemesterId}
-          onCourseChange={(id, selected) => { setCourseId(id); setSelectedCourse(selected); }}
+          onCourseChange={(id, selected) => { setCourseId(id); setSelectedCourse(selected); if (id === MISC_TASK_COURSE_ID) { setActivity('other'); setSetDefaultForCourse(false); } }}
+          allowMisc
           storageKeyPrefix="lastTaskCourse"
         />
 
@@ -297,10 +300,10 @@ export default function AddTaskPanel({ onCreated }: Props) {
           </select>
         </div>
 
-        <label className="flex items-center gap-2 text-xs">
+        {!isMisc && <label className="flex items-center gap-2 text-xs">
           <input type="checkbox" checked={setDefaultForCourse} onChange={event => setSetDefaultForCourse(event.target.checked)} />
           Set as default for this course
-        </label>
+        </label>}
       </div>
 
       {activity === 'reading' && (

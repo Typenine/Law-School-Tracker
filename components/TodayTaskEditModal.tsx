@@ -158,6 +158,7 @@ export default function TodayTaskEditModal({ task, courses, onClose, onSaved }: 
               <label className="mb-1 block text-xs text-slate-400">Course</label>
               <input list="today-task-course-options" value={course} onChange={event => setCourse(event.target.value)} className="w-full rounded-lg border border-[#29405f] bg-[#081426] px-3 py-2 text-sm text-white outline-none focus:border-[#4e9ee8]" />
               <datalist id="today-task-course-options">
+                <option value="Misc" />
                 {courses.map(item => <option key={item.id} value={item.title} />)}
               </datalist>
             </div>

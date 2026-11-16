@@ -7,6 +7,7 @@ import { coursesForSemester } from '@/lib/academic';
 import { onCoursesChanged } from '@/lib/coursesBus';
 import { onSemesterChanged } from '@/lib/semesterBus';
 import { apiFetch } from '@/lib/apiClient';
+import { MISC_TASK_COURSE_ID, MISC_TASK_LABEL } from '@/lib/taskCategory';
 
 type CatalogResponse = {
   currentSemesterId: string | null;
@@ -51,6 +52,7 @@ type Props = {
   semesterLabel?: string;
   courseLabel?: string;
   coursePlaceholder?: string;
+  allowMisc?: boolean;
   compact?: boolean;
   className?: string;
 };
@@ -64,6 +66,7 @@ export default function SemesterCoursePicker({
   semesterLabel = 'Semester',
   courseLabel = 'Course',
   coursePlaceholder = 'Select…',
+  allowMisc = false,
   compact = false,
   className = '',
 }: Props) {
@@ -86,10 +89,10 @@ export default function SemesterCoursePicker({
   }, [semesterId, selectedCourse?.semesterId, currentSemesterId, onSemesterChange]);
 
   useEffect(() => {
-    if (!semesterId || !courseId) return;
+    if (!semesterId || !courseId || (allowMisc && courseId === MISC_TASK_COURSE_ID)) return;
     if (visibleCourses.some(course => String(course.id) === String(courseId))) return;
     onCourseChange('', null);
-  }, [semesterId, courseId, visibleCourses, onCourseChange]);
+  }, [semesterId, courseId, visibleCourses, onCourseChange, allowMisc]);
 
   useEffect(() => {
     if (!storageKeyPrefix || !semesterId || courseId || !visibleCourses.length) return;
@@ -132,7 +135,7 @@ export default function SemesterCoursePicker({
       </div>
 
       <div>
-        <div className="text-xs text-slate-300/70 mb-1">{courseLabel}</div>
+        <div className="text-xs text-slate-300/70 mb-1">{allowMisc ? 'Course / Category' : courseLabel}</div>
         <select
           value={courseId}
           onChange={event => {
@@ -146,10 +149,11 @@ export default function SemesterCoursePicker({
             }
             onCourseChange(nextId, match);
           }}
-          disabled={!semesterId}
+          disabled={!semesterId && !allowMisc}
           className={`${inputClass} min-w-[220px] disabled:opacity-50`}
         >
           <option value="">{coursePlaceholder}</option>
+          {allowMisc && <option value={MISC_TASK_COURSE_ID}>{MISC_TASK_LABEL} (not a course)</option>}
           {semesterId && visibleCourses.length === 0 && <option value="" disabled>No courses in this semester</option>}
           {visibleCourses.map(course => (
             <option key={course.id} value={course.id}>{course.title || course.code}</option>

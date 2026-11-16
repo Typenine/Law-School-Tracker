@@ -7,6 +7,7 @@ import SemesterCoursePicker from '@/components/SemesterCoursePicker';
 import { notifyTasksChanged } from '@/lib/taskBus';
 import { notifyToast } from '@/lib/toastBus';
 import { apiFetch } from '@/lib/apiClient';
+import { MISC_TASK_COURSE_ID, MISC_TASK_LABEL } from '@/lib/taskCategory';
 
 type Props = { onCreated?: () => void };
 
@@ -79,7 +80,7 @@ export default function MultiAddDrawer({ onCreated }: Props) {
   const [saving, setSaving] = useState(false);
   const [lastBatchToken, setLastBatchToken] = useState('');
 
-  const course = selectedCourse?.title || '';
+  const course = courseId === MISC_TASK_COURSE_ID ? MISC_TASK_LABEL : selectedCourse?.title || '';
 
   useEffect(() => {
     setGrid(Array.from({ length: rows }, () => ({ text: '', due: '' })));
@@ -163,7 +164,7 @@ export default function MultiAddDrawer({ onCreated }: Props) {
     try {
       const payloads: NewTaskInput[] = preview.map(row => ({
         title: row.title,
-        courseId: row.courseId || null,
+        courseId: row.courseId === MISC_TASK_COURSE_ID ? null : row.courseId || null,
         course: row.course || null,
         term: row.semesterId || null,
         dueDate: row.due ? new Date(row.due).toISOString() : new Date().toISOString(),
@@ -233,7 +234,8 @@ export default function MultiAddDrawer({ onCreated }: Props) {
             semesterId={semesterId}
             courseId={courseId}
             onSemesterChange={setSemesterId}
-            onCourseChange={(id, selected) => { setCourseId(id); setSelectedCourse(selected); }}
+            onCourseChange={(id, selected) => { setCourseId(id); setSelectedCourse(selected); if (id === MISC_TASK_COURSE_ID) setActivity('other'); }}
+            allowMisc
             storageKeyPrefix="lastMultiAddCourse"
             compact
           />

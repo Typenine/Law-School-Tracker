@@ -103,11 +103,12 @@ export default function TaskAddForm({ onCreated }: Props) {
         </div>
         <>
           <datalist id="course-list">
+            <option value="Misc" label="Misc (not a course)" />
             {courseOptions.map(opt => (
               <option key={opt.key} value={opt.key} label={opt.label} />
             ))}
           </datalist>
-          <input list="course-list" value={newCourse} onChange={e => setNewCourse(e.target.value)} placeholder="Course (optional)" className="w-full bg-[#0b1020] border border-[#1b2344] rounded px-3 py-2" />
+          <input list="course-list" value={newCourse} onChange={e => setNewCourse(e.target.value)} placeholder="Course or Misc (optional)" className="w-full bg-[#0b1020] border border-[#1b2344] rounded px-3 py-2" />
         </>
         <input type="datetime-local" value={newDue} onChange={e => setNewDue(e.target.value)} className="w-full bg-[#0b1020] border border-[#1b2344] rounded px-3 py-2" />
         <input type="number" min={0} step={5} value={newEst} onChange={e => setNewEst(e.target.value)} placeholder="Est. min" className="w-full bg-[#0b1020] border border-[#1b2344] rounded px-3 py-2" />

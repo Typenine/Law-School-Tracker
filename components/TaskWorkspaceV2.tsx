@@ -10,6 +10,7 @@ import LogModal, { type LogSubmitData } from '@/components/LogModal';
 import { apiFetch } from '@/lib/apiClient';
 import { notifyToast } from '@/lib/toastBus';
 import { notifyTasksChanged } from '@/lib/taskBus';
+import { MISC_TASK_COURSE_ID, MISC_TASK_LABEL, isMiscTask } from '@/lib/taskCategory';
 
 type ChecklistItem = { id: string; title: string; done: boolean; createdAt: string };
 type ReadingMetrics = {
@@ -106,7 +107,7 @@ function stateClass(state: WorkspaceTask['displayState']): string {
 function editStateFor(task: WorkspaceTask): EditState {
   return {
     title: task.title || '',
-    courseId: task.courseId || '',
+    courseId: isMiscTask(task) ? MISC_TASK_COURSE_ID : task.courseId || '',
     activity: task.activity || 'other',
     originalPageRanges: task.reading?.originalPageRanges || task.originalPageRanges || '',
     due: localInput(task.dueDate),
@@ -285,7 +286,8 @@ export default function TaskWorkspaceV2() {
     const rangeChanged = (edit.originalPageRanges || '') !== (activeTask.reading?.originalPageRanges || activeTask.originalPageRanges || '');
     const body: any = {
       title: edit.title.trim(),
-      courseId: edit.courseId || null,
+      courseId: edit.courseId === MISC_TASK_COURSE_ID ? null : edit.courseId || null,
+      course: edit.courseId === MISC_TASK_COURSE_ID ? MISC_TASK_LABEL : edit.courseId ? undefined : null,
       activity: edit.activity || null,
       dueDate: edit.due ? new Date(edit.due).toISOString() : activeTask.dueDate,
       priority: edit.priority ? Number(edit.priority) : null,
@@ -339,7 +341,10 @@ export default function TaskWorkspaceV2() {
       for (const id of ids) {
         const body: any = {};
         if (bulkDue) body.dueDate = new Date(`${bulkDue}T23:59:00`).toISOString();
-        if (bulkCourse) body.courseId = bulkCourse;
+        if (bulkCourse) {
+          body.courseId = bulkCourse === MISC_TASK_COURSE_ID ? null : bulkCourse;
+          if (bulkCourse === MISC_TASK_COURSE_ID) body.course = MISC_TASK_LABEL;
+        }
         if (bulkPriority) body.priority = Number(bulkPriority);
         if (bulkActivity.trim()) body.activity = bulkActivity.trim();
         await apiFetch(`/api/tasks/${id}`, { method: 'PATCH', body });
@@ -415,7 +420,7 @@ export default function TaskWorkspaceV2() {
           <select value={stateFilter} onChange={e => setStateFilter(e.target.value)} className="px-3 py-2">
             <option value="open">Open</option><option value="not-started">Not started</option><option value="in-progress">In progress</option><option value="blocked">Blocked</option><option value="at-risk">At risk</option><option value="done">Done</option><option value="canceled">Canceled</option><option value="all">All</option>
           </select>
-          <select value={courseFilter} onChange={e => setCourseFilter(e.target.value)} className="px-3 py-2"><option value="">All courses</option>{(data?.courses || []).map(course => <option key={course.id} value={course.title}>{course.title}</option>)}</select>
+          <select value={courseFilter} onChange={e => setCourseFilter(e.target.value)} className="px-3 py-2"><option value="">All categories</option><option value={MISC_TASK_LABEL}>{MISC_TASK_LABEL}</option>{(data?.courses || []).map(course => <option key={course.id} value={course.title}>{course.title}</option>)}</select>
           <input value={textFilter} onChange={e => setTextFilter(e.target.value)} placeholder="Search tasks…" className="px-3 py-2" />
           <button onClick={refresh} className="px-3 py-2 rounded border border-white/10">Refresh</button>
         </div>
@@ -426,7 +431,7 @@ export default function TaskWorkspaceV2() {
             <button onClick={bulkCancel} className="px-2.5 py-1.5 rounded border border-white/10 text-xs">Cancel</button>
             <button onClick={bulkTrash} className="px-2.5 py-1.5 rounded border border-rose-700 text-rose-300 text-xs">Trash</button>
             <input type="date" value={bulkDue} onChange={e => setBulkDue(e.target.value)} className="px-2 py-1.5 text-xs" />
-            <select value={bulkCourse} onChange={e => setBulkCourse(e.target.value)} className="px-2 py-1.5 text-xs"><option value="">Keep course</option>{(data?.courses || []).map(course => <option key={course.id} value={course.id}>{course.title}</option>)}</select>
+            <select value={bulkCourse} onChange={e => setBulkCourse(e.target.value)} className="px-2 py-1.5 text-xs"><option value="">Keep category</option><option value={MISC_TASK_COURSE_ID}>{MISC_TASK_LABEL}</option>{(data?.courses || []).map(course => <option key={course.id} value={course.id}>{course.title}</option>)}</select>
             <select aria-label="Bulk priority" value={bulkPriority} onChange={e => setBulkPriority(e.target.value)} className="px-2 py-1.5 text-xs"><option value="">Keep priority</option>{[1,2,3,4,5].map(p => <option key={p} value={p}>Priority {p}</option>)}</select>
              <input aria-label="Bulk activity" value={bulkActivity} onChange={e => setBulkActivity(e.target.value)} placeholder="Set activity" className="px-2 py-1.5 text-xs w-28" />
              <button onClick={bulkApply} disabled={!bulkDue && !bulkCourse && !bulkPriority && !bulkActivity.trim()} className="px-2.5 py-1.5 rounded border border-white/10 text-xs disabled:opacity-40">Apply changes</button>
@@ -495,7 +500,7 @@ export default function TaskWorkspaceV2() {
 
               {drawerTab === 'details' && edit && <div className="space-y-4">
                 <div><label className="block text-xs text-slate-500 mb-1">Title</label><input value={edit.title} onChange={e => setEdit({ ...edit, title: e.target.value })} className="w-full px-3 py-2" /></div>
-                <div className="grid grid-cols-2 gap-3"><div><label className="block text-xs text-slate-500 mb-1">Course</label><select value={edit.courseId} onChange={e => setEdit({ ...edit, courseId: e.target.value })} className="w-full px-3 py-2"><option value="">Unassigned</option>{(data?.courses || []).map(course => <option key={course.id} value={course.id}>{course.title}</option>)}</select></div><div><label className="block text-xs text-slate-500 mb-1">Activity</label><select value={edit.activity} onChange={e => setEdit({ ...edit, activity: e.target.value })} className="w-full px-3 py-2"><option value="reading">Reading</option><option value="assignment">Assignment</option><option value="review">Review</option><option value="outline">Outline</option><option value="practice">Practice</option><option value="other">Other</option></select></div></div>
+                <div className="grid grid-cols-2 gap-3"><div><label className="block text-xs text-slate-500 mb-1">Course / Category</label><select value={edit.courseId} onChange={e => setEdit({ ...edit, courseId: e.target.value })} className="w-full px-3 py-2"><option value="">Unassigned</option><option value={MISC_TASK_COURSE_ID}>{MISC_TASK_LABEL}</option>{(data?.courses || []).map(course => <option key={course.id} value={course.id}>{course.title}</option>)}</select></div><div><label className="block text-xs text-slate-500 mb-1">Activity</label><select value={edit.activity} onChange={e => setEdit({ ...edit, activity: e.target.value })} className="w-full px-3 py-2"><option value="reading">Reading</option><option value="assignment">Assignment</option><option value="review">Review</option><option value="outline">Outline</option><option value="practice">Practice</option><option value="other">Other</option></select></div></div>
                 {edit.activity === 'reading' && <div><label className="block text-xs text-slate-500 mb-1">Assigned page ranges</label><input value={edit.originalPageRanges} onChange={e => setEdit({ ...edit, originalPageRanges: e.target.value })} placeholder="100-150, 160-175" className="w-full px-3 py-2" /><div className="text-xs text-slate-500 mt-1">Already-completed pages are preserved when the assigned range changes.</div></div>}
                 <div className="grid grid-cols-2 gap-3"><div><label className="block text-xs text-slate-500 mb-1">Due</label><input type="datetime-local" value={edit.due} onChange={e => setEdit({ ...edit, due: e.target.value })} className="w-full px-3 py-2" /></div><div><label className="block text-xs text-slate-500 mb-1">Priority</label><input type="number" min={1} max={5} value={edit.priority} onChange={e => setEdit({ ...edit, priority: e.target.value })} className="w-full px-3 py-2" /></div></div>
                 <div><label className="block text-xs text-slate-500 mb-1">Remaining estimate (minutes)</label><input type="number" min={0} value={edit.estimate} onChange={e => setEdit({ ...edit, estimate: e.target.value, estimateTouched: true })} className="w-full px-3 py-2" /><div className="text-xs text-slate-500 mt-1">For readings, changing page ranges recalculates this automatically unless you edit the estimate manually.</div></div>

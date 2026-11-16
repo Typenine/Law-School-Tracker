@@ -101,7 +101,7 @@ export default function TaskDeepLinkDrawer() {
         <div className="flex flex-wrap gap-2 text-xs">
           <Link href={`/tasks?taskId=${encodeURIComponent(task.id)}`} className="px-3 py-2 rounded border border-white/10">Edit in Tasks</Link>
           {task.courseId ? <Link href={`/courses/${encodeURIComponent(task.courseId)}`} className="px-3 py-2 rounded border border-white/10">Open course</Link> : null}
-          {task.course ? <Link href={`/reading?course=${encodeURIComponent(task.course)}`} className="px-3 py-2 rounded border border-white/10">Course reading</Link> : null}
+          {task.course && task.course.trim().toLowerCase() !== "misc" ? <Link href={`/reading?course=${encodeURIComponent(task.course)}`} className="px-3 py-2 rounded border border-white/10">Course reading</Link> : null}
         </div>
       </div> : !loading ? <div className="mt-5 text-sm text-slate-400">This task is no longer available in the active workspace.</div> : null}
     </aside>
