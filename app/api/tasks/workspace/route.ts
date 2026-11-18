@@ -25,11 +25,16 @@ export async function GET(req: NextRequest) {
     // Share one courses query between the task-risk calculation and the
     // response's semester filtering. getTaskWorkspace ensures its own schema.
     const rawCoursesRequest = listCourses();
+    const settingsRequest = getSettings([
+      'availabilityTemplateV1',
+      'availabilityWindowsV1',
+      'availabilityBreaksV1',
+    ]);
     const [workspace, rawCourses, semesterState, settings] = await Promise.all([
-      getTaskWorkspace({ courses: rawCoursesRequest }),
+      getTaskWorkspace({ courses: rawCoursesRequest, settings: settingsRequest }),
       rawCoursesRequest,
       resolveCurrentSemesterState(),
-      getSettings(['availabilityTemplateV1']),
+      settingsRequest,
     ]);
     const showAllTerms = req.nextUrl.searchParams.get('allTerms') === 'true';
     const activeTerm = semesterState.term.id || null;
