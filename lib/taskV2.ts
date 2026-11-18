@@ -320,10 +320,10 @@ function atRiskFor(
   return { atRisk: false, reason: null };
 }
 
-export async function getTaskWorkspace(): Promise<{ tasks: TaskWorkspaceItem[]; trash: Array<Task & { deletedAt: string }>; summary: Record<string, number> }> {
+export async function getTaskWorkspace(options?: { courses?: Promise<Course[]>; settings?: ReturnType<typeof getSettings> }): Promise<{ tasks: TaskWorkspaceItem[]; trash: Array<Task & { deletedAt: string }>; summary: Record<string, number> }> {
   await ensureTaskV2Schema();
   const [tasks, sessions, courses, blocks, settings] = await Promise.all([
-    listTasks(), listSessions(), listCourses(), listScheduleBlocks(), getSettings(['availabilityTemplateV1','availabilityWindowsV1','availabilityBreaksV1']),
+    listTasks(), listSessions(), options?.courses ?? listCourses(), listScheduleBlocks(), options?.settings ?? getSettings(['availabilityTemplateV1','availabilityWindowsV1','availabilityBreaksV1']),
   ]);
   const metaMap = await getMetaMap(tasks.map(task => String(task.id)));
   const taskMap = new Map(tasks.map(task => [String(task.id), task]));

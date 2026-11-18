@@ -5,7 +5,7 @@ import {
   attachSemesterIds,
   effectiveTaskSemesterId,
 } from '@/lib/academic';
-import { ensureTaskV2Schema, getTaskWorkspace } from '@/lib/taskV2';
+import { getTaskWorkspace } from '@/lib/taskV2';
 
 export const dynamic = 'force-dynamic';
 export const runtime = 'nodejs';
@@ -22,12 +22,19 @@ function availabilityTemplateIsUnconfigured(value: unknown): boolean {
 export async function GET(req: NextRequest) {
   try {
     await ensureSchema();
-    await ensureTaskV2Schema();
+    // Share one courses query between the task-risk calculation and the
+    // response's semester filtering. getTaskWorkspace ensures its own schema.
+    const rawCoursesRequest = listCourses();
+    const settingsRequest = getSettings([
+      'availabilityTemplateV1',
+      'availabilityWindowsV1',
+      'availabilityBreaksV1',
+    ]);
     const [workspace, rawCourses, semesterState, settings] = await Promise.all([
-      getTaskWorkspace(),
-      listCourses(),
+      getTaskWorkspace({ courses: rawCoursesRequest, settings: settingsRequest }),
+      rawCoursesRequest,
       resolveCurrentSemesterState(),
-      getSettings(['availabilityTemplateV1']),
+      settingsRequest,
     ]);
     const showAllTerms = req.nextUrl.searchParams.get('allTerms') === 'true';
     const activeTerm = semesterState.term.id || null;
