@@ -1005,6 +1005,7 @@ function shiftWeek(delta: number) {
         </div>
         {expandedDay && days.some(day => ymd(day)===expandedDay) && (() => {
           const plan = blocks.filter(block => block.day === expandedDay);
+          const actual = sessions.filter(session => chicagoYmd(new Date(session.when)) === expandedDay).sort((a,b) => a.when.localeCompare(b.when));
           const load = studyLoadByDay[expandedDay];
           const cap = effectiveCapByKey[expandedDay] ?? 0;
           return <section className="mt-4 rounded-lg border border-blue-700/40 bg-blue-950/10 p-4 space-y-3" aria-label="Expanded day details">
@@ -1017,6 +1018,14 @@ function shiftWeek(delta: number) {
               <div><div className="text-xs text-slate-500">Still planned</div>{minutesToHM(load?.remainingPlannedMinutes || 0)}</div>
               <div><div className="text-xs text-slate-500">Available</div>{minutesToHM(Math.max(0,cap-(load?.committedMinutes||0)))}</div>
             </div>
+            <div className="border-t border-white/10 pt-3 space-y-2">
+              <div className="flex items-center justify-between gap-2"><h4 className="text-sm font-medium">Actual study sessions</h4><a className="text-xs text-blue-300 underline" href={`/log?day=${expandedDay}`}>Review / edit study log</a></div>
+              {actual.length ? actual.map(session => {
+                const task = tasks.find(t => t.id === session.taskId);
+                return <div key={session.id} className="flex justify-between gap-2 text-sm"><div className="min-w-0"><div className="break-words">{task?.title || session.notes || session.activity || 'Unscheduled study'}</div><div className="text-xs text-slate-400">{task?.course || session.activity || 'Study'}{session.pagesRead ? ` · ${session.pagesRead} pages` : ''}</div></div><span className="shrink-0">{minutesToHM(session.minutes)}</span></div>;
+              }) : <p className="text-xs text-slate-400">No study sessions logged on this day.</p>}
+            </div>
+            <h4 className="text-sm font-medium">Remaining planned work</h4>
             {plan.length ? plan.map(b => <div key={b.id} className="border-t border-white/10 pt-3 flex flex-wrap justify-between gap-2">
               <div className="min-w-0 flex-1">
                 <div className="text-sm text-white break-words">{b.title}</div>
