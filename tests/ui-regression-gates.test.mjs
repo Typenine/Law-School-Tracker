@@ -40,6 +40,20 @@ describe('critical workflows must survive UI edits', () => {
     assert.match(source, /completedTodaySessions/);
     assert.match(source, /Completed today/);
   });
+  it('partial progress clears credited task timer and zero-minute finish creates no session', () => {
+    const today = read('app/page.tsx');
+    const submit = today.slice(today.indexOf('async function submitLog'), today.indexOf('async function submitLog') + 1500);
+    assert.match(submit, /delete next\[logTask\.id\]/);
+    assert.doesNotMatch(submit, /if \(!data\.isPartial\) \{\s*setTimers/);
+    const modal = read('components/LogModal.tsx');
+    assert.match(modal, /Additional time spent/);
+    assert.match(modal, /mode === 'partial' && mins === 0/);
+    const route = read('app/api/tasks/[id]/progress/route.ts');
+    assert.match(route, /parsed\.data\.minutes === 0/);
+    assert.match(route, /completeTaskWithoutSession\(id, completedAt\)/);
+    assert.match(route, /session: null/);
+    assert.doesNotMatch(route, /if \(done\) await clearStoredTaskTimer/);
+  });
   it('Study Log can adjust semester and link a prior session to an assignment', () => {
     const page = read('app/log/page.tsx');
     assert.match(page, /semesterFilter !== 'all'/);
