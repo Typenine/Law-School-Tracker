@@ -544,7 +544,7 @@ export async function markWorkflowAfterProgress(taskId: string, done: boolean): 
   if (done) await reconcileDependents(taskId);
 }
 
-export async function completeTaskWithoutSession(taskId: string): Promise<Task> {
+export async function completeTaskWithoutSession(taskId: string, completedAt = new Date().toISOString()): Promise<Task> {
   const task = await taskById(taskId);
   if (!task) throw Object.assign(new Error('Task not found'), { status: 404 });
   if (task.status === 'done') return task;
@@ -553,7 +553,7 @@ export async function completeTaskWithoutSession(taskId: string): Promise<Task> 
   const logged = sessionsFor(taskId, sessions).reduce((sum, session) => sum + Math.max(0, Number(session.minutes) || 0), 0);
   const updated = await updateTask(taskId, {
     status: 'done',
-    completedAt: new Date().toISOString(),
+    completedAt,
     actualMinutes: logged || task.actualMinutes || null,
     estimatedMinutes: 0,
     remainingPageRanges: null,
