@@ -561,13 +561,13 @@ export default function TodayPage() {
         completionDate: data.completionDate || null,
       },
     });
-    if (!data.isPartial) {
-      setTimers(current => {
-        const next = { ...current };
-        delete next[logTask.id];
-        return next;
-      });
-    }
+    // A successful progress entry credits the current timer, even if the
+    // assignment is moved to another day. Never prefill that time again.
+    setTimers(current => {
+      const next = { ...current };
+      delete next[logTask.id];
+      return next;
+    });
     setLogTask(null);
     notifySessionsChanged();
     notifyTasksChanged();
