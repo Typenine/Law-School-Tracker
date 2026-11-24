@@ -17,6 +17,28 @@ function chicagoYmd(d: Date): string {
   const da = parts.find(p=>p.type==='day')?.value || '01';
   return `${y}-${m}-${da}`;
 }
+// Date-only edits preserve the Central-time clock when possible, including DST.
+function shiftDay(day: string, delta: number): string {
+  const date = new Date(day + 'T12:00:00Z');
+  date.setUTCDate(date.getUTCDate() + delta);
+  return date.toISOString().slice(0, 10);
+}
+function moveSessionDate(when: string, day: string): string {
+  const original = new Date(when);
+  const clock = new Intl.DateTimeFormat('en-GB', { timeZone: 'America/Chicago', hour: '2-digit', minute: '2-digit', second: '2-digit', hourCycle: 'h23' });
+  const desired = Date.parse(day + 'T' + clock.format(original) + 'Z');
+  let candidate = desired;
+  for (let i = 0; i < 3; i++) {
+    const date = new Date(candidate);
+    const represented = Date.parse(chicagoYmd(date) + 'T' + clock.format(date) + 'Z');
+    const difference = desired - represented;
+    if (!difference) break;
+    candidate += difference;
+  }
+  const date = new Date(candidate);
+  // A nonexistent spring-forward clock time can shift by an hour.
+  return chicagoYmd(date) === day ? date.toISOString() : new Date(day + 'T12:00:00Z').toISOString();
+}
 function fmtHM(min: number): string {
   const n = Math.max(0, Math.round(Number(min) || 0));
   const h = Math.floor(n / 60);
@@ -69,6 +91,7 @@ export default function LogPage() {
   const { sessions, refresh: refreshSessions, loading: sessionsLoading } = useSessions();
   const loading = sessionsLoading;
   const [editId, setEditId] = useState<string | null>(null);
+  const [editDate, setEditDate] = useState('');
   const [editMinutes, setEditMinutes] = useState<string>('');
   const [editFocus, setEditFocus] = useState<string>('');
   const [editNotes, setEditNotes] = useState<string>('');
@@ -104,6 +127,13 @@ export default function LogPage() {
   const [viewMode, setViewMode] = useState<'table' | 'cards'>('table');
 
   useEffect(() => {
+    const day = new URLSearchParams(window.location.search).get('day');
+    if (day && /^\d{4}-\d{2}-\d{2}$/.test(day) && Number.isFinite(Date.parse(day))) {
+      setFrom(day);
+      setTo(day);
+    }
+  }, []);
+  useEffect(() => {
     void apiFetch<{ term: { season: string; year: number } }>('/api/semesters/current')
       .then(data => { if (data.term) setCurrentSemester(data.term.season + ' ' + data.term.year); })
       .catch(() => undefined);
@@ -114,6 +144,7 @@ export default function LogPage() {
   async function openEditSession(id: string) {
     const s = (sessions||[]).find((x:any) => x.id === id); if (!s) return;
     setEditId(id);
+    setEditDate(chicagoYmd(new Date(s.when)));
     setEditMinutes(String(s.minutes || ''));
     setEditFocus(s.focus == null ? '' : String(s.focus));
     setEditNotes(s.notes || '');
@@ -127,7 +158,13 @@ export default function LogPage() {
   
   async function saveEditSession() {
     if (!editId) return;
+    const original = sessions.find(s => s.id === editId);
+    if (!original || !editDate || !/^\d{4}-\d{2}-\d{2}$/.test(editDate) || !Number.isFinite(Date.parse(editDate))) {
+      notifyToast({ kind: 'error', message: 'Choose a valid study date.' });
+      return;
+    }
     const patch: any = {};
+    if (editDate !== chicagoYmd(new Date(original.when))) patch.when = moveSessionDate(original.when, editDate);
     const m = parseInt(editMinutes || '0', 10); if (!isNaN(m) && m > 0) patch.minutes = m;
     const f = parseFloat(editFocus || ''); if (!isNaN(f)) patch.focus = Math.max(1, Math.min(10, f));
     const subject = editTaskId ? '' : editSubject.trim().replace(/[\[\]\r\n]/g,'').slice(0,90);
@@ -232,7 +269,7 @@ export default function LogPage() {
     };
   }, [courses]);
 
-  type Row = { id: string; when: string; ymd: string; minutes: number; course: string; semester: string | null; activity: string; focus: number | null; notes: string | null };
+  type Row = { id: string; when: string; ymd: string; minutes: number; course: string; semester: string | null; activity: string; focus: number | null; notes: string | null; taskTitle: string | null; pagesRead: number | null };
   const rows: Row[] = useMemo(() => {
     const out: Row[] = [];
     for (const s of (sessions||[])) {
@@ -247,7 +284,7 @@ export default function LogPage() {
       const notesL = (s.notes || '').toLowerCase();
       const courseL = (course || '').toLowerCase();
       if (courseL.includes('sports law review') || /\bslr\b/i.test(s.notes || '')) course = 'Sports Law Review';
-      out.push({ id: s.id, when, ymd, minutes: Number(s.minutes)||0, course: course||'', semester: s.semester || null, activity: activityLabel(s.activity), focus: (typeof s.focus==='number'? s.focus : null), notes: (s.notes || '').replace(/^\s*\[[^\]]+\]\s*/, '') || null });
+      out.push({ id: s.id, when, ymd, minutes: Number(s.minutes)||0, course: course||'', semester: s.semester || null, taskTitle: s.taskId ? tasksById.get(s.taskId)?.title || 'Linked assignment' : null, pagesRead: s.pagesRead ?? null, activity: activityLabel(s.activity), focus: (typeof s.focus==='number'? s.focus : null), notes: (s.notes || '').replace(/^\s*\[[^\]]+\]\s*/, '') || null });
     }
     out.sort((a,b) => b.when.localeCompare(a.when));
     return out;
@@ -297,6 +334,13 @@ export default function LogPage() {
     const topActivities = Object.entries(byActivity).sort((a,b) => b[1] - a[1]);
     return { avgFocus, byActivity, byCourse, topCourses, topActivities };
   }, [filtered]);
+
+  const selectedDay = from && from === to ? from : '';
+  const todayKey = chicagoYmd(new Date());
+  function selectDay(day: string) {
+    setFrom(day);
+    setTo(day);
+  }
 
   function quickRange(days: number) {
     const today = new Date();
@@ -410,6 +454,20 @@ export default function LogPage() {
           </div>
         </div>
 
+        <div className="rounded-lg border border-[#1b2344] p-3 space-y-2">
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            <div><h3 className="text-sm font-medium">Daily study history</h3><p className="text-xs text-slate-400">Choose a day to review its actual study sessions and totals.</p></div>
+            <div className="flex flex-wrap gap-2 items-center">
+              <button type="button" onClick={() => selectDay(shiftDay(selectedDay || todayKey, -1))} className="px-2 py-1 rounded border border-[#1b2344] text-xs">Previous day</button>
+              <input aria-label="Review study date" type="date" value={selectedDay} onChange={e => selectDay(e.target.value)} className="bg-[#0b1020] border border-[#1b2344] rounded px-2 py-1 text-sm" />
+              <button type="button" onClick={() => selectDay(shiftDay(selectedDay || todayKey, 1))} className="px-2 py-1 rounded border border-[#1b2344] text-xs">Next day</button>
+              <button type="button" onClick={() => selectDay(todayKey)} className="px-2 py-1 rounded border border-[#1b2344] text-xs">Today</button>
+              <button type="button" onClick={() => selectDay(shiftDay(todayKey, -1))} className="px-2 py-1 rounded border border-[#1b2344] text-xs">Yesterday</button>
+            </div>
+          </div>
+          {selectedDay && <div className="text-sm text-slate-300">{new Date(selectedDay + 'T12:00:00Z').toLocaleDateString('en-US', {timeZone:'America/Chicago', weekday:'long', month:'long', day:'numeric', year:'numeric'})} · {fmtHM(totalMinutes)} studied · {filtered.length} sessions shown</div>}
+        </div>
+
         {/* Filters */}
         <div className="grid grid-cols-2 md:grid-cols-7 gap-2">
           <div>
@@ -479,7 +537,7 @@ export default function LogPage() {
                 <th className="py-2 pr-3 font-medium">Activity</th>
                 <th className="py-2 pr-3 font-medium">Duration</th>
                 <th className="py-2 pr-3 font-medium">Focus</th>
-                <th className="py-2 pr-3 font-medium">Notes</th>
+                <th className="py-2 pr-3 font-medium">Work / notes</th>
                 <th className="py-2 pr-3 font-medium">Actions</th>
               </tr>
             </thead>
@@ -492,8 +550,8 @@ export default function LogPage() {
                 filtered.map((r) => (
                   <tr key={r.id} className="border-t border-[#1b2344] hover:bg-white/5 transition-colors">
                     <td className="py-2 pr-3 whitespace-nowrap text-slate-300">
-                      <div className="text-sm">{new Date(r.when).toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric' })}</div>
-                      <div className="text-xs text-slate-400">{new Date(r.when).toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit' })}</div>
+                      <div className="text-sm">{new Date(r.when).toLocaleDateString('en-US', { timeZone: 'America/Chicago', weekday: 'short', month: 'short', day: 'numeric' })}</div>
+                      <div className="text-xs text-slate-400">{new Date(r.when).toLocaleTimeString('en-US', { timeZone: 'America/Chicago', hour: 'numeric', minute: '2-digit' })}</div>
                     </td>
                     <td className="py-2 pr-3">
                       <div className="flex items-center gap-2">
@@ -512,7 +570,10 @@ export default function LogPage() {
                       </div>
                     </td>
                     <td className="py-2 pr-3 max-w-[200px]">
-                      <span className="truncate inline-block max-w-[180px] text-slate-400 text-xs">{r.notes || '—'}</span>
+                      {r.taskTitle && <div className="text-sm text-slate-200 break-words">{r.taskTitle}</div>}
+                       {r.pagesRead != null && r.pagesRead > 0 && <div className="text-xs text-slate-400">{r.pagesRead} pages read</div>}
+                       {r.notes && <div className="text-xs text-slate-400 whitespace-pre-wrap break-words">{r.notes}</div>}
+                       {!r.taskTitle && !r.notes && !r.pagesRead && <span className="text-xs text-slate-400">No details logged</span>}
                     </td>
                     <td className="py-2 pr-3">
                       <div className="flex items-center gap-1">
@@ -533,10 +594,15 @@ export default function LogPage() {
       {editId && (
         <div role="dialog" aria-modal="true" className="fixed inset-0 z-50 flex items-center justify-center">
           <div className="absolute inset-0 bg-black/60" onClick={()=>setEditId(null)} />
-          <div className="relative z-10 w-[92vw] max-w-md bg-[#0b1020] border border-[#1b2344] rounded-xl p-5 space-y-4">
+          <div className="relative z-10 w-[92vw] max-w-md max-h-[90vh] overflow-y-auto bg-[#0b1020] border border-[#1b2344] rounded-xl p-5 space-y-4">
             <div className="flex items-center justify-between">
               <div className="text-lg font-medium">Edit Session</div>
               <button onClick={()=>setEditId(null)} className="text-slate-400 hover:text-white">×</button>
+            </div>
+            <div>
+              <label htmlFor="edit-study-date" className="block text-xs text-slate-300/70 mb-1">Date worked (Central time)</label>
+              <input id="edit-study-date" type="date" value={editDate} onChange={e => setEditDate(e.target.value)} className="w-full bg-[#0b1020] border border-[#1b2344] rounded px-3 py-2" />
+              <p className="text-xs text-slate-400 mt-1">Moving study time changes its logged date, not the assignment's completion status.</p>
             </div>
             <div className="grid grid-cols-2 gap-3">
               <div>
