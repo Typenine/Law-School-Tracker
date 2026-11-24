@@ -54,6 +54,16 @@ describe('critical workflows must survive UI edits', () => {
     assert.match(route, /session: null/);
     assert.doesNotMatch(route, /if \(done\) await clearStoredTaskTimer/);
   });
+  it('daily study history links to actual sessions and allows date corrections', () => {
+    const log = read('app/log/page.tsx');
+    assert.match(log, /Date worked \(Central time\)/);
+    assert.match(log, /patch\.when = moveSessionDate/);
+    assert.match(log, /Daily study history/);
+    assert.match(log, /setFrom\(day\);\s*setTo\(day\);/);
+    assert.match(log, /r\.taskTitle/);
+    assert.match(read('app/week-plan/page.tsx'), /Actual study sessions/);
+    assert.match(read('app/page.tsx'), /\/log\?day=/);
+  });
   it('Study Log can adjust semester and link a prior session to an assignment', () => {
     const page = read('app/log/page.tsx');
     assert.match(page, /semesterFilter !== 'all'/);
