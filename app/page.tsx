@@ -704,7 +704,7 @@ export default function TodayPage() {
               }) : <div className="empty-dash">No other tasks are planned today.</div>}
             </div>
 
-            <div className="section-heading"><h2>Completed today</h2><a className="rail-link" href="/log">Study log</a></div>
+            <div className="section-heading"><h2>Completed today</h2><a className="rail-link" href={`/log?day=${today}`}>Study log</a></div>
             <div className="dash-card p-4 sm:p-5 space-y-3">
               <div className="flex flex-wrap items-center justify-between gap-2 text-sm text-[#a5c0e4]">
                 <span>{completedTodayTasks.length} task{completedTodayTasks.length===1?'':'s'} finished</span>
@@ -721,7 +721,7 @@ export default function TodayPage() {
                     <div className="text-xs text-[#7a9bc6]">{session.activity || 'Study'} · {new Date(session.when).toLocaleTimeString([], {hour:'numeric',minute:'2-digit'})}</div></div>
                     <span className="shrink-0 tabular-nums text-[#a2c6e8]">{minutesLabel(session.minutes)}</span>
                   </div>)}
-                  {(completedTodayTasks.length>4 || completedTodaySessions.length>4) && <a className="rail-link" href="/log">View all study sessions</a>}
+                  {(completedTodayTasks.length>4 || completedTodaySessions.length>4) && <a className="rail-link" href={`/log?day=${today}`}>View all study sessions</a>}
                 </>}
             </div>
             {timerPlacement === 'after-task-list' && <QuickStudyTimer courses={courses} placement={timerPlacement} onPlacementChange={updateTimerPlacement} />}
