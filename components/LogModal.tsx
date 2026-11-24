@@ -123,7 +123,7 @@ export default function LogModal({ isOpen, onClose, onSubmit, task, mode, defaul
 
   const handleSubmit = () => {
     const mins = parseMinutesFlexible(minutes);
-    if (mins === null || mins <= 0) {
+    if (mins === null || mins < 0 || (mode === 'partial' && mins === 0)) {
       alert('Please enter a valid duration');
       return;
     }
@@ -174,7 +174,7 @@ export default function LogModal({ isOpen, onClose, onSubmit, task, mode, defaul
         <div className="px-5 py-4 space-y-4">
           {/* Duration */}
           <div>
-            <label className="block text-xs text-slate-400 mb-1">{mode === 'finish' ? 'Actual time spent' : 'Duration'}</label>
+            <label className="block text-xs text-slate-400 mb-1">{mode === 'finish' ? 'Additional time spent' : 'Duration'}</label>
             <input
               type="text"
               value={minutes}
@@ -184,9 +184,15 @@ export default function LogModal({ isOpen, onClose, onSubmit, task, mode, defaul
               autoFocus
             />
             <div className="text-[11px] text-slate-500 mt-1">
-              {mode === 'finish' ? 'Enter how long you actually spent. It can be less than the estimate.' : 'Formats: 90, 1h30m, 1:30'}
+              {mode === 'finish' ? 'Enter only time not already logged. Enter 0 if no additional work was done.' : 'Formats: 90, 1h30m, 1:30'}
             </div>
           </div>
+
+          {mode === 'finish' && (
+            <button type="button" onClick={() => setMinutes('0')} className="text-xs text-blue-300 hover:underline">
+              No additional work (0 minutes)
+            </button>
+          )}
 
           {/* Focus slider */}
           <div>
@@ -210,7 +216,7 @@ export default function LogModal({ isOpen, onClose, onSubmit, task, mode, defaul
 
           {/* Completion Date */}
           <div>
-            <label className="block text-xs text-slate-400 mb-1">Completion Date</label>
+            <label className="block text-xs text-slate-400 mb-1">{mode === 'partial' ? 'Date worked' : 'Completion Date'}</label>
             <input
               type="date"
               value={completionDate}
